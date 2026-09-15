@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Notes Deck</title>
   
   <!-- PWA Meta -->
-  <meta name="theme-color" content="#121212" />
+  <meta name="theme-color" content="#6c5ce7" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <link rel="manifest" href="./manifest.json" />
 
   <!-- Typography -->
@@ -31,15 +31,36 @@
       </select>
     </div>
     <div class="header-right">
-      <button id="sync-btn" class="icon-btn" title="Sync Manifest">↻</button>
-      <button id="manage-btn" class="icon-btn" title="Manage Feed">☰</button>
-      <button id="settings-btn" class="icon-btn" title="Vault Settings">⚙</button>
+      <button id="theme-btn" class="icon-btn" title="Toggle Light/Dark Theme" aria-label="Toggle Theme">🌙</button>
+      <button id="sync-btn" class="icon-btn" title="Sync Manifest" aria-label="Sync Manifest">↻</button>
+      <button id="manage-btn" class="icon-btn" title="Manage Feed" aria-label="Manage Feed">☰</button>
+      <button id="settings-btn" class="icon-btn" title="Vault Settings" aria-label="Vault Settings">⚙</button>
     </div>
   </header>
 
   <!-- Swipe Arena -->
   <main class="deck-container">
     <div id="card-stack" class="card-stack"></div>
+
+    <!-- Tactile Action Bar -->
+    <nav class="action-bar" aria-label="Card Controls">
+      <button id="btn-action-hide" class="action-btn btn-archive" title="Archive / Hide Note" aria-label="Archive Note">
+        ✕
+      </button>
+
+      <button id="btn-action-star" class="action-btn btn-star" title="Star Note" aria-label="Star Note">
+        ★
+      </button>
+
+      <button id="btn-action-read" class="btn-read-modal" title="Read Full Note" aria-label="Read Full Note">
+        <span>Read Note</span> →
+      </button>
+
+      <button id="btn-action-keep" class="action-btn btn-keep" title="Keep in Rotation" aria-label="Keep Note">
+        ✓
+      </button>
+    </nav>
+
     <div id="status-indicator" class="status-indicator"></div>
   </main>
 
@@ -51,18 +72,16 @@
         <button id="add-vault-btn" class="btn-secondary">+ New Vault</button>
       </div>
 
-      <!-- List of existing saved profiles -->
       <div id="vault-profile-list" class="vault-profile-list"></div>
 
       <hr class="modal-divider" />
 
-      <!-- Active / New Profile Edit Form -->
       <input type="hidden" id="cfg-id" />
       <label>Vault Nickname
         <input type="text" id="cfg-name" placeholder="e.g. Personal Notes" />
       </label>
       <label>GitHub Owner (Username / Org)
-        <input type="text" id="cfg-owner" placeholder="e.g. topearebi" />
+        <input type="text" id="cfg-owner" placeholder="e.g. username" />
       </label>
       <label>Repository Name
         <input type="text" id="cfg-repo" placeholder="e.g. notes" />
@@ -70,7 +89,7 @@
       <label>Branch
         <input type="text" id="cfg-branch" value="main" />
       </label>
-      <label>Personal Access Token (Fine-grained with Contents & Metadata read-only)
+      <label>Personal Access Token (Fine-grained: Contents & Metadata read-only)
         <input type="password" id="cfg-token" placeholder="github_pat_..." />
       </label>
 
