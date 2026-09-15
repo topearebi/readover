@@ -1,6 +1,6 @@
 // sw.js
 // 1. Increment this version whenever you push code changes
-const APP_VERSION = 'v1.2.0';
+const APP_VERSION = 'v2.1.0';
 const CACHE_NAME = `notes-deck-${APP_VERSION}`;
 
 const ASSETS = [
