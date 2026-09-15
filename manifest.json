@@ -1,18 +1,43 @@
 {
-  "name": "Notes Deck",
-  "short_name": "NotesDeck",
-  "description": "Swipeable Markdown notes reader and highlight resurfacer",
+  "name": "ReadOver",
+  "short_name": "ReadOver",
+  "description": "Continuous vertical media feed for personal notes, epubs, and documents",
   "start_url": "./index.html",
+  "scope": "./",
   "display": "standalone",
-  "orientation": "portrait",
-  "background_color": "#121212",
-  "theme_color": "#121212",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone",
+    "minimal-ui"
+  ],
+  "orientation": "any",
+  "background_color": "#110f17",
+  "theme_color": "#110f17",
+  "categories": ["productivity", "books", "utilities"],
   "icons": [
     {
-      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='100' fill='%231e1e1e'/><path d='M160 140h192M160 210h192M160 280h120' stroke='%234caf50' stroke-width='32' stroke-linecap='round'/></svg>",
-      "sizes": "192x192 512x512",
-      "type": "image/svg+xml",
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
       "purpose": "any maskable"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "file_handlers": [
+    {
+      "action": "./index.html",
+      "name": "Documents and Notes",
+      "accept": {
+        "text/markdown": [".md"],
+        "text/plain": [".txt"],
+        "application/epub+zip": [".epub"],
+        "application/pdf": [".pdf"]
+      }
     }
   ]
 }
