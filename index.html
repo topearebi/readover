@@ -110,11 +110,37 @@
     </div>
   </div>
 
-  <!-- Service Worker Registration for PWA Offline Cache -->
+
+  <!-- Service Worker Registration with Auto-Update Reload -->
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch(console.warn);
+        navigator.serviceWorker.register('./sw.js').then((reg) => {
+          // Check for SW updates on page load
+          reg.update();
+
+          reg.addEventListener('updatefound', () => {
+            const installingWorker = reg.installing;
+            installingWorker.addEventListener('statechange', () => {
+              if (
+                installingWorker.state === 'installed' &&
+                navigator.serviceWorker.controller
+              ) {
+                // New update available; reload to show fresh build
+                window.location.reload();
+              }
+            });
+          });
+        }).catch(console.warn);
+
+        // Reload if a newly activated service worker takes control
+        let refreshing = false;
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (!refreshing) {
+            refreshing = true;
+            window.location.reload();
+          }
+        });
       });
     }
   </script>
