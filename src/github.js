@@ -3,19 +3,32 @@ import { getActiveDB, ensureNoteState, setCachedContent, getCachedContent } from
 
 const PROFILES_KEY = 'md_deck_vault_profiles';
 const ACTIVE_VAULT_KEY = 'md_deck_active_vault_id';
+const GLOBAL_TOKEN_KEY = 'md_deck_global_token';
+const LAST_COMMIT_PREFIX = 'md_deck_last_commit_';
 
 /**
- * Retrieves all saved vault profiles.
+ * Global Account Token helpers (Classic PAT with repo scope or fine-grained)
+ */
+export function getGlobalToken() {
+  return (localStorage.getItem(GLOBAL_TOKEN_KEY) || '').trim();
+}
+
+export function setGlobalToken(token) {
+  if (token && token.trim()) {
+    localStorage.setItem(GLOBAL_TOKEN_KEY, token.trim());
+  } else {
+    localStorage.removeItem(GLOBAL_TOKEN_KEY);
+  }
+}
+
+/**
+ * Vault Profile Management
  */
 export function getVaultProfiles() {
   const data = localStorage.getItem(PROFILES_KEY);
   return data ? JSON.parse(data) : [];
 }
 
-/**
- * Saves or updates a vault profile.
- * Profile schema: { id, name, owner, repo, branch, token }
- */
 export function saveVaultProfile(profile) {
   const profiles = getVaultProfiles();
   const existingIdx = profiles.findIndex((p) => p.id === profile.id);
@@ -28,15 +41,11 @@ export function saveVaultProfile(profile) {
 
   localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
 
-  // If no active vault set yet, set this as active
   if (!getActiveVaultId()) {
     setActiveVaultId(profile.id);
   }
 }
 
-/**
- * Deletes a vault profile from storage.
- */
 export function deleteVaultProfile(id) {
   let profiles = getVaultProfiles();
   profiles = profiles.filter((p) => p.id !== id);
@@ -52,32 +61,44 @@ export function deleteVaultProfile(id) {
   }
 }
 
-/**
- * Gets the current active vault profile ID.
- */
 export function getActiveVaultId() {
   return localStorage.getItem(ACTIVE_VAULT_KEY);
 }
 
-/**
- * Sets the active vault profile ID.
- */
 export function setActiveVaultId(id) {
   localStorage.setItem(ACTIVE_VAULT_KEY, id);
 }
 
 /**
- * Gets the active vault configuration object.
+ * Returns active vault config with hierarchical token resolution:
+ * Vault Token -> Global Token -> '' (Unauthenticated Public)
  */
 export function getActiveVaultConfig() {
   const activeId = getActiveVaultId();
   if (!activeId) return null;
   const profiles = getVaultProfiles();
-  return profiles.find((p) => p.id === activeId) || null;
+  const profile = profiles.find((p) => p.id === activeId);
+  if (!profile) return null;
+
+  const resolvedToken = (profile.token && profile.token.trim()) || getGlobalToken();
+
+  return {
+    ...profile,
+    token: resolvedToken,
+    isInheritedToken: !profile.token && Boolean(getGlobalToken()),
+    isPublic: !resolvedToken,
+  };
 }
 
 /**
- * Authenticated fetch helper against GitHub API endpoints.
+ * Unicode-safe Base64 encoder/decoder for GitHub API Contents payload
+ */
+function utf8ToBase64(str) {
+  return window.btoa(unescape(encodeURIComponent(str)));
+}
+
+/**
+ * Authenticated fetch helper against GitHub API
  */
 async function ghFetch(url, token, options = {}) {
   const headers = {
@@ -87,13 +108,47 @@ async function ghFetch(url, token, options = {}) {
   };
   const res = await fetch(url, { ...options, headers });
   if (!res.ok) {
+    if (res.status === 409) {
+      throw new Error('Conflict: Remote note has changed since last loaded.');
+    }
     throw new Error(`GitHub API Error: ${res.status} ${res.statusText}`);
   }
   return res;
 }
 
 /**
- * Syncs the repository manifest using the Git Trees API into the active vault DB.
+ * Lightweight check to see if remote repo has newer commits.
+ * Returns true if remote commit SHA differs from locally saved commit SHA.
+ */
+export async function checkRemoteUpdates() {
+  const cfg = getActiveVaultConfig();
+  if (!cfg || !cfg.owner || !cfg.repo) return false;
+
+  const url = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/commits?per_page=1&sha=${cfg.branch || 'main'}`;
+  try {
+    const res = await ghFetch(url, cfg.token);
+    const commits = await res.json();
+    if (!commits || commits.length === 0) return false;
+
+    const latestSha = commits[0].sha;
+    const localKey = `${LAST_COMMIT_PREFIX}${cfg.id}`;
+    const storedSha = localStorage.getItem(localKey);
+
+    if (storedSha && storedSha !== latestSha) {
+      localStorage.setItem(localKey, latestSha);
+      return true;
+    }
+
+    localStorage.setItem(localKey, latestSha);
+    return false;
+  } catch (err) {
+    console.warn('Could not check remote updates:', err);
+    return false;
+  }
+}
+
+/**
+ * Syncs the repository manifest using Git Trees API.
  */
 export async function syncRepoManifest(onProgress = () => {}) {
   const cfg = getActiveVaultConfig();
@@ -110,7 +165,6 @@ export async function syncRepoManifest(onProgress = () => {}) {
     console.warn('Repository file tree is truncated (>100,000 files).');
   }
 
-  // Filter for markdown files and ignore dotfiles
   const mdFiles = data.tree.filter(
     (item) => item.type === 'blob' && item.path.endsWith('.md') && !item.path.startsWith('.')
   );
@@ -140,7 +194,7 @@ export async function syncRepoManifest(onProgress = () => {}) {
       await ensureNoteState(file.path);
     }
 
-    // Purge local records for files removed remotely
+    // Purge deleted records
     const localRecords = await db.manifest.toArray();
     for (const record of localRecords) {
       if (!remotePaths.has(record.path)) {
@@ -156,8 +210,7 @@ export async function syncRepoManifest(onProgress = () => {}) {
 }
 
 /**
- * Fetches raw Markdown content using GitHub Contents API with application/vnd.github.raw.
- * Resolves CORS preflight issues on private repositories.
+ * Fetches raw Markdown content using GitHub Contents API.
  */
 export async function fetchNoteContent(path) {
   const cached = await getCachedContent(path);
@@ -168,7 +221,6 @@ export async function fetchNoteContent(path) {
   const cfg = getActiveVaultConfig();
   if (!cfg) throw new Error('No active vault configuration found.');
 
-  // Encode each path segment while keeping directory slashes intact
   const encodedPath = path.split('/').map(encodeURIComponent).join('/');
   const apiUrl = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${encodedPath}?ref=${cfg.branch || 'main'}`;
 
@@ -184,7 +236,68 @@ export async function fetchNoteContent(path) {
 }
 
 /**
- * Preloads a batch of note contents with concurrency control.
+ * Creates or updates a note file on GitHub in a single commit.
+ * 
+ * @param {string} path - Note path (e.g. "zettelkasten/Physical training.md")
+ * @param {string} rawMarkdown - Updated or initial Markdown text
+ * @param {string|null} sha - File blob SHA (required for edit; null for create)
+ * @param {string} commitMessage - Optional commit message
+ * @returns {Promise<Object>} { sha: newBlobSha, commit: commitData }
+ */
+export async function saveNoteFile(path, rawMarkdown, sha = null, commitMessage = null) {
+  const cfg = getActiveVaultConfig();
+  if (!cfg) throw new Error('No active vault configuration found.');
+  if (!cfg.token) throw new Error('A Personal Access Token is required to edit or create notes.');
+
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+  const apiUrl = `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${encodedPath}`;
+
+  const defaultMsg = sha
+    ? `Update ${path} via Notes Deck`
+    : `Create ${path} via Notes Deck`;
+
+  const payload = {
+    message: commitMessage || defaultMsg,
+    content: utf8ToBase64(rawMarkdown),
+    branch: cfg.branch || 'main',
+  };
+
+  if (sha) {
+    payload.sha = sha;
+  }
+
+  const res = await ghFetch(apiUrl, cfg.token, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await res.json();
+  const newSha = data.content.sha;
+
+  // Immediately update local cache and manifest
+  const db = getActiveDB();
+  await setCachedContent(path, rawMarkdown);
+
+  const segments = path.split('/');
+  const filename = segments.pop();
+  const folder = segments.join('/') || 'Root';
+
+  await db.manifest.put({
+    path,
+    sha: newSha,
+    folder,
+    filename,
+  });
+  await ensureNoteState(path);
+
+  return { sha: newSha, content: data.content };
+}
+
+/**
+ * Preloads batch contents with concurrency control.
  */
 export async function preloadBatchContent(paths, concurrency = 5) {
   const pool = [...paths];
