@@ -370,7 +370,7 @@ html, body {
 /* Layout 1: Text Notes */
 .card-body.type-text {
   justify-content: flex-start;
-  padding-right: 76px; /* Gutter prevents overlap with floating rail */
+  padding-right: 76px; /* Avoid collision with floating rail */
 }
 
 .card-title {
@@ -412,7 +412,7 @@ html, body {
   font-family: monospace;
 }
 
-/* Layout 2: Visual Documents (EPUB & PDF) - Centered Flex Column */
+/* Layout 2: Visual Documents (EPUB & PDF) - Universal Centered Showcase */
 .card-body.type-document {
   display: flex;
   flex-direction: column;
@@ -420,98 +420,100 @@ html, body {
   justify-content: space-between;
   width: 100%;
   height: 100%;
-  padding: 16px 20px 20px 20px;
+  padding: 12px 16px 16px 16px;
   box-sizing: border-box;
+  overflow: hidden;
+  position: relative;
 }
 
+/* Hard-centered, bounded showcase container */
 .document-cover-wrap {
   flex: 1;
   width: 100%;
-  min-height: 0; /* Critical flex overflow prevention */
+  min-height: 0; /* Allows flex child to shrink without overflowing */
   display: flex;
   align-items: center;
   justify-content: center;
   margin: 0 auto;
+  padding: 8px 0;
   position: relative;
 }
 
 .document-cover-img {
-  max-width: 82%;
-  max-height: 100%;
+  max-width: min(80%, 340px);
+  max-height: min(100%, 52vh);
   width: auto;
   height: auto;
-  margin: 0 auto; /* Strict horizontal centering */
   object-fit: contain;
+  margin: auto;
   display: block;
-  border-radius: 10px;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
-  transition: transform 0.2s ease;
-}
-
-@media (min-width: 768px) {
-  .document-cover-img {
-    max-width: 380px; /* Constrains aspect ratio on desktop */
-  }
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .card-inner:hover .document-cover-img {
-  transform: translateY(-2px);
+  transform: scale(1.02);
 }
 
+/* Fallback card if no cover image exists */
 .document-cover-placeholder {
-  width: 220px;
-  height: 320px;
-  max-height: 80%;
+  width: min(75%, 260px);
+  height: min(100%, 380px);
   background: var(--primary-surface);
   border: 1.5px dashed var(--border-color);
-  border-radius: 12px;
+  border-radius: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 16px;
-  margin: 0 auto;
+  padding: 20px;
+  margin: auto;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
 }
 
-/* Metadata Plate & Progress Bar */
+/* Bottom Metadata Plate with Guaranteed Rail Clearance */
 .document-meta-plate {
   width: 100%;
-  max-width: 100%;
-  text-align: left;
-  padding-right: 68px; /* Dedicated gutter prevents overlap with floating rail */
-  box-sizing: border-box;
   flex-shrink: 0;
-  margin-top: 12px;
+  text-align: left;
+  padding-right: 76px; /* Strict gutter prevents overlap with floating rail */
+  box-sizing: border-box;
+  margin-top: auto;
+  z-index: 2;
 }
 
 .document-meta-plate .card-title {
   margin-bottom: 6px;
-  font-size: clamp(16px, 2.4vw, 22px);
+  font-size: clamp(15px, 2.2vw, 20px);
+  font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.3;
 }
 
 .document-progress-container {
   width: 100%;
-  margin-top: 6px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
 }
 
 .document-progress-bar {
   width: 100%;
-  height: 6px;
+  height: 5px;
   background: var(--border-color);
-  border-radius: 3px;
+  border-radius: 4px;
   overflow: hidden;
 }
 
 .document-progress-fill {
   height: 100%;
   background: var(--primary);
-  border-radius: 3px;
+  border-radius: 4px;
   transition: width 0.3s ease;
 }
 
