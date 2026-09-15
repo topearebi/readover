@@ -4,10 +4,7 @@ import {
   getActiveDB,
   getDeckQueue,
   markSeen,
-  toggleHide,
   toggleStar,
-  restoreAllHidden,
-  resetReviewHistory,
   deleteVaultDB,
 } from './db.js';
 
@@ -29,13 +26,16 @@ class AppController {
   constructor() {
     this.deckQueue = [];
     this.activeFolder = 'ALL';
+    this.filterMode = 'all'; // 'all' or 'starred'
     this.isLoading = false;
-    this.currentTopCardData = null;
-    this.container = document.getElementById('card-stack');
+    this.hasMore = true;
+
+    this.viewport = document.getElementById('feed-viewport');
     this.statusEl = document.getElementById('status-indicator');
 
     this.initTheme();
     this.initElements();
+    this.initObserver();
     this.bindEvents();
     this.bindKeyboardShortcuts();
     this.boot();
@@ -55,7 +55,7 @@ class AppController {
     }
     const metaTheme = document.querySelector('meta[name="theme-color"]');
     if (metaTheme) {
-      metaTheme.setAttribute('content', theme === 'light' ? '#6c5ce7' : '#121016');
+      metaTheme.setAttribute('content', theme === 'light' ? '#6c5ce7' : '#110f17');
     }
   }
 
@@ -69,34 +69,44 @@ class AppController {
     this.vaultSelect = document.getElementById('vault-select');
     this.folderSelect = document.getElementById('folder-select');
     this.settingsModal = document.getElementById('settings-modal');
-    this.managementModal = document.getElementById('management-modal');
     this.vaultListEl = document.getElementById('vault-profile-list');
 
-    // Bottom Action Buttons
-    this.btnKeep = document.getElementById('btn-action-keep');
-    this.btnHide = document.getElementById('btn-action-hide');
-    this.btnStar = document.getElementById('btn-action-star');
-    this.btnRead = document.getElementById('btn-action-read');
+    this.filterAllBtn = document.getElementById('filter-all-btn');
+    this.filterStarredBtn = document.getElementById('filter-starred-btn');
+  }
+
+  initObserver() {
+    // Watches cards as they snap into view
+    this.observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const cardEl = entry.target;
+            const path = cardEl.dataset.path;
+            if (path) {
+              markSeen(path);
+            }
+
+            // Trigger load more when reaching the 3rd card from bottom
+            const allCards = this.viewport.querySelectorAll('.snap-card');
+            const currentIndex = Array.from(allCards).indexOf(cardEl);
+            if (currentIndex >= allCards.length - 3 && !this.isLoading && this.hasMore) {
+              this.loadMoreCards();
+            }
+          }
+        });
+      },
+      {
+        root: this.viewport,
+        threshold: 0.6,
+      }
+    );
   }
 
   bindEvents() {
-    // Theme Toggle
-    document.getElementById('theme-btn').addEventListener('click', () => {
-      this.toggleTheme();
-    });
-
-    // Header Controls
-    document.getElementById('settings-btn').addEventListener('click', () => {
-      this.openSettings();
-    });
-
-    document.getElementById('manage-btn').addEventListener('click', () => {
-      this.managementModal.classList.add('open');
-    });
-
-    document.getElementById('sync-btn').addEventListener('click', () => {
-      this.triggerSync();
-    });
+    document.getElementById('theme-btn').addEventListener('click', () => this.toggleTheme());
+    document.getElementById('settings-btn').addEventListener('click', () => this.openSettings());
+    document.getElementById('sync-btn').addEventListener('click', () => this.triggerSync());
 
     // Vault & Folder Switches
     this.vaultSelect.addEventListener('change', async (e) => {
@@ -111,48 +121,29 @@ class AppController {
 
     this.folderSelect.addEventListener('change', (e) => {
       this.activeFolder = e.target.value;
-      this.reloadDeck();
+      this.reloadFeed();
     });
 
-    // Bottom Action Bar
-    this.btnKeep.addEventListener('click', () => this.programmaticSwipe('right'));
-    this.btnHide.addEventListener('click', () => this.programmaticSwipe('left'));
-    this.btnRead.addEventListener('click', () => {
-      if (this.currentTopCardData) {
-        if ('vibrate' in navigator) navigator.vibrate(10);
-        openReaderModal(this.currentTopCardData);
-      }
+    // All vs Starred Filter Pills
+    this.filterAllBtn.addEventListener('click', () => {
+      if (this.filterMode === 'all') return;
+      this.filterMode = 'all';
+      this.filterAllBtn.classList.add('active');
+      this.filterStarredBtn.classList.remove('active');
+      this.reloadFeed();
     });
-    this.btnStar.addEventListener('click', async () => {
-      const topCard = this.getTopCardElement();
-      if (!topCard) return;
-      const starBtn = topCard.querySelector('.card-star-btn');
-      if (starBtn) starBtn.click();
+
+    this.filterStarredBtn.addEventListener('click', () => {
+      if (this.filterMode === 'starred') return;
+      this.filterMode = 'starred';
+      this.filterStarredBtn.classList.add('active');
+      this.filterAllBtn.classList.remove('active');
+      this.reloadFeed();
     });
 
     // Settings Profile Actions
-    document.getElementById('add-vault-btn').addEventListener('click', () => {
-      this.clearVaultForm();
-    });
-
-    document.getElementById('save-vault-btn').addEventListener('click', () => {
-      this.saveCurrentVaultForm();
-    });
-
-    // Feed Management
-    document.getElementById('restore-hidden-btn').addEventListener('click', async () => {
-      await restoreAllHidden();
-      alert('All archived notes restored to rotation.');
-      this.managementModal.classList.remove('open');
-      this.reloadDeck();
-    });
-
-    document.getElementById('reset-seen-btn').addEventListener('click', async () => {
-      await resetReviewHistory();
-      alert('Review history reset. Notes will resurface.');
-      this.managementModal.classList.remove('open');
-      this.reloadDeck();
-    });
+    document.getElementById('add-vault-btn').addEventListener('click', () => this.clearVaultForm());
+    document.getElementById('save-vault-btn').addEventListener('click', () => this.saveCurrentVaultForm());
 
     // Modal Closures
     document.querySelectorAll('.modal-close').forEach((btn) => {
@@ -164,7 +155,6 @@ class AppController {
 
   bindKeyboardShortcuts() {
     window.addEventListener('keydown', (e) => {
-      // Don't trigger if user is typing inside an input
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
 
       const readerModal = document.getElementById('reader-modal');
@@ -173,71 +163,66 @@ class AppController {
       if (e.key === 'Escape') {
         if (isReaderOpen) readerModal.classList.remove('open');
         this.settingsModal.classList.remove('open');
-        this.managementModal.classList.remove('open');
         return;
       }
 
       if (isReaderOpen) return;
 
+      const currentCard = this.getCurrentVisibleCard();
+
       switch (e.key) {
-        case 'ArrowRight':
-        case 'l':
-        case 'L':
+        case 'ArrowDown':
+        case 'j':
+        case 'J':
           e.preventDefault();
-          this.programmaticSwipe('right');
+          this.scrollToNextCard(1);
           break;
-        case 'ArrowLeft':
-        case 'h':
-        case 'H':
+        case 'ArrowUp':
+        case 'k':
+        case 'K':
           e.preventDefault();
-          this.programmaticSwipe('left');
-          break;
-        case ' ':
-        case 'Enter':
-          e.preventDefault();
-          if (this.currentTopCardData) openReaderModal(this.currentTopCardData);
+          this.scrollToNextCard(-1);
           break;
         case 's':
         case 'S':
           e.preventDefault();
-          const topCard = this.getTopCardElement();
-          if (topCard) {
-            const starBtn = topCard.querySelector('.card-star-btn');
+          if (currentCard) {
+            const starBtn = currentCard.querySelector('.star-btn');
             if (starBtn) starBtn.click();
+          }
+          break;
+        case ' ':
+        case 'Enter':
+          e.preventDefault();
+          if (currentCard) {
+            const expandBtn = currentCard.querySelector('.expand-btn');
+            if (expandBtn) expandBtn.click();
           }
           break;
       }
     });
   }
 
-  getTopCardElement() {
-    // In our DOM ordering, the top card is the last child
-    return this.container.lastElementChild;
+  getCurrentVisibleCard() {
+    const cards = Array.from(this.viewport.querySelectorAll('.snap-card'));
+    const viewCenter = this.viewport.scrollTop + this.viewport.clientHeight / 2;
+
+    return cards.find((card) => {
+      const top = card.offsetTop;
+      const bottom = top + card.clientHeight;
+      return viewCenter >= top && viewCenter <= bottom;
+    });
   }
 
-  async programmaticSwipe(direction) {
-    const topCard = this.getTopCardElement();
-    if (!topCard || topCard.dataset.animating === 'true') return;
-
-    topCard.dataset.animating = 'true';
-    if ('vibrate' in navigator) navigator.vibrate(15);
-
-    const path = topCard.dataset.path;
-    const isRight = direction === 'right';
-
-    topCard.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2), opacity 0.25s ease';
-    topCard.style.transform = `translate3d(${isRight ? '120vw' : '-120vw'}, 0, 0) rotate(${isRight ? '24deg' : '-24deg'})`;
-    topCard.style.opacity = '0';
-
-    setTimeout(async () => {
-      topCard.remove();
-      if (isRight) {
-        await markSeen(path);
-      } else {
-        await toggleHide(path, 1);
-      }
-      this.onCardDismissed();
-    }, 260);
+  scrollToNextCard(direction = 1) {
+    const current = this.getCurrentVisibleCard();
+    if (!current) return;
+    const cards = Array.from(this.viewport.querySelectorAll('.snap-card'));
+    const idx = cards.indexOf(current);
+    const target = cards[idx + direction];
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth' });
+    }
   }
 
   async boot() {
@@ -278,13 +263,11 @@ class AppController {
   }
 
   async switchVault(vaultId) {
-    this.statusEl.textContent = 'Switching vault...';
     initVaultDB(vaultId);
     this.activeFolder = 'ALL';
 
     await this.populateFoldersFromDB();
-    await this.reloadDeck();
-    this.statusEl.textContent = '';
+    await this.reloadFeed();
   }
 
   async populateFoldersFromDB() {
@@ -299,7 +282,7 @@ class AppController {
         }
       });
 
-      this.folderSelect.innerHTML = '<option value="ALL">All Notes</option>';
+      this.folderSelect.innerHTML = '<option value="ALL">All Folders</option>';
       Array.from(folders)
         .sort()
         .forEach((f) => {
@@ -313,83 +296,70 @@ class AppController {
     }
   }
 
-  async reloadDeck() {
-    this.container.innerHTML = '';
-    this.deckQueue = [];
-    this.currentTopCardData = null;
-    await this.replenishQueue();
-    this.renderTopCards();
+  async reloadFeed() {
+    this.viewport.innerHTML = '';
+    this.hasMore = true;
+    this.isLoading = false;
+    await this.loadMoreCards();
   }
 
-  async replenishQueue() {
-    if (this.isLoading) return;
+  async loadMoreCards() {
+    if (this.isLoading || !this.hasMore) return;
     this.isLoading = true;
 
     try {
-      const candidates = await getDeckQueue(this.activeFolder, 20);
-      if (candidates.length === 0) {
-        this.statusEl.textContent = 'No more notes in this rotation.';
+      const db = getActiveDB();
+
+      // Query based on filter (All vs Starred)
+      let candidates = [];
+      if (this.filterMode === 'starred') {
+        const starredStates = await db.state.where('starred').equals(1).toArray();
+        const starMap = new Set(starredStates.map((s) => s.path));
+        let manifest = await db.manifest.toArray();
+        if (this.activeFolder !== 'ALL') {
+          manifest = manifest.filter((m) => m.folder.startsWith(this.activeFolder));
+        }
+        candidates = manifest.filter((m) => starMap.has(m.path));
+      } else {
+        candidates = await getDeckQueue(this.activeFolder, 15);
+      }
+
+      // Filter out items already mounted in DOM
+      const existingPaths = new Set(
+        Array.from(this.viewport.querySelectorAll('.snap-card')).map((el) => el.dataset.path)
+      );
+      const newItems = candidates.filter((c) => !existingPaths.has(c.path));
+
+      if (newItems.length === 0) {
+        this.hasMore = false;
         this.isLoading = false;
         return;
       }
 
-      this.statusEl.textContent = '';
-      this.deckQueue.push(...candidates);
+      // Preload next batch text in background
+      preloadBatchContent(newItems.map((c) => c.path));
 
-      const pathsToPreload = candidates.slice(0, 8).map((c) => c.path);
-      preloadBatchContent(pathsToPreload);
-    } catch (err) {
-      console.error('Failed to replenish deck:', err);
-    } finally {
-      this.isLoading = false;
-    }
-  }
-
-  async renderTopCards() {
-    while (this.container.children.length < 3 && this.deckQueue.length > 0) {
-      const item = this.deckQueue.shift();
-      try {
+      // Fetch and mount each card
+      for (const item of newItems) {
         const rawMarkdown = await fetchNoteContent(item.path);
         const cardData = parseMarkdownToCard(rawMarkdown, item.path);
 
-        const cardEl = createCardElement(cardData, {
-          onSwipeRight: async (path) => {
-            await markSeen(path);
-            this.onCardDismissed();
-          },
-          onSwipeLeft: async (path) => {
-            await toggleHide(path, 1);
-            this.onCardDismissed();
-          },
+        const state = await db.state.get(item.path);
+        const isStarred = state ? state.starred === 1 : false;
+
+        const cardEl = createCardElement(cardData, isStarred, {
           onStarToggle: async (path) => {
             await toggleStar(path);
           },
         });
 
-        // First child is visual bottom; last child is visual top
-        this.container.insertBefore(cardEl, this.container.firstChild);
-      } catch (err) {
-        console.warn(`Error rendering card for ${item.path}:`, err);
+        this.viewport.appendChild(cardEl);
+        this.observer.observe(cardEl);
       }
-    }
-
-    const topEl = this.getTopCardElement();
-    if (topEl) {
-      const rawMarkdown = await fetchNoteContent(topEl.dataset.path);
-      this.currentTopCardData = parseMarkdownToCard(rawMarkdown, topEl.dataset.path);
-    } else {
-      this.currentTopCardData = null;
-    }
-
-    if (this.container.children.length === 0 && this.deckQueue.length === 0) {
-      this.statusEl.textContent = 'Deck finished for now!';
-    }
-  }
-
-  onCardDismissed() {
-    this.renderTopCards();
-    if (this.deckQueue.length < 5) {
-      this.replenishQueue();
+    } catch (err) {
+      console.error('Error loading cards:', err);
+    } finally {
+      this.isLoading = false;
     }
   }
 
@@ -401,16 +371,16 @@ class AppController {
       });
 
       await this.populateFoldersFromDB();
-      this.statusEl.textContent = 'Sync finished.';
+      this.statusEl.textContent = 'Sync complete.';
       setTimeout(() => (this.statusEl.textContent = ''), 2000);
-      this.reloadDeck();
+      this.reloadFeed();
     } catch (err) {
       alert(`Sync failed: ${err.message}`);
       this.statusEl.textContent = 'Sync error.';
     }
   }
 
-  /* --- Profile & Settings Management --- */
+  /* --- Vault Profile Management --- */
 
   openSettings() {
     this.renderSettingsProfileList();
@@ -451,8 +421,8 @@ class AppController {
           if (nextActive) {
             await this.switchVault(nextActive);
           } else {
-            this.container.innerHTML = '';
-            this.folderSelect.innerHTML = '<option value="ALL">All Notes</option>';
+            this.viewport.innerHTML = '';
+            this.folderSelect.innerHTML = '<option value="ALL">All Folders</option>';
           }
         }
       });
