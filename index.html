@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Notes Deck</title>
-  
+
   <!-- PWA Meta -->
   <meta name="theme-color" content="#6c5ce7" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -20,49 +20,38 @@
 </head>
 <body>
 
-  <!-- Top App Navigation -->
+  <!-- Top Floating Header -->
   <header class="app-header">
     <div class="header-left">
       <select id="vault-select" aria-label="Select Vault">
         <!-- Injected dynamically -->
       </select>
+
       <select id="folder-select" aria-label="Select Folder">
-        <option value="ALL">All Notes</option>
+        <option value="ALL">All Folders</option>
       </select>
+
+      <!-- Feed Mode Switcher (All vs Favorites) -->
+      <div class="feed-filter-toggle">
+        <button id="filter-all-btn" class="filter-btn active">Feed</button>
+        <button id="filter-starred-btn" class="filter-btn">★ Starred</button>
+      </div>
     </div>
+
     <div class="header-right">
       <button id="theme-btn" class="icon-btn" title="Toggle Light/Dark Theme" aria-label="Toggle Theme">🌙</button>
-      <button id="sync-btn" class="icon-btn" title="Sync Manifest" aria-label="Sync Manifest">↻</button>
-      <button id="manage-btn" class="icon-btn" title="Manage Feed" aria-label="Manage Feed">☰</button>
+      <button id="sync-btn" class="icon-btn" title="Sync Repository" aria-label="Sync Repository">↻</button>
       <button id="settings-btn" class="icon-btn" title="Vault Settings" aria-label="Vault Settings">⚙</button>
     </div>
   </header>
 
-  <!-- Swipe Arena -->
-  <main class="deck-container">
-    <div id="card-stack" class="card-stack"></div>
-
-    <!-- Tactile Action Bar -->
-    <nav class="action-bar" aria-label="Card Controls">
-      <button id="btn-action-hide" class="action-btn btn-archive" title="Archive / Hide Note" aria-label="Archive Note">
-        ✕
-      </button>
-
-      <button id="btn-action-star" class="action-btn btn-star" title="Star Note" aria-label="Star Note">
-        ★
-      </button>
-
-      <button id="btn-action-read" class="btn-read-modal" title="Read Full Note" aria-label="Read Full Note">
-        <span>Read Note</span> →
-      </button>
-
-      <button id="btn-action-keep" class="action-btn btn-keep" title="Keep in Rotation" aria-label="Keep Note">
-        ✓
-      </button>
-    </nav>
-
-    <div id="status-indicator" class="status-indicator"></div>
+  <!-- Fullscreen Snap Feed Container -->
+  <main id="feed-viewport" class="feed-viewport">
+    <!-- Snap cards inject here -->
   </main>
+
+  <!-- Floating Status Indicator for background sync / loads -->
+  <div id="status-indicator" class="status-indicator"></div>
 
   <!-- Multi-Vault Settings Modal -->
   <div id="settings-modal" class="modal">
@@ -100,23 +89,11 @@
     </div>
   </div>
 
-  <!-- Feed Management Modal -->
-  <div id="management-modal" class="modal">
-    <div class="modal-content">
-      <h2>Feed Management</h2>
-      <button id="restore-hidden-btn" class="btn-secondary">Restore All Archived Notes</button>
-      <button id="reset-seen-btn" class="btn-secondary">Reset Review History</button>
-      <button class="btn-secondary modal-close">Close</button>
-    </div>
-  </div>
-
-
-  <!-- Service Worker Registration with Auto-Update Reload -->
+  <!-- Auto-Update PWA Service Worker Registration -->
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js').then((reg) => {
-          // Check for SW updates on page load
           reg.update();
 
           reg.addEventListener('updatefound', () => {
@@ -126,14 +103,12 @@
                 installingWorker.state === 'installed' &&
                 navigator.serviceWorker.controller
               ) {
-                // New update available; reload to show fresh build
                 window.location.reload();
               }
             });
           });
         }).catch(console.warn);
 
-        // Reload if a newly activated service worker takes control
         let refreshing = false;
         navigator.serviceWorker.addEventListener('controllerchange', () => {
           if (!refreshing) {
@@ -145,7 +120,7 @@
     }
   </script>
 
-  <!-- Main ES Module Bootstrapper -->
+  <!-- ES Module Entry -->
   <script type="module" src="./src/app.js"></script>
 </body>
 </html>
