@@ -274,3 +274,91 @@ body {
   text-align: center;
   width: 100%;
 }
+
+/* Multi-vault header adjustments */
+.header-left {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.header-left select {
+  max-width: 140px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Vault Profile Manager Styling */
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.vault-profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.vault-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.vault-item.active-vault {
+  border-color: var(--accent);
+}
+
+.vault-info {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+}
+
+.vault-info span {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.vault-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.vault-actions button {
+  background: none;
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.vault-actions button:hover {
+  color: #fff;
+  border-color: #666;
+}
+
+.modal-divider {
+  border: 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.modal-btn-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.modal-btn-row button {
+  flex: 1;
+}
