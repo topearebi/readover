@@ -14,19 +14,24 @@ import {
   setActiveVaultId,
   saveVaultProfile,
   deleteVaultProfile,
+  getGlobalToken,
+  setGlobalToken,
+  getActiveVaultConfig,
+  checkRemoteUpdates,
   syncRepoManifest,
   fetchNoteContent,
+  saveNoteFile,
   preloadBatchContent,
 } from './github.js';
 
 import { parseMarkdownToCard } from './parser.js';
-import { createCardElement, openReaderModal } from './components/card.js';
+import { createCardElement } from './components/card.js';
 
 class AppController {
   constructor() {
     this.deckQueue = [];
     this.activeFolder = 'ALL';
-    this.filterMode = 'all'; // 'all' or 'starred'
+    this.filterMode = 'all';
     this.isLoading = false;
     this.hasMore = true;
 
@@ -38,6 +43,7 @@ class AppController {
     this.initObserver();
     this.bindEvents();
     this.bindKeyboardShortcuts();
+    this.initAutoSyncWatcher();
     this.boot();
   }
 
@@ -69,14 +75,22 @@ class AppController {
     this.vaultSelect = document.getElementById('vault-select');
     this.folderSelect = document.getElementById('folder-select');
     this.settingsModal = document.getElementById('settings-modal');
+    this.createModal = document.getElementById('create-modal');
     this.vaultListEl = document.getElementById('vault-profile-list');
 
     this.filterAllBtn = document.getElementById('filter-all-btn');
     this.filterStarredBtn = document.getElementById('filter-starred-btn');
+
+    this.globalTokenInput = document.getElementById('cfg-global-token');
+    this.globalTokenStatus = document.getElementById('global-token-status');
+
+    this.fabCreateBtn = document.getElementById('fab-create-btn');
+    this.confirmCreateBtn = document.getElementById('confirm-create-btn');
+    this.newNotePathInput = document.getElementById('new-note-path');
+    this.newNoteContentInput = document.getElementById('new-note-content');
   }
 
   initObserver() {
-    // Watches cards as they snap into view
     this.observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -87,7 +101,6 @@ class AppController {
               markSeen(path);
             }
 
-            // Trigger load more when reaching the 3rd card from bottom
             const allCards = this.viewport.querySelectorAll('.snap-card');
             const currentIndex = Array.from(allCards).indexOf(cardEl);
             if (currentIndex >= allCards.length - 3 && !this.isLoading && this.hasMore) {
@@ -101,6 +114,19 @@ class AppController {
         threshold: 0.6,
       }
     );
+  }
+
+  initAutoSyncWatcher() {
+    // Check for remote commits when the tab or PWA regains focus
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible') {
+        const hasUpdates = await checkRemoteUpdates();
+        if (hasUpdates) {
+          this.statusEl.textContent = 'Remote changes detected. Auto-syncing...';
+          await this.triggerSync(true);
+        }
+      }
+    });
   }
 
   bindEvents() {
@@ -124,7 +150,7 @@ class AppController {
       this.reloadFeed();
     });
 
-    // All vs Starred Filter Pills
+    // All vs Starred Filters
     this.filterAllBtn.addEventListener('click', () => {
       if (this.filterMode === 'all') return;
       this.filterMode = 'all';
@@ -139,6 +165,23 @@ class AppController {
       this.filterStarredBtn.classList.add('active');
       this.filterAllBtn.classList.remove('active');
       this.reloadFeed();
+    });
+
+    // Create Note Modal Actions
+    this.fabCreateBtn.addEventListener('click', () => {
+      const activeFolder = this.activeFolder !== 'ALL' ? `${this.activeFolder}/` : '';
+      this.newNotePathInput.value = activeFolder;
+      this.newNoteContentInput.value = '';
+      this.createModal.classList.add('open');
+      this.newNotePathInput.focus();
+    });
+
+    this.confirmCreateBtn.addEventListener('click', () => this.handleCreateNote());
+
+    // Global Token Input
+    this.globalTokenInput.addEventListener('change', (e) => {
+      setGlobalToken(e.target.value);
+      this.updateGlobalTokenBadge();
     });
 
     // Settings Profile Actions
@@ -163,6 +206,7 @@ class AppController {
       if (e.key === 'Escape') {
         if (isReaderOpen) readerModal.classList.remove('open');
         this.settingsModal.classList.remove('open');
+        this.createModal.classList.remove('open');
         return;
       }
 
@@ -190,6 +234,11 @@ class AppController {
             const starBtn = currentCard.querySelector('.star-btn');
             if (starBtn) starBtn.click();
           }
+          break;
+        case 'c':
+        case 'C':
+          e.preventDefault();
+          this.fabCreateBtn.click();
           break;
         case ' ':
         case 'Enter':
@@ -310,7 +359,6 @@ class AppController {
     try {
       const db = getActiveDB();
 
-      // Query based on filter (All vs Starred)
       let candidates = [];
       if (this.filterMode === 'starred') {
         const starredStates = await db.state.where('starred').equals(1).toArray();
@@ -324,7 +372,6 @@ class AppController {
         candidates = await getDeckQueue(this.activeFolder, 15);
       }
 
-      // Filter out items already mounted in DOM
       const existingPaths = new Set(
         Array.from(this.viewport.querySelectorAll('.snap-card')).map((el) => el.dataset.path)
       );
@@ -336,10 +383,8 @@ class AppController {
         return;
       }
 
-      // Preload next batch text in background
       preloadBatchContent(newItems.map((c) => c.path));
 
-      // Fetch and mount each card
       for (const item of newItems) {
         const rawMarkdown = await fetchNoteContent(item.path);
         const cardData = parseMarkdownToCard(rawMarkdown, item.path);
@@ -363,29 +408,89 @@ class AppController {
     }
   }
 
-  async triggerSync() {
-    this.statusEl.textContent = 'Syncing repository manifest...';
+  async handleCreateNote() {
+    let rawPath = this.newNotePathInput.value.trim();
+    const content = this.newNoteContentInput.value;
+
+    if (!rawPath) {
+      alert('Please enter a note title or path.');
+      return;
+    }
+
+    if (!rawPath.endsWith('.md')) {
+      rawPath += '.md';
+    }
+
+    this.confirmCreateBtn.disabled = true;
+    this.statusEl.textContent = 'Creating note on GitHub...';
+
+    try {
+      await saveNoteFile(rawPath, content, null);
+      this.createModal.classList.remove('open');
+
+      const cardData = parseMarkdownToCard(content, rawPath);
+      const cardEl = createCardElement(cardData, false, {
+        onStarToggle: async (path) => {
+          await toggleStar(path);
+        },
+      });
+
+      // Insert at very top and snap to it
+      this.viewport.insertBefore(cardEl, this.viewport.firstChild);
+      this.observer.observe(cardEl);
+      cardEl.scrollIntoView({ behavior: 'smooth' });
+
+      await this.populateFoldersFromDB();
+      this.statusEl.textContent = 'Note created!';
+      setTimeout(() => (this.statusEl.textContent = ''), 2000);
+    } catch (err) {
+      alert(`Could not create note: ${err.message}`);
+      this.statusEl.textContent = 'Creation failed.';
+    } finally {
+      this.confirmCreateBtn.disabled = false;
+    }
+  }
+
+  async triggerSync(silent = false) {
+    if (!silent) this.statusEl.textContent = 'Syncing repository manifest...';
     try {
       await syncRepoManifest((msg) => {
-        this.statusEl.textContent = msg;
+        if (!silent) this.statusEl.textContent = msg;
       });
 
       await this.populateFoldersFromDB();
-      this.statusEl.textContent = 'Sync complete.';
-      setTimeout(() => (this.statusEl.textContent = ''), 2000);
+      if (!silent) {
+        this.statusEl.textContent = 'Sync complete.';
+        setTimeout(() => (this.statusEl.textContent = ''), 2000);
+      } else {
+        this.statusEl.textContent = '';
+      }
       this.reloadFeed();
     } catch (err) {
-      alert(`Sync failed: ${err.message}`);
+      if (!silent) alert(`Sync failed: ${err.message}`);
       this.statusEl.textContent = 'Sync error.';
     }
   }
 
-  /* --- Vault Profile Management --- */
+  /* --- Settings & Hierarchical Auth --- */
 
   openSettings() {
     this.renderSettingsProfileList();
     this.clearVaultForm();
+    this.globalTokenInput.value = getGlobalToken();
+    this.updateGlobalTokenBadge();
     this.settingsModal.classList.add('open');
+  }
+
+  updateGlobalTokenBadge() {
+    const token = getGlobalToken();
+    if (token) {
+      this.globalTokenStatus.textContent = '✓ Active (5,000 req/hr)';
+      this.globalTokenStatus.style.color = 'var(--primary)';
+    } else {
+      this.globalTokenStatus.textContent = 'Optional';
+      this.globalTokenStatus.style.color = 'var(--text-muted)';
+    }
   }
 
   renderSettingsProfileList() {
@@ -394,12 +499,13 @@ class AppController {
 
     this.vaultListEl.innerHTML = '';
     profiles.forEach((p) => {
+      const hasCustomToken = Boolean(p.token && p.token.trim());
       const row = document.createElement('div');
       row.className = `vault-item ${p.id === activeId ? 'active-vault' : ''}`;
       row.innerHTML = `
         <div class="vault-info">
           <strong>${escapeHtml(p.name)}</strong>
-          <span>${escapeHtml(p.owner)}/${escapeHtml(p.repo)} (${escapeHtml(p.branch || 'main')})</span>
+          <span>${escapeHtml(p.owner)}/${escapeHtml(p.repo)} · ${hasCustomToken ? 'Custom Token' : 'Default Auth'}</span>
         </div>
         <div class="vault-actions">
           <button class="edit-btn">Edit</button>
@@ -438,6 +544,7 @@ class AppController {
     document.getElementById('cfg-repo').value = '';
     document.getElementById('cfg-branch').value = 'main';
     document.getElementById('cfg-token').value = '';
+    document.querySelector('.vault-override-details').removeAttribute('open');
   }
 
   loadVaultIntoForm(profile) {
@@ -447,6 +554,12 @@ class AppController {
     document.getElementById('cfg-repo').value = profile.repo;
     document.getElementById('cfg-branch').value = profile.branch || 'main';
     document.getElementById('cfg-token').value = profile.token || '';
+
+    if (profile.token && profile.token.trim()) {
+      document.querySelector('.vault-override-details').setAttribute('open', '');
+    } else {
+      document.querySelector('.vault-override-details').removeAttribute('open');
+    }
   }
 
   async saveCurrentVaultForm() {
