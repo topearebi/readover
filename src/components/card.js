@@ -1,12 +1,10 @@
 // src/components/card.js
+import { getNoteSha } from '../db.js';
+import { saveNoteFile, fetchNoteContent } from '../github.js';
+import { parseMarkdownToCard } from '../parser.js';
 
 /**
  * Creates and mounts a full-viewport TikTok-style snap card.
- * 
- * @param {Object} cardData - Parsed card object from parseMarkdownToCard
- * @param {boolean} isStarred - Initial starred state from DB
- * @param {Object} callbacks - { onStarToggle }
- * @returns {HTMLElement} The card container element
  */
 export function createCardElement(cardData, isStarred = false, { onStarToggle } = {}) {
   const card = document.createElement('section');
@@ -32,7 +30,7 @@ export function createCardElement(cardData, isStarred = false, { onStarToggle } 
         </div>
       </div>
 
-      <!-- Floating Interaction Rail (TikTok Style) -->
+      <!-- Floating Interaction Rail -->
       <aside class="floating-rail">
         <button class="rail-btn star-btn ${isStarred ? 'starred' : ''}" aria-label="Favorite Note" title="Favorite">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="${isStarred ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2">
@@ -64,27 +62,23 @@ export function createCardElement(cardData, isStarred = false, { onStarToggle } 
   const expandBtn = card.querySelector('.expand-btn');
   const shareBtn = card.querySelector('.share-btn');
 
-  // Measure content overflow once attached to layout
   requestAnimationFrame(() => {
     if (bodyEl.scrollHeight > bodyEl.clientHeight + 10) {
       bodyEl.classList.add('has-overflow');
     }
   });
 
-  // Tapping the body opens the reader modal only if content is truncated
-  bodyEl.addEventListener('click', (e) => {
+  bodyEl.addEventListener('click', () => {
     if (bodyEl.classList.contains('has-overflow')) {
-      openReaderModal(cardData);
+      openReaderModal(cardData, card);
     }
   });
 
-  // Expand modal trigger
   expandBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    openReaderModal(cardData);
+    openReaderModal(cardData, card);
   });
 
-  // Star / Favorite trigger
   starBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     const isNowStarred = starBtn.classList.toggle('starred');
@@ -97,7 +91,6 @@ export function createCardElement(cardData, isStarred = false, { onStarToggle } 
     }
   });
 
-  // Native share sheet or clipboard fallback
   shareBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
     if ('vibrate' in navigator) navigator.vibrate(8);
@@ -108,9 +101,7 @@ export function createCardElement(cardData, isStarred = false, { onStarToggle } 
           title: cardData.title,
           text: `${cardData.title}\n\n${cardData.teaser}`,
         });
-      } catch (err) {
-        // User canceled share
-      }
+      } catch (err) {}
     } else {
       navigator.clipboard.writeText(`${cardData.title}\n\n${cardData.fullHtml}`);
       alert('Note copied to clipboard!');
@@ -121,9 +112,11 @@ export function createCardElement(cardData, isStarred = false, { onStarToggle } 
 }
 
 /**
- * Opens fullscreen slide-up reading modal.
+ * Opens fullscreen slide-up reading modal with inline editing.
+ * @param {Object} cardData - Parsed card metadata & html
+ * @param {HTMLElement|null} associatedCardEl - The card element in the feed to update live
  */
-export function openReaderModal(cardData) {
+export async function openReaderModal(cardData, associatedCardEl = null) {
   let modal = document.getElementById('reader-modal');
   if (!modal) {
     modal = document.createElement('div');
@@ -131,10 +124,20 @@ export function openReaderModal(cardData) {
     modal.className = 'reader-modal';
     modal.innerHTML = `
       <div class="reader-header">
-        <span class="card-folder-badge" id="reader-folder"></span>
-        <button id="reader-close-btn" class="reader-close-btn">✕ Done</button>
+        <div class="reader-header-left">
+          <span class="card-folder-badge" id="reader-folder"></span>
+          <span id="reader-status" class="reader-status"></span>
+        </div>
+        <div class="reader-header-right">
+          <button id="reader-edit-btn" class="reader-action-btn">Edit</button>
+          <button id="reader-save-btn" class="reader-action-btn btn-save" style="display:none;">Save</button>
+          <button id="reader-close-btn" class="reader-close-btn">✕ Done</button>
+        </div>
       </div>
-      <article class="reader-body markdown-preview"></article>
+      <article id="reader-preview-pane" class="reader-body markdown-preview"></article>
+      <div id="reader-edit-pane" class="reader-editor-container" style="display:none;">
+        <textarea id="reader-editor-input" class="reader-textarea" spellcheck="true" placeholder="Write markdown..."></textarea>
+      </div>
     `;
     document.body.appendChild(modal);
 
@@ -143,14 +146,94 @@ export function openReaderModal(cardData) {
     });
   }
 
-  modal.querySelector('#reader-folder').textContent = cardData.folder;
-  const body = modal.querySelector('.reader-body');
-  body.innerHTML = `
-    <header class="reader-meta">
-      <h1 class="card-title">${escapeHtml(cardData.title)}</h1>
-    </header>
-    ${cardData.fullHtml}
-  `;
+  const folderBadge = modal.querySelector('#reader-folder');
+  const statusEl = modal.querySelector('#reader-status');
+  const previewPane = modal.querySelector('#reader-preview-pane');
+  const editPane = modal.querySelector('#reader-edit-pane');
+  const editorInput = modal.querySelector('#reader-editor-input');
+  const editBtn = modal.querySelector('#reader-edit-btn');
+  const saveBtn = modal.querySelector('#reader-save-btn');
+
+  folderBadge.textContent = cardData.folder;
+  statusEl.textContent = '';
+  editPane.style.display = 'none';
+  previewPane.style.display = 'block';
+  editBtn.style.display = 'inline-block';
+  saveBtn.style.display = 'none';
+  editBtn.textContent = 'Edit';
+
+  const renderPreview = (data) => {
+    previewPane.innerHTML = `
+      <header class="reader-meta">
+        <h1 class="card-title">${escapeHtml(data.title)}</h1>
+      </header>
+      ${data.fullHtml}
+    `;
+  };
+
+  renderPreview(cardData);
+
+  // Toggle Edit / Preview modes
+  editBtn.onclick = async () => {
+    if (editPane.style.display === 'none') {
+      // Enter Edit Mode
+      statusEl.textContent = 'Loading source...';
+      const rawMarkdown = await fetchNoteContent(cardData.path);
+      editorInput.value = rawMarkdown;
+      statusEl.textContent = '';
+
+      previewPane.style.display = 'none';
+      editPane.style.display = 'block';
+      editBtn.textContent = 'Preview';
+      saveBtn.style.display = 'inline-block';
+      editorInput.focus();
+    } else {
+      // Return to Preview Mode
+      const tempCard = parseMarkdownToCard(editorInput.value, cardData.path);
+      renderPreview(tempCard);
+      editPane.style.display = 'none';
+      previewPane.style.display = 'block';
+      editBtn.textContent = 'Edit';
+      saveBtn.style.display = 'none';
+    }
+  };
+
+  // Commit changes to GitHub
+  saveBtn.onclick = async () => {
+    const updatedContent = editorInput.value;
+    statusEl.textContent = 'Committing changes...';
+    saveBtn.disabled = true;
+
+    try {
+      const currentSha = await getNoteSha(cardData.path);
+      await saveNoteFile(cardData.path, updatedContent, currentSha);
+
+      // Re-parse and update preview
+      const updatedCard = parseMarkdownToCard(updatedContent, cardData.path);
+      renderPreview(updatedCard);
+
+      // Update the underlying card in the feed if mounted
+      if (associatedCardEl) {
+        const titleEl = associatedCardEl.querySelector('.card-title');
+        const previewEl = associatedCardEl.querySelector('.markdown-preview');
+        if (titleEl) titleEl.textContent = updatedCard.title;
+        if (previewEl) previewEl.innerHTML = updatedCard.fullHtml;
+      }
+
+      statusEl.textContent = 'Saved!';
+      setTimeout(() => (statusEl.textContent = ''), 2000);
+
+      editPane.style.display = 'none';
+      previewPane.style.display = 'block';
+      editBtn.textContent = 'Edit';
+      saveBtn.style.display = 'none';
+    } catch (err) {
+      alert(`Save failed: ${err.message}`);
+      statusEl.textContent = 'Save error';
+    } finally {
+      saveBtn.disabled = false;
+    }
+  };
 
   modal.classList.add('open');
 }
