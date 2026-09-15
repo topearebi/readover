@@ -18,7 +18,6 @@ export function initVaultDB(vaultId) {
     const dbName = `MarkdownDeckDB_${vaultId}`;
     const db = new Dexie(dbName);
 
-    // Indexed fields: path is primary key; lastSeen and starred are queryable
     db.version(1).stores({
       manifest: '&path, sha, folder, filename',
       content: '&path, fetchedAt',
@@ -42,7 +41,7 @@ export function getActiveDB() {
 }
 
 /**
- * Ensures a state record exists for a note without overriding existing data.
+ * Ensures a state record exists for a note without overriding existing triage data.
  */
 export async function ensureNoteState(path) {
   const db = getActiveDB();
@@ -65,7 +64,7 @@ export async function markSeen(path) {
 }
 
 /**
- * Toggles the starred/favorite status.
+ * Toggles the starred status.
  */
 export async function toggleStar(path) {
   const db = getActiveDB();
@@ -76,7 +75,43 @@ export async function toggleStar(path) {
 }
 
 /**
- * Resets all review timestamps in the current vault so notes recycle from the beginning.
+ * Retrieves the Git SHA for a given path from the manifest.
+ */
+export async function getNoteSha(path) {
+  const db = getActiveDB();
+  const record = await db.manifest.get(path);
+  return record ? record.sha : null;
+}
+
+/**
+ * Updates local content and manifest immediately following a successful save/create.
+ */
+export async function upsertLocalNote(path, rawMarkdown, newSha) {
+  const db = getActiveDB();
+  const segments = path.split('/');
+  const filename = segments.pop();
+  const folder = segments.join('/') || 'Root';
+
+  await db.transaction('rw', [db.manifest, db.content, db.state], async () => {
+    await db.manifest.put({
+      path,
+      sha: newSha,
+      folder,
+      filename,
+    });
+
+    await db.content.put({
+      path,
+      rawMarkdown,
+      fetchedAt: Date.now(),
+    });
+
+    await ensureNoteState(path);
+  });
+}
+
+/**
+ * Resets all review timestamps in the current vault so notes recycle.
  */
 export async function resetReviewHistory() {
   const db = getActiveDB();
@@ -85,14 +120,6 @@ export async function resetReviewHistory() {
 
 /**
  * Queries candidate notes for the infinite scroll stream.
- * 
- * Priority:
- * 1. Unseen notes (lastSeen === 0)
- * 2. Notes seen furthest in the past (lastSeen ASC)
- * 3. Soft jitter to avoid strictly deterministic ordering
- * 
- * @param {string|null} folderFilter - Optional folder path prefix
- * @param {number} limit - Number of card paths to return
  */
 export async function getDeckQueue(folderFilter = null, limit = 20) {
   const db = getActiveDB();
@@ -106,7 +133,6 @@ export async function getDeckQueue(folderFilter = null, limit = 20) {
     candidates = candidates.filter((m) => m.folder.startsWith(folderFilter));
   }
 
-  // Sort unseen first, then oldest seen with jitter
   candidates.sort((a, b) => {
     const stateA = stateMap.get(a.path);
     const stateB = stateMap.get(b.path);
@@ -117,7 +143,6 @@ export async function getDeckQueue(folderFilter = null, limit = 20) {
     if (timeA === 0 && timeB !== 0) return -1;
     if (timeB === 0 && timeA !== 0) return 1;
 
-    // Subtle random jitter (± 1 hour) keeps the feed feeling organic
     const jitter = (Math.random() - 0.5) * 3600000;
     return timeA + jitter - timeB;
   });
