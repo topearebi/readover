@@ -1,147 +1,163 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>Notes Deck</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>ReadOver</title>
 
-  <!-- PWA Meta -->
-  <meta name="theme-color" content="#6c5ce7" />
+  <!-- PWA Meta & Web Clips -->
+  <meta name="theme-color" content="#110f17" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ReadOver" />
   <link rel="manifest" href="./manifest.json" />
 
-  <!-- Typography -->
+  <!-- Preconnect Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
   <link rel="stylesheet" href="./src/style.css" />
 </head>
 <body>
 
-  <!-- Top Floating Header -->
+  <!-- Top App Navigation / Desktop Controls Overlay Bar -->
   <header class="app-header">
     <div class="header-left">
-      <select id="vault-select" aria-label="Select Vault">
-        <!-- Injected dynamically -->
+      <div class="brand-title">ReadOver</div>
+      
+      <!-- Unified Source Selector (GitHub Vaults & Local Folders) -->
+      <select id="source-select" aria-label="Select Source">
+        <!-- Dynamically injected options -->
       </select>
 
-      <select id="folder-select" aria-label="Select Folder">
+      <select id="folder-select" aria-label="Select Subfolder">
         <option value="ALL">All Folders</option>
       </select>
-
-      <div class="feed-filter-toggle">
-        <button id="filter-all-btn" class="filter-btn active">Feed</button>
-        <button id="filter-starred-btn" class="filter-btn">★ Starred</button>
-      </div>
     </div>
 
+    <!-- Media Type Filter Pills -->
+    <nav class="media-filter-bar" aria-label="Media Filters">
+      <button class="filter-pill active" data-filter="all">All</button>
+      <button class="filter-pill" data-filter="text">Notes</button>
+      <button class="filter-pill" data-filter="epub">Books</button>
+      <button class="filter-pill" data-filter="pdf">PDFs</button>
+      <button class="filter-pill" data-filter="starred">★ Starred</button>
+    </nav>
+
     <div class="header-right">
-      <button id="theme-btn" class="icon-btn" title="Toggle Theme" aria-label="Toggle Theme">🌙</button>
-      <button id="sync-btn" class="icon-btn" title="Sync Repository" aria-label="Sync Repository">↻</button>
-      <button id="settings-btn" class="icon-btn" title="Vault Settings" aria-label="Vault Settings">⚙</button>
+      <button id="theme-btn" class="icon-btn" title="Toggle Theme" aria-label="Toggle Theme">☀️</button>
+      <button id="sync-btn" class="icon-btn" title="Sync Source" aria-label="Sync Source">↻</button>
+      <button id="settings-btn" class="icon-btn" title="Library Settings" aria-label="Settings">⚙</button>
     </div>
   </header>
 
-  <!-- Fullscreen Snap Feed Container -->
-  <main id="feed-viewport" class="feed-viewport">
-    <!-- Snap cards inject here -->
+  <!-- Continuous Full-Bleed Vertical Snap Feed -->
+  <main id="feed-viewport" class="feed-viewport" tabindex="0">
+    <!-- Polymorphic Snap Cards Inject Here -->
   </main>
 
   <!-- Floating Action Button (+ New Note) -->
   <button id="fab-create-btn" class="fab-create" title="Create New Note" aria-label="Create New Note">+</button>
 
-  <!-- Status Indicator -->
-  <div id="status-indicator" class="status-indicator"></div>
+  <!-- Ambient System Status Pill -->
+  <aside id="status-indicator" class="status-indicator" role="status" aria-live="polite"></aside>
 
-  <!-- Multi-Vault Settings Modal -->
-  <div id="settings-modal" class="modal">
+  <!-- Settings & Source Management Modal -->
+  <div id="settings-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
     <div class="modal-content">
       <div class="modal-header">
-        <h2>Vault Settings</h2>
-        <button id="add-vault-btn" class="btn-secondary">+ New Vault</button>
+        <h2 id="settings-title">Sources & Storage</h2>
+        <div class="modal-header-actions">
+          <button id="open-local-folder-btn" class="btn-secondary">📁 Open Local Folder</button>
+          <button id="add-vault-btn" class="btn-secondary">+ Add GitHub</button>
+        </div>
       </div>
 
-      <!-- Account-Wide Token (Classic PAT) -->
+      <!-- Hidden standard fallback directory input -->
+      <input type="file" id="legacy-folder-input" webkitdirectory directory multiple style="display: none;" />
+
+      <!-- Global Account Credentials -->
       <section class="global-auth-card">
         <div class="global-auth-header">
           <h3>GitHub Account Token</h3>
-          <span id="global-token-status" style="font-size: 11px; font-weight: 700; color: var(--text-muted);">Optional</span>
+          <span id="global-token-status" class="status-pill">Optional</span>
         </div>
         <p class="global-auth-desc">
-          Add a Classic PAT (with <code>repo</code> scope) once to access all public and private vaults without entering credentials per repo.
+          Add a Classic PAT (<code>repo</code> scope) once to access public and private remote vaults seamlessly.
         </p>
         <input type="password" id="cfg-global-token" placeholder="ghp_... (Classic PAT)" />
       </section>
 
-      <!-- Saved Vault Profiles List -->
-      <div id="vault-profile-list" class="vault-profile-list"></div>
+      <!-- Saved Sources List -->
+      <section class="sources-list-section">
+        <h3>Connected Libraries</h3>
+        <div id="source-list" class="source-list"></div>
+      </section>
 
       <hr class="modal-divider" />
 
-      <!-- Active / New Profile Edit Form -->
-      <input type="hidden" id="cfg-id" />
-      <label>Vault Nickname
-        <input type="text" id="cfg-name" placeholder="e.g. Personal Notes" />
-      </label>
-      <label>GitHub Owner (User / Org)
-        <input type="text" id="cfg-owner" placeholder="e.g. topearebi" />
-      </label>
-      <label>Repository Name
-        <input type="text" id="cfg-repo" placeholder="e.g. notes" />
-      </label>
-      <label>Branch
-        <input type="text" id="cfg-branch" value="main" />
-      </label>
+      <!-- GitHub Vault Configuration Form -->
+      <form id="vault-form" class="vault-form" onsubmit="return false;">
+        <h3>Configure GitHub Repository</h3>
+        <input type="hidden" id="cfg-id" />
+        <label>Display Nickname
+          <input type="text" id="cfg-name" placeholder="e.g. Research Vault" />
+        </label>
+        <label>GitHub Owner
+          <input type="text" id="cfg-owner" placeholder="e.g. username" />
+        </label>
+        <label>Repository Name
+          <input type="text" id="cfg-repo" placeholder="e.g. notes" />
+        </label>
+        <label>Branch
+          <input type="text" id="cfg-branch" value="main" />
+        </label>
 
-      <!-- Collapsible Per-Vault Token Override -->
-      <details class="vault-override-details">
-        <summary>Advanced: Custom Token Override</summary>
-        <div class="vault-override-content">
-          <input type="password" id="cfg-token" placeholder="github_pat_... (Overrides Account Token)" />
-          <span class="vault-override-hint">Leave blank to inherit the Account Token above, or connect unauthenticated if public.</span>
+        <details class="vault-override-details">
+          <summary>Custom Token Override</summary>
+          <div class="vault-override-content">
+            <input type="password" id="cfg-token" placeholder="github_pat_... (Overrides Account Token)" />
+            <span class="vault-override-hint">Leave blank to use the account token, or leave both empty for public repositories.</span>
+          </div>
+        </details>
+
+        <div class="modal-btn-row">
+          <button id="save-vault-btn" class="btn-primary">Save & Connect</button>
+          <button type="button" class="btn-secondary modal-close">Close</button>
         </div>
-      </details>
-
-      <div class="modal-btn-row">
-        <button id="save-vault-btn" class="btn-primary">Save & Sync Vault</button>
-        <button class="btn-secondary modal-close">Close</button>
-      </div>
+      </form>
     </div>
   </div>
 
   <!-- Create Note Modal -->
-  <div id="create-modal" class="modal">
+  <div id="create-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="create-title">
     <div class="modal-content">
-      <h2>Create Note</h2>
-      <label>Note Path / Title
-        <input type="text" id="new-note-path" placeholder="e.g. zettelkasten/Core concepts.md" />
+      <h2 id="create-title">New Note</h2>
+      <label>File Path / Title
+        <input type="text" id="new-note-path" placeholder="e.g. thoughts/idea.md" />
       </label>
       <label>Content (Markdown)
-        <textarea id="new-note-content" class="reader-textarea" style="height: 200px; border: 1.5px solid var(--border-color); border-radius: 10px; padding: 10px;" placeholder="# Your note title..."></textarea>
+        <textarea id="new-note-content" class="reader-textarea" style="height: 220px; border: 1.5px solid var(--border-color); border-radius: 12px; padding: 12px;" placeholder="# Draft your thoughts..."></textarea>
       </label>
       <div class="modal-btn-row">
         <button id="confirm-create-btn" class="btn-primary">Create & Commit</button>
-        <button class="btn-secondary modal-close">Cancel</button>
+        <button type="button" class="btn-secondary modal-close">Cancel</button>
       </div>
     </div>
   </div>
 
-  <!-- Auto-Update PWA Service Worker Registration -->
+  <!-- Service Worker Auto-Update Pipeline -->
   <script>
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js').then((reg) => {
           reg.update();
-
           reg.addEventListener('updatefound', () => {
-            const installingWorker = reg.installing;
-            installingWorker.addEventListener('statechange', () => {
-              if (
-                installingWorker.state === 'installed' &&
-                navigator.serviceWorker.controller
-              ) {
+            const installing = reg.installing;
+            installing.addEventListener('statechange', () => {
+              if (installing.state === 'installed' && navigator.serviceWorker.controller) {
                 window.location.reload();
               }
             });
@@ -159,7 +175,7 @@
     }
   </script>
 
-  <!-- ES Module Bootstrapper -->
+  <!-- ES Module Application Entry -->
   <script type="module" src="./src/app.js"></script>
 </body>
 </html>
