@@ -22,27 +22,24 @@
 </head>
 <body>
 
-  <!-- Top App Navigation / Desktop Controls Overlay Bar -->
+  <!-- Top App Navigation -->
   <header class="app-header">
     <div class="header-left">
       <div class="brand-title">ReadOver</div>
       
-      <!-- Unified Source Selector (GitHub Vaults & Local Folders) -->
+      <!-- Unified Source Selector (All Sources, GitHub Vaults & Local Folders) -->
       <select id="source-select" aria-label="Select Source">
         <!-- Dynamically injected options -->
       </select>
 
       <select id="folder-select" aria-label="Select Subfolder">
-        <option value="ALL">All Folders</option>
+        <option value="ALL">All Subfolders</option>
       </select>
     </div>
 
-    <!-- Media Type Filter Pills -->
-    <nav class="media-filter-bar" aria-label="Media Filters">
+    <!-- Streamlined Filter Segment (All vs Starred) -->
+    <nav class="media-filter-bar" aria-label="Deck Filter">
       <button class="filter-pill active" data-filter="all">All</button>
-      <button class="filter-pill" data-filter="text">Notes</button>
-      <button class="filter-pill" data-filter="epub">Books</button>
-      <button class="filter-pill" data-filter="pdf">PDFs</button>
       <button class="filter-pill" data-filter="starred">★ Starred</button>
     </nav>
 
@@ -70,7 +67,7 @@
       <div class="modal-header">
         <h2 id="settings-title">Sources & Storage</h2>
         <div class="modal-header-actions">
-          <button id="open-local-folder-btn" class="btn-secondary">📁 Open Local Folder</button>
+          <button id="open-local-folder-btn" class="btn-secondary">📁 Open Folder</button>
           <button id="add-vault-btn" class="btn-secondary">+ Add GitHub</button>
         </div>
       </div>
