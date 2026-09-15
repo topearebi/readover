@@ -4,6 +4,7 @@ import {
   getCachedContent,
   setCachedContent,
   upsertLocalNote,
+  getNoteSha,
 } from './db.js';
 
 const GITHUB_API_BASE = 'https://api.github.com';
@@ -71,12 +72,6 @@ export function getActiveVaultConfig() {
   return profiles.find((p) => p.id === activeId) || null;
 }
 
-/**
- * Resolves authentication token using hierarchical override:
- * 1. Per-vault custom token override
- * 2. Global Account Token
- * 3. Null (unauthenticated for public repositories)
- */
 function resolveAuthHeaders(customToken, baseHeaders = {}) {
   const token = (customToken && customToken.trim()) || getGlobalToken();
   const headers = { ...baseHeaders };
@@ -175,7 +170,6 @@ export async function syncRepoManifest(onProgress = () => {}) {
 
       const existing = await db.manifest.get(node.path);
 
-      // Invalidate cached content if remote SHA changed
       if (existing && existing.sha !== node.sha) {
         await db.content.delete(node.path);
       }
@@ -199,7 +193,6 @@ export async function syncRepoManifest(onProgress = () => {}) {
       }
     }
 
-    // Evict removed files
     const allLocal = await db.manifest.toArray();
     for (const local of allLocal) {
       if (local.sourceType === 'github' && !remotePaths.has(local.path)) {
@@ -214,95 +207,113 @@ export async function syncRepoManifest(onProgress = () => {}) {
 }
 
 /**
- * Fetches text/markdown note content with 304 fallback to local IndexedDB cache.
+ * Robustly fetches note markdown content.
+ * Checks IndexedDB first; if missing, fetches using Git Blob API (using SHA)
+ * or falls back to raw API contents stream.
  */
 export async function fetchNoteContent(path) {
   const db = getActiveDB();
-  const cached = await getCachedContent(path);
+
+  // 1. Return from IndexedDB cache if available
+  const cached = await db.content.get(path);
+  if (cached && typeof cached.rawMarkdown === 'string' && cached.rawMarkdown.trim().length > 0) {
+    return cached.rawMarkdown;
+  }
 
   const cfg = getActiveVaultConfig();
   if (!cfg) {
-    if (cached) return cached.rawMarkdown;
+    if (cached && cached.rawMarkdown) return cached.rawMarkdown;
     throw new Error('No vault configured and file is not cached.');
   }
 
+  // 2. Fetch by Git Blob SHA if available (fastest, bypasses contents API & encoding bugs)
+  const manifestRecord = await db.manifest.get(path);
+  const sha = manifestRecord?.sha;
+
+  if (sha && !sha.startsWith('local_') && !sha.startsWith('fs_')) {
+    try {
+      const blobUrl = `${GITHUB_API_BASE}/repos/${cfg.owner}/${cfg.repo}/git/blobs/${sha}`;
+      const headers = resolveAuthHeaders(cfg.token, {
+        Accept: 'application/vnd.github.v3.raw', // Direct raw payload
+      });
+
+      const res = await fetch(blobUrl, { headers });
+      if (res.ok) {
+        const text = await res.text();
+        await db.content.put({
+          path,
+          rawMarkdown: text,
+          fetchedAt: Date.now(),
+        });
+        return text;
+      }
+    } catch (err) {
+      console.warn('Git Blob fetch failed, falling back to contents endpoint:', err);
+    }
+  }
+
+  // 3. Fallback: Raw contents endpoint
   const branch = cfg.branch || 'main';
   const encodedPath = path.split('/').map(encodeURIComponent).join('/');
   const url = `${GITHUB_API_BASE}/repos/${cfg.owner}/${cfg.repo}/contents/${encodedPath}?ref=${branch}`;
 
   const headers = resolveAuthHeaders(cfg.token, {
-    Accept: 'application/vnd.github.v3+json',
+    Accept: 'application/vnd.github.v3.raw', // Request raw text directly to avoid Base64 decoding bugs
   });
 
-  if (cached && cached.etag) {
-    headers['If-None-Match'] = cached.etag;
+  const res = await fetch(url, { headers });
+
+  if (!res.ok) {
+    // If still cached in any state, return it
+    if (cached && cached.rawMarkdown) return cached.rawMarkdown;
+    throw new Error(`Failed to load note: HTTP ${res.status}`);
   }
 
-  try {
-    const res = await fetch(url, { headers });
+  const rawMarkdown = await res.text();
 
-    // 304 Not Modified: server returned no content because cache is current
-    if (res.status === 304) {
-      if (cached && cached.rawMarkdown) {
-        return cached.rawMarkdown;
-      }
-      // If header returned 304 but local record is empty, force a fresh fetch without etag
-      const freshHeaders = resolveAuthHeaders(cfg.token, {
-        Accept: 'application/vnd.github.v3+json',
-      });
-      const freshRes = await fetch(url, { headers: freshHeaders });
-      if (!freshRes.ok) throw new Error(`HTTP ${freshRes.status}`);
-      const freshData = await freshRes.json();
-      const decoded = decodeBase64Utf8(freshData.content);
-      await db.content.put({
-        path,
-        rawMarkdown: decoded,
-        etag: freshRes.headers.get('etag'),
-        fetchedAt: Date.now(),
-      });
-      return decoded;
-    }
+  await db.content.put({
+    path,
+    rawMarkdown,
+    fetchedAt: Date.now(),
+  });
 
-    if (!res.ok) {
-      if (cached && cached.rawMarkdown) return cached.rawMarkdown;
-      throw new Error(`Failed to load note: HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
-    const rawMarkdown = decodeBase64Utf8(data.content);
-    const etag = res.headers.get('etag');
-
-    await db.content.put({
-      path,
-      rawMarkdown,
-      etag,
-      fetchedAt: Date.now(),
-    });
-
-    return rawMarkdown;
-  } catch (err) {
-    if (cached && cached.rawMarkdown) {
-      return cached.rawMarkdown;
-    }
-    throw err;
-  }
+  return rawMarkdown;
 }
 
 /**
  * Fetches raw binary files (EPUB, PDF) from GitHub without text corruption.
- * 
- * @param {string} path - Repository relative file path
- * @returns {Promise<Blob>} Raw binary Blob
  */
 export async function fetchBinaryBlob(path) {
   const cfg = getActiveVaultConfig();
   if (!cfg) throw new Error('No vault configured.');
 
+  const db = getActiveDB();
+  const manifestRecord = await db.manifest.get(path);
+  const sha = manifestRecord?.sha;
+  const ext = path.split('.').pop().toLowerCase();
+  const mimeType = ext === 'pdf' ? 'application/pdf' : 'application/epub+zip';
+
+  // Fetch directly by SHA if available
+  if (sha && !sha.startsWith('local_') && !sha.startsWith('fs_')) {
+    try {
+      const blobUrl = `${GITHUB_API_BASE}/repos/${cfg.owner}/${cfg.repo}/git/blobs/${sha}`;
+      const headers = resolveAuthHeaders(cfg.token, {
+        Accept: 'application/vnd.github.v3.raw',
+      });
+      const res = await fetch(blobUrl, { headers });
+      if (res.ok) {
+        const arrayBuffer = await res.arrayBuffer();
+        return new Blob([arrayBuffer], { type: mimeType });
+      }
+    } catch (e) {
+      console.warn('Git blob binary fetch fallback:', e);
+    }
+  }
+
   const branch = cfg.branch || 'main';
   const encodedPath = path.split('/').map(encodeURIComponent).join('/');
   const url = `${GITHUB_API_BASE}/repos/${cfg.owner}/${cfg.repo}/contents/${encodedPath}?ref=${branch}`;
 
-  // Request raw binary stream directly from GitHub API
   const headers = resolveAuthHeaders(cfg.token, {
     Accept: 'application/vnd.github.v3.raw',
   });
@@ -313,9 +324,6 @@ export async function fetchBinaryBlob(path) {
   }
 
   const arrayBuffer = await res.arrayBuffer();
-  const ext = path.split('.').pop().toLowerCase();
-  const mimeType = ext === 'pdf' ? 'application/pdf' : 'application/epub+zip';
-
   return new Blob([arrayBuffer], { type: mimeType });
 }
 
@@ -367,10 +375,11 @@ export async function saveNoteFile(path, content, currentSha = null) {
  * Pre-warms cache in the background for upcoming text cards.
  */
 export async function preloadBatchContent(paths = []) {
+  const db = getActiveDB();
   const uncached = [];
   for (const p of paths) {
-    const cached = await getCachedContent(p);
-    if (!cached) uncached.push(p);
+    const cached = await db.content.get(p);
+    if (!cached || !cached.rawMarkdown) uncached.push(p);
   }
 
   const queue = uncached.slice(0, 4);
@@ -380,16 +389,6 @@ export async function preloadBatchContent(paths = []) {
 }
 
 /* --- Base64 UTF-8 Helpers --- */
-
-function decodeBase64Utf8(base64Str) {
-  const clean = base64Str.replace(/\s/g, '');
-  const binStr = atob(clean);
-  const bytes = new Uint8Array(binStr.length);
-  for (let i = 0; i < binStr.length; i++) {
-    bytes[i] = binStr.charCodeAt(i);
-  }
-  return new TextDecoder('utf-8').decode(bytes);
-}
 
 function encodeBase64Utf8(str) {
   const bytes = new TextEncoder().encode(str);
