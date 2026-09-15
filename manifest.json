@@ -1,0 +1,18 @@
+{
+  "name": "Notes Deck",
+  "short_name": "NotesDeck",
+  "description": "Swipeable Markdown notes reader and highlight resurfacer",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#121212",
+  "theme_color": "#121212",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect width='512' height='512' rx='100' fill='%231e1e1e'/><path d='M160 140h192M160 210h192M160 280h120' stroke='%234caf50' stroke-width='32' stroke-linecap='round'/></svg>",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
