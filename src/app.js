@@ -20,6 +20,7 @@ import {
   setGlobalToken,
   syncRepoManifest,
   fetchNoteContent,
+  fetchBinaryBlob,
   saveNoteFile,
   preloadBatchContent,
 } from './github.js';
@@ -137,7 +138,6 @@ class AppController {
     document.getElementById('settings-btn').addEventListener('click', () => this.openSettings());
     document.getElementById('sync-btn').addEventListener('click', () => this.triggerSync());
 
-    // Source & Folder Switching
     this.sourceSelect.addEventListener('change', async (e) => {
       const selectedId = e.target.value;
       if (selectedId === '__NEW__') {
@@ -152,7 +152,6 @@ class AppController {
       this.reloadFeed();
     });
 
-    // Media Filter Tabs
     this.filterPills.forEach((pill) => {
       pill.addEventListener('click', () => {
         this.filterPills.forEach((p) => p.classList.remove('active'));
@@ -162,7 +161,6 @@ class AppController {
       });
     });
 
-    // Local Directory Picker
     this.openLocalFolderBtn.addEventListener('click', async () => {
       try {
         const { profile } = await pickLocalDirectory();
@@ -192,7 +190,6 @@ class AppController {
       this.reloadFeed();
     });
 
-    // Note Creation Actions
     this.fabCreateBtn.addEventListener('click', () => {
       const activeFolder = this.activeFolder !== 'ALL' ? `${this.activeFolder}/` : '';
       this.newNotePathInput.value = activeFolder;
@@ -203,7 +200,6 @@ class AppController {
 
     this.confirmCreateBtn.addEventListener('click', () => this.handleCreateNote());
 
-    // Settings Profile Actions
     this.globalTokenInput.addEventListener('change', (e) => {
       setGlobalToken(e.target.value);
       this.updateGlobalTokenBadge();
@@ -212,7 +208,6 @@ class AppController {
     document.getElementById('add-vault-btn').addEventListener('click', () => this.clearVaultForm());
     document.getElementById('save-vault-btn').addEventListener('click', () => this.saveCurrentVaultForm());
 
-    // Modals Close
     document.querySelectorAll('.modal-close').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.target.closest('.modal').classList.remove('open');
@@ -278,23 +273,18 @@ class AppController {
         const currentCard = this.getCurrentVisibleCard();
         const activeModal = document.querySelector('.reader-modal.open');
 
-        // D-Pad Down (btn 13) or Stick Down
         if ((isPressed(13) || gp.axes[1] > 0.6) && !lastButtonState.down) {
           if (!activeModal) this.scrollToCard(1);
         }
-        // D-Pad Up (btn 12) or Stick Up
         if ((isPressed(12) || gp.axes[1] < -0.6) && !lastButtonState.up) {
           if (!activeModal) this.scrollToCard(-1);
         }
-        // Button A (btn 0) -> Expand/Open
         if (isPressed(0) && !lastButtonState.btnA) {
           if (!activeModal && currentCard) currentCard.querySelector('.expand-btn')?.click();
         }
-        // Button Y (btn 3) -> Star/Favorite
         if (isPressed(3) && !lastButtonState.btnY) {
           if (!activeModal && currentCard) currentCard.querySelector('.star-btn')?.click();
         }
-        // Button B (btn 1) -> Close Modal
         if (isPressed(1) && !lastButtonState.btnB) {
           if (activeModal) activeModal.classList.remove('open');
         }
@@ -464,10 +454,13 @@ class AppController {
         let contentData = null;
 
         if (item.mediaType === 'text') {
-          const rawMarkdown = await this.retrieveContent(item.path);
-          contentData = parseMarkdownToCard(rawMarkdown, item.path);
+          try {
+            const rawMarkdown = await this.retrieveContent(item.path);
+            contentData = parseMarkdownToCard(rawMarkdown || '# Empty Note\n\n*No content available.*', item.path);
+          } catch (err) {
+            contentData = parseMarkdownToCard(`# ${item.filename}\n\n*Unable to load note content.*`, item.path);
+          }
         } else {
-          // Trigger lazy cover generation if missing
           await this.ensureThumbnailCached(item);
         }
 
@@ -503,8 +496,8 @@ class AppController {
       const activeId = getActiveVaultId();
       return await getLocalFileBlob(activeId, path);
     }
-    const response = await fetchNoteContent(path);
-    return new Blob([response]);
+    // Remote binary files from GitHub API
+    return await fetchBinaryBlob(path);
   }
 
   async ensureThumbnailCached(item) {
@@ -532,9 +525,9 @@ class AppController {
       } else if (item.mediaType === 'epub') {
         await openEpubViewer(item.path, blob, item.filename);
       }
-      this.statusEl.textContent = '';
     } catch (err) {
       alert(`Could not load document: ${err.message}`);
+    } finally {
       this.statusEl.textContent = '';
     }
   }
