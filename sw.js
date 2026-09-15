@@ -1,36 +1,49 @@
 // sw.js
-// 1. Increment this version whenever you push code changes
-const APP_VERSION = 'v2.1.0';
-const CACHE_NAME = `notes-deck-${APP_VERSION}`;
+const CACHE_VERSION = 'readover-v2.0.0';
+const STATIC_CACHE = `readover-static-${CACHE_VERSION}`;
+const VENDOR_CACHE = `readover-vendor-${CACHE_VERSION}`;
 
-const ASSETS = [
+const PRECACHE_ASSETS = [
   './',
   './index.html',
+  './manifest.json',
   './src/style.css',
   './src/app.js',
   './src/db.js',
   './src/github.js',
+  './src/local-fs.js',
   './src/parser.js',
   './src/components/card.js',
-  './manifest.json'
+  './src/parsers/pdf-cover.js',
+  './src/parsers/epub-cover.js',
+  './src/viewers/pdf-viewer.js',
+  './src/viewers/epub-viewer.js',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
 ];
 
-// Install: Cache new assets and immediately activate without waiting for old tabs to close
-self.addEventListener('install', (e) => {
-  self.skipWaiting();
-  e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+const VENDOR_HOSTS = [
+  'cdn.jsdelivr.net',
+  'fonts.googleapis.com',
+  'fonts.gstatic.com',
+];
+
+// Install: Cache core application shell
+self.addEventListener('install', (event) => {
+  event.waitUntil(
+    caches.open(STATIC_CACHE).then((cache) => {
+      return cache.addAll(PRECACHE_ASSETS);
+    }).then(() => self.skipWaiting())
   );
 });
 
-// Activate: Delete old cache versions and claim clients immediately
-self.addEventListener('activate', (e) => {
-  e.waitUntil(
+// Activate: Evict legacy cache namespaces
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
     caches.keys().then((keys) => {
       return Promise.all(
         keys.map((key) => {
-          if (key !== CACHE_NAME) {
-            console.log(`[SW] Removing outdated cache: ${key}`);
+          if (key !== STATIC_CACHE && key !== VENDOR_CACHE) {
             return caches.delete(key);
           }
         })
@@ -39,21 +52,64 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Fetch: Serve from cache, fallback to network. Bypass GitHub API and raw content.
-self.addEventListener('fetch', (e) => {
-  if (
-    e.request.url.includes('api.github.com') ||
-    e.request.url.includes('raw.githubusercontent.com')
-  ) {
+// Fetch: Strategy dispatcher
+self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+
+  // 1. Bypass non-GET requests
+  if (event.request.method !== 'GET') {
     return;
   }
 
-  e.respondWith(
-    caches.match(e.request).then((cachedResponse) => {
+  // 2. Ignore GitHub API requests (handled via github.js and IndexedDB)
+  if (url.hostname === 'api.github.com' || url.hostname === 'raw.githubusercontent.com') {
+    return;
+  }
+
+  // 3. Stale-while-revalidate for Vendor CDNs (PDF.js, ePub.js, fflate, Fonts)
+  if (VENDOR_HOSTS.some((host) => url.hostname.includes(host))) {
+    event.respondWith(
+      caches.open(VENDOR_CACHE).then(async (cache) => {
+        const cachedResponse = await cache.match(event.request);
+        const fetchPromise = fetch(event.request)
+          .then((networkResponse) => {
+            if (networkResponse.ok || networkResponse.type === 'opaque') {
+              cache.put(event.request, networkResponse.clone());
+            }
+            return networkResponse;
+          })
+          .catch(() => cachedResponse);
+
+        return cachedResponse || fetchPromise;
+      })
+    );
+    return;
+  }
+
+  // 4. Cache-first falling back to network for local app shell assets
+  event.respondWith(
+    caches.match(event.request).then((cachedResponse) => {
       if (cachedResponse) {
         return cachedResponse;
       }
-      return fetch(e.request);
+
+      return fetch(event.request).then((networkResponse) => {
+        if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
+          return networkResponse;
+        }
+
+        const responseToCache = networkResponse.clone();
+        caches.open(STATIC_CACHE).then((cache) => {
+          cache.put(event.request, responseToCache);
+        });
+
+        return networkResponse;
+      }).catch(() => {
+        // Fallback to index.html for navigation requests when offline
+        if (event.request.mode === 'navigate') {
+          return caches.match('./index.html');
+        }
+      });
     })
   );
 });
