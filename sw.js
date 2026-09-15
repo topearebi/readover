@@ -1,5 +1,5 @@
 // sw.js
-const CACHE_VERSION = 'readover-v2.0.0';
+const CACHE_VERSION = 'readover-v2.1.0';
 const STATIC_CACHE = `readover-static-${CACHE_VERSION}`;
 const VENDOR_CACHE = `readover-vendor-${CACHE_VERSION}`;
 
@@ -18,14 +18,14 @@ const PRECACHE_ASSETS = [
   './src/parsers/epub-cover.js',
   './src/viewers/pdf-viewer.js',
   './src/viewers/epub-viewer.js',
-  './icons/icon-192.png',
-  './icons/icon-512.png',
+  './icons/icon.svg'
 ];
 
 const VENDOR_HOSTS = [
   'cdn.jsdelivr.net',
+  'esm.sh',
   'fonts.googleapis.com',
-  'fonts.gstatic.com',
+  'fonts.gstatic.com'
 ];
 
 // Install: Cache core application shell
