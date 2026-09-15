@@ -23,19 +23,46 @@ import {
 } from './github.js';
 
 import { parseMarkdownToCard } from './parser.js';
-import { createCardElement } from './components/card.js';
+import { createCardElement, openReaderModal } from './components/card.js';
 
 class AppController {
   constructor() {
     this.deckQueue = [];
     this.activeFolder = 'ALL';
     this.isLoading = false;
+    this.currentTopCardData = null;
     this.container = document.getElementById('card-stack');
     this.statusEl = document.getElementById('status-indicator');
 
+    this.initTheme();
     this.initElements();
     this.bindEvents();
+    this.bindKeyboardShortcuts();
     this.boot();
+  }
+
+  initTheme() {
+    const savedTheme = localStorage.getItem('md_deck_theme') || 'light';
+    this.setTheme(savedTheme);
+  }
+
+  setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('md_deck_theme', theme);
+    const themeBtn = document.getElementById('theme-btn');
+    if (themeBtn) {
+      themeBtn.textContent = theme === 'light' ? '🌙' : '☀️';
+    }
+    const metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) {
+      metaTheme.setAttribute('content', theme === 'light' ? '#6c5ce7' : '#121016');
+    }
+  }
+
+  toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme') || 'light';
+    this.setTheme(current === 'light' ? 'dark' : 'light');
+    if ('vibrate' in navigator) navigator.vibrate(8);
   }
 
   initElements() {
@@ -44,10 +71,21 @@ class AppController {
     this.settingsModal = document.getElementById('settings-modal');
     this.managementModal = document.getElementById('management-modal');
     this.vaultListEl = document.getElementById('vault-profile-list');
+
+    // Bottom Action Buttons
+    this.btnKeep = document.getElementById('btn-action-keep');
+    this.btnHide = document.getElementById('btn-action-hide');
+    this.btnStar = document.getElementById('btn-action-star');
+    this.btnRead = document.getElementById('btn-action-read');
   }
 
   bindEvents() {
-    // Top Bar Actions
+    // Theme Toggle
+    document.getElementById('theme-btn').addEventListener('click', () => {
+      this.toggleTheme();
+    });
+
+    // Header Controls
     document.getElementById('settings-btn').addEventListener('click', () => {
       this.openSettings();
     });
@@ -60,7 +98,7 @@ class AppController {
       this.triggerSync();
     });
 
-    // Vault Selection Dropdown
+    // Vault & Folder Switches
     this.vaultSelect.addEventListener('change', async (e) => {
       const selectedId = e.target.value;
       if (selectedId === '__NEW__') {
@@ -71,10 +109,25 @@ class AppController {
       await this.switchVault(selectedId);
     });
 
-    // Folder Filter Dropdown
     this.folderSelect.addEventListener('change', (e) => {
       this.activeFolder = e.target.value;
       this.reloadDeck();
+    });
+
+    // Bottom Action Bar
+    this.btnKeep.addEventListener('click', () => this.programmaticSwipe('right'));
+    this.btnHide.addEventListener('click', () => this.programmaticSwipe('left'));
+    this.btnRead.addEventListener('click', () => {
+      if (this.currentTopCardData) {
+        if ('vibrate' in navigator) navigator.vibrate(10);
+        openReaderModal(this.currentTopCardData);
+      }
+    });
+    this.btnStar.addEventListener('click', async () => {
+      const topCard = this.getTopCardElement();
+      if (!topCard) return;
+      const starBtn = topCard.querySelector('.card-star-btn');
+      if (starBtn) starBtn.click();
     });
 
     // Settings Profile Actions
@@ -86,7 +139,7 @@ class AppController {
       this.saveCurrentVaultForm();
     });
 
-    // Feed Management Actions
+    // Feed Management
     document.getElementById('restore-hidden-btn').addEventListener('click', async () => {
       await restoreAllHidden();
       alert('All archived notes restored to rotation.');
@@ -101,12 +154,90 @@ class AppController {
       this.reloadDeck();
     });
 
-    // Modal Close Triggers
+    // Modal Closures
     document.querySelectorAll('.modal-close').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.target.closest('.modal').classList.remove('open');
       });
     });
+  }
+
+  bindKeyboardShortcuts() {
+    window.addEventListener('keydown', (e) => {
+      // Don't trigger if user is typing inside an input
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+
+      const readerModal = document.getElementById('reader-modal');
+      const isReaderOpen = readerModal && readerModal.classList.contains('open');
+
+      if (e.key === 'Escape') {
+        if (isReaderOpen) readerModal.classList.remove('open');
+        this.settingsModal.classList.remove('open');
+        this.managementModal.classList.remove('open');
+        return;
+      }
+
+      if (isReaderOpen) return;
+
+      switch (e.key) {
+        case 'ArrowRight':
+        case 'l':
+        case 'L':
+          e.preventDefault();
+          this.programmaticSwipe('right');
+          break;
+        case 'ArrowLeft':
+        case 'h':
+        case 'H':
+          e.preventDefault();
+          this.programmaticSwipe('left');
+          break;
+        case ' ':
+        case 'Enter':
+          e.preventDefault();
+          if (this.currentTopCardData) openReaderModal(this.currentTopCardData);
+          break;
+        case 's':
+        case 'S':
+          e.preventDefault();
+          const topCard = this.getTopCardElement();
+          if (topCard) {
+            const starBtn = topCard.querySelector('.card-star-btn');
+            if (starBtn) starBtn.click();
+          }
+          break;
+      }
+    });
+  }
+
+  getTopCardElement() {
+    // In our DOM ordering, the top card is the last child
+    return this.container.lastElementChild;
+  }
+
+  async programmaticSwipe(direction) {
+    const topCard = this.getTopCardElement();
+    if (!topCard || topCard.dataset.animating === 'true') return;
+
+    topCard.dataset.animating = 'true';
+    if ('vibrate' in navigator) navigator.vibrate(15);
+
+    const path = topCard.dataset.path;
+    const isRight = direction === 'right';
+
+    topCard.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.2), opacity 0.25s ease';
+    topCard.style.transform = `translate3d(${isRight ? '120vw' : '-120vw'}, 0, 0) rotate(${isRight ? '24deg' : '-24deg'})`;
+    topCard.style.opacity = '0';
+
+    setTimeout(async () => {
+      topCard.remove();
+      if (isRight) {
+        await markSeen(path);
+      } else {
+        await toggleHide(path, 1);
+      }
+      this.onCardDismissed();
+    }, 260);
   }
 
   async boot() {
@@ -185,6 +316,7 @@ class AppController {
   async reloadDeck() {
     this.container.innerHTML = '';
     this.deckQueue = [];
+    this.currentTopCardData = null;
     await this.replenishQueue();
     this.renderTopCards();
   }
@@ -204,7 +336,6 @@ class AppController {
       this.statusEl.textContent = '';
       this.deckQueue.push(...candidates);
 
-      // Preload next 8 markdown contents in background
       const pathsToPreload = candidates.slice(0, 8).map((c) => c.path);
       preloadBatchContent(pathsToPreload);
     } catch (err) {
@@ -235,10 +366,19 @@ class AppController {
           },
         });
 
+        // First child is visual bottom; last child is visual top
         this.container.insertBefore(cardEl, this.container.firstChild);
       } catch (err) {
         console.warn(`Error rendering card for ${item.path}:`, err);
       }
+    }
+
+    const topEl = this.getTopCardElement();
+    if (topEl) {
+      const rawMarkdown = await fetchNoteContent(topEl.dataset.path);
+      this.currentTopCardData = parseMarkdownToCard(rawMarkdown, topEl.dataset.path);
+    } else {
+      this.currentTopCardData = null;
     }
 
     if (this.container.children.length === 0 && this.deckQueue.length === 0) {
