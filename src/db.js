@@ -1,77 +1,71 @@
 // src/db.js
 import Dexie from 'https://cdn.jsdelivr.net/npm/dexie@4.0.8/+esm';
 
-const dbInstances = new Map();
-let currentVaultId = null;
+const DB_PREFIX = 'ReadOver_';
+let activeDb = null;
+let activeVaultId = null;
 
 /**
- * Initializes and switches to an isolated IndexedDB database for a vault or local folder.
- * Migrates smoothly from v1 (Markdown-only) to v2 (Multi-format media engine).
- * 
- * @param {string} vaultId - Unique identifier for the vault or folder
- * @returns {Dexie} The configured Dexie instance
+ * Initializes and binds the active Dexie database instance for a specific vault.
  */
 export function initVaultDB(vaultId) {
-  if (!vaultId) {
-    throw new Error('A valid vaultId is required to initialize the database.');
+  if (activeDb && activeVaultId === vaultId) {
+    return activeDb;
   }
 
-  currentVaultId = vaultId;
-
-  if (!dbInstances.has(vaultId)) {
-    const dbName = `MarkdownDeckDB_${vaultId}`;
-    const db = new Dexie(dbName);
-
-    // Version 1: Legacy GitHub Markdown schema
-    db.version(1).stores({
-      manifest: '&path, sha, folder, filename',
-      content: '&path, fetchedAt',
-      state: '&path, lastSeen, starred',
-    });
-
-    // Version 2: Multi-format local/remote media schema
-    db.version(2).stores({
-      manifest: '&path, sha, folder, filename, mediaType, sourceType',
-      content: '&path, fetchedAt',
-      state: '&path, lastSeen, starred',
-      thumbnails: '&path, updatedAt',
-      progress: '&path, percentage, updatedAt',
-    }).upgrade(async (tx) => {
-      // Backfill existing records to default mediaType
-      await tx.table('manifest').toCollection().modify((record) => {
-        if (!record.mediaType) record.mediaType = 'text';
-        if (!record.sourceType) record.sourceType = 'github';
-      });
-    });
-
-    dbInstances.set(vaultId, db);
+  if (activeDb) {
+    activeDb.close();
   }
 
-  return dbInstances.get(vaultId);
+  activeVaultId = vaultId;
+  const dbName = `${DB_PREFIX}${vaultId}`;
+  activeDb = new Dexie(dbName);
+
+  activeDb.version(2).stores({
+    manifest: '&path, folder, filename, mediaType, sourceType',
+    content: '&path, fetchedAt',
+    state: '&path, lastSeen, starred',
+    thumbnails: '&path',
+    progress: '&path, percentage, updatedAt',
+  });
+
+  return activeDb;
 }
 
 /**
- * Returns the active Dexie database instance.
+ * Returns the currently active Dexie database instance.
  */
 export function getActiveDB() {
-  if (!currentVaultId || !dbInstances.has(currentVaultId)) {
-    throw new Error('No active vault database initialized. Call initVaultDB(vaultId) first.');
+  if (!activeDb) {
+    throw new Error('Database not initialized. Call initVaultDB(vaultId) first.');
   }
-  return dbInstances.get(currentVaultId);
+  return activeDb;
 }
 
 /**
- * Returns the active vault/folder ID string.
+ * Instantiates an ephemeral, unmemoized Dexie handle to query a target source.
  */
-export function getCurrentVaultId() {
-  return currentVaultId;
+export function getDBForSource(sourceId) {
+  if (activeDb && activeVaultId === sourceId) {
+    return activeDb;
+  }
+  const dbName = `${DB_PREFIX}${sourceId}`;
+  const db = new Dexie(dbName);
+  db.version(2).stores({
+    manifest: '&path, folder, filename, mediaType, sourceType',
+    content: '&path, fetchedAt',
+    state: '&path, lastSeen, starred',
+    thumbnails: '&path',
+    progress: '&path, percentage, updatedAt',
+  });
+  return db;
 }
 
 /**
- * Ensures a state record exists for an item without overwriting existing data.
+ * Ensures note state entry exists in target or active database.
  */
-export async function ensureNoteState(path) {
-  const db = getActiveDB();
+export async function ensureNoteState(path, targetDb = null) {
+  const db = targetDb || getActiveDB();
   const existing = await db.state.get(path);
   if (!existing) {
     await db.state.put({
@@ -83,100 +77,149 @@ export async function ensureNoteState(path) {
 }
 
 /**
- * Updates the lastSeen timestamp when a card snaps into view.
+ * Updates lastSeen timestamp for TikTok-style infinite looping.
  */
-export async function markSeen(path) {
-  const db = getActiveDB();
-  await db.state.update(path, { lastSeen: Date.now() });
+export async function markSeen(path, targetDb = null) {
+  const db = targetDb || getActiveDB();
+  const state = await db.state.get(path);
+  if (state) {
+    await db.state.update(path, { lastSeen: Date.now() });
+  } else {
+    await db.state.put({ path, lastSeen: Date.now(), starred: 0 });
+  }
 }
 
 /**
- * Toggles the favorite / starred status.
+ * Toggles favorite state.
  */
-export async function toggleStar(path) {
-  const db = getActiveDB();
-  const current = await db.state.get(path);
-  const nextVal = current && current.starred === 1 ? 0 : 1;
-  await db.state.update(path, { starred: nextVal });
-  return nextVal === 1;
-}
-
-/**
- * Retrieves the Git or content SHA for an item from the manifest.
- */
-export async function getNoteSha(path) {
-  const db = getActiveDB();
-  const record = await db.manifest.get(path);
-  return record ? record.sha : null;
-}
-
-/**
- * Updates local content and manifest immediately following a save or file import.
- */
-export async function upsertLocalNote(path, rawMarkdown, sha, mediaType = 'text', sourceType = 'github') {
-  const db = getActiveDB();
-  const segments = path.split('/');
-  const filename = segments.pop();
-  const folder = segments.join('/') || 'Root';
-
-  await db.transaction('rw', [db.manifest, db.content, db.state], async () => {
-    await db.manifest.put({
+export async function toggleStar(path, isStarred, targetDb = null) {
+  const db = targetDb || getActiveDB();
+  const state = await db.state.get(path);
+  if (state) {
+    await db.state.update(path, { starred: isStarred ? 1 : 0 });
+  } else {
+    await db.state.put({
       path,
-      sha: sha || `local_${Date.now()}`,
-      folder,
-      filename,
-      mediaType,
-      sourceType,
+      lastSeen: 0,
+      starred: isStarred ? 1 : 0,
     });
+  }
+}
 
-    if (rawMarkdown !== null) {
-      await db.content.put({
-        path,
-        rawMarkdown,
-        fetchedAt: Date.now(),
-      });
+/**
+ * Queries the next batch of cards for an individual source.
+ */
+export async function getDeckQueue(folder = 'ALL', mediaFilter = 'all', limit = 15, targetDb = null) {
+  const db = targetDb || getActiveDB();
+
+  let manifestQuery = db.manifest;
+  let manifestRecords = [];
+
+  if (folder !== 'ALL') {
+    manifestRecords = await manifestQuery
+      .filter((item) => item.folder === folder || item.folder.startsWith(`${folder}/`))
+      .toArray();
+  } else {
+    manifestRecords = await manifestQuery.toArray();
+  }
+
+  // Filter by media format if specified
+  if (mediaFilter !== 'all' && mediaFilter !== 'starred') {
+    manifestRecords = manifestRecords.filter((item) => item.mediaType === mediaFilter);
+  }
+
+  if (manifestRecords.length === 0) {
+    return [];
+  }
+
+  const manifestMap = new Map();
+  manifestRecords.forEach((item) => manifestMap.set(item.path, item));
+
+  const validPaths = Array.from(manifestMap.keys());
+  const states = await db.state.where('path').anyOf(validPaths).toArray();
+
+  const stateMap = new Map();
+  states.forEach((s) => stateMap.set(s.path, s));
+
+  // Starred-only subfilter
+  let candidatePaths = validPaths;
+  if (mediaFilter === 'starred') {
+    candidatePaths = validPaths.filter((p) => stateMap.get(p)?.starred === 1);
+  }
+
+  const deck = candidatePaths.map((p) => {
+    const s = stateMap.get(p);
+    return {
+      path: p,
+      lastSeen: s ? s.lastSeen : 0,
+      starred: s ? s.starred : 0,
+      item: manifestMap.get(p),
+    };
+  });
+
+  // Least recently seen first
+  deck.sort((a, b) => a.lastSeen - b.lastSeen);
+
+  return deck.slice(0, limit).map((d) => d.item);
+}
+
+/**
+ * Universal Feed Aggregator: Queries candidates across all connected databases
+ * without cross-contaminating source schemas.
+ * 
+ * @param {Array<Object>} sources - Array of source profile objects { id, name, type }
+ * @param {string} filter - Filter type ('all' | 'starred')
+ * @param {number} totalLimit - Target batch size
+ * @returns {Promise<Array<Object>>} Aggregated manifest items tagged with _sourceId & _sourceType
+ */
+export async function getAllSourcesDeckQueue(sources = [], filter = 'all', totalLimit = 20) {
+  if (sources.length === 0) return [];
+
+  const perSourceLimit = Math.max(Math.ceil(totalLimit / sources.length), 5);
+  const sourceQueues = [];
+
+  for (const src of sources) {
+    try {
+      const db = getDBForSource(src.id);
+      const items = await getDeckQueue('ALL', filter, perSourceLimit, db);
+      const tagged = items.map((item) => ({
+        ...item,
+        _sourceId: src.id,
+        _sourceType: src.type,
+      }));
+      if (tagged.length > 0) {
+        sourceQueues.push(tagged);
+      }
+    } catch (e) {
+      console.warn(`Failed querying source ${src.id}:`, e);
     }
+  }
 
-    await ensureNoteState(path);
-  });
+  // Interleave sources for balanced discovery
+  const interleaved = [];
+  let index = 0;
+  let added = true;
+
+  while (added && interleaved.length < totalLimit) {
+    added = false;
+    for (const queue of sourceQueues) {
+      if (index < queue.length) {
+        interleaved.push(queue[index]);
+        added = true;
+        if (interleaved.length >= totalLimit) break;
+      }
+    }
+    index++;
+  }
+
+  return interleaved;
 }
 
 /**
- * Saves or updates a cached binary thumbnail image blob.
- * 
- * @param {string} path - Document relative path
- * @param {Blob} imageBlob - WebP/JPEG image blob
+ * Reading progress persistence (CFI or page count + completion %).
  */
-export async function setCachedThumbnail(path, imageBlob) {
-  const db = getActiveDB();
-  await db.thumbnails.put({
-    path,
-    blob: imageBlob,
-    updatedAt: Date.now(),
-  });
-}
-
-/**
- * Retrieves a cached cover thumbnail blob.
- * 
- * @param {string} path - Document relative path
- * @returns {Promise<Blob|null>}
- */
-export async function getCachedThumbnail(path) {
-  const db = getActiveDB();
-  const record = await db.thumbnails.get(path);
-  return record ? record.blob : null;
-}
-
-/**
- * Saves reading progress position and percentage.
- * 
- * @param {string} path - Document relative path
- * @param {number} percentage - Decimal between 0.0 and 1.0
- * @param {string|number} location - Page number or EPUB CFI string
- */
-export async function saveReadingProgress(path, percentage, location) {
-  const db = getActiveDB();
+export async function saveReadingProgress(path, percentage, location, targetSourceId = null) {
+  const db = targetSourceId ? getDBForSource(targetSourceId) : getActiveDB();
   await db.progress.put({
     path,
     percentage: Math.min(Math.max(percentage, 0), 1),
@@ -185,80 +228,39 @@ export async function saveReadingProgress(path, percentage, location) {
   });
 }
 
-/**
- * Retrieves reading progress for a given document.
- * 
- * @param {string} path - Document relative path
- * @returns {Promise<Object|null>} { percentage, location, updatedAt }
- */
-export async function getReadingProgress(path) {
-  const db = getActiveDB();
+export async function getReadingProgress(path, targetSourceId = null) {
+  const db = targetSourceId ? getDBForSource(targetSourceId) : getActiveDB();
   return await db.progress.get(path);
 }
 
 /**
- * Resets all review timestamps in the current vault so cards recycle.
+ * Thumbnail blob cache accessors.
  */
-export async function resetReviewHistory() {
-  const db = getActiveDB();
-  await db.state.toCollection().modify({ lastSeen: 0 });
-}
-
-/**
- * Queries candidate items for the infinite scroll stream with support for folder
- * and media type filters.
- * 
- * @param {string|null} folderFilter - Folder prefix or 'ALL'
- * @param {string} mediaFilter - 'all', 'text', 'epub', 'pdf'
- * @param {number} limit - Number of candidates to return
- */
-export async function getDeckQueue(folderFilter = null, mediaFilter = 'all', limit = 20) {
-  const db = getActiveDB();
-
-  const allStates = await db.state.toArray();
-  const stateMap = new Map(allStates.map((s) => [s.path, s]));
-
-  let candidates = await db.manifest.toArray();
-
-  if (folderFilter && folderFilter !== 'ALL') {
-    candidates = candidates.filter((m) => m.folder.startsWith(folderFilter));
-  }
-
-  if (mediaFilter && mediaFilter !== 'all') {
-    candidates = candidates.filter((m) => m.mediaType === mediaFilter);
-  }
-
-  // Sort unseen items first, then oldest reviewed items with soft jitter
-  candidates.sort((a, b) => {
-    const stateA = stateMap.get(a.path);
-    const stateB = stateMap.get(b.path);
-
-    const timeA = stateA ? stateA.lastSeen : 0;
-    const timeB = stateB ? stateB.lastSeen : 0;
-
-    if (timeA === 0 && timeB !== 0) return -1;
-    if (timeB === 0 && timeA !== 0) return 1;
-
-    const jitter = (Math.random() - 0.5) * 3600000;
-    return timeA + jitter - timeB;
+export async function setCachedThumbnail(path, blob, targetSourceId = null) {
+  const db = targetSourceId ? getDBForSource(targetSourceId) : getActiveDB();
+  await db.thumbnails.put({
+    path,
+    blob,
+    cachedAt: Date.now(),
   });
+}
 
-  return candidates.slice(0, limit);
+export async function getCachedThumbnail(path, targetSourceId = null) {
+  const db = targetSourceId ? getDBForSource(targetSourceId) : getActiveDB();
+  const record = await db.thumbnails.get(path);
+  return record ? record.blob : null;
 }
 
 /**
- * Retrieves cached text content for notes.
+ * Content cache accessors.
  */
-export async function getCachedContent(path) {
-  const db = getActiveDB();
+export async function getCachedContent(path, targetSourceId = null) {
+  const db = targetSourceId ? getDBForSource(targetSourceId) : getActiveDB();
   return await db.content.get(path);
 }
 
-/**
- * Caches text content for notes.
- */
-export async function setCachedContent(path, rawMarkdown) {
-  const db = getActiveDB();
+export async function setCachedContent(path, rawMarkdown, targetSourceId = null) {
+  const db = targetSourceId ? getDBForSource(targetSourceId) : getActiveDB();
   await db.content.put({
     path,
     rawMarkdown,
@@ -266,14 +268,42 @@ export async function setCachedContent(path, rawMarkdown) {
   });
 }
 
-/**
- * Purges the database instance and stored data for a vault or directory.
- */
+export async function getNoteSha(path, targetSourceId = null) {
+  const db = targetSourceId ? getDBForSource(targetSourceId) : getActiveDB();
+  const item = await db.manifest.get(path);
+  return item ? item.sha : null;
+}
+
+export async function upsertLocalNote(path, content, sha, mediaType = 'text', sourceType = 'github', targetSourceId = null) {
+  const db = targetSourceId ? getDBForSource(targetSourceId) : getActiveDB();
+  const segments = path.split('/');
+  const filename = segments.pop();
+  const folder = segments.join('/') || 'Root';
+
+  await db.transaction('rw', [db.manifest, db.content, db.state], async () => {
+    await db.manifest.put({
+      path,
+      sha,
+      folder,
+      filename,
+      mediaType,
+      sourceType,
+    });
+    await db.content.put({
+      path,
+      rawMarkdown: content,
+      fetchedAt: Date.now(),
+    });
+    await ensureNoteState(path, db);
+  });
+}
+
 export async function deleteVaultDB(vaultId) {
-  if (dbInstances.has(vaultId)) {
-    const db = dbInstances.get(vaultId);
-    db.close();
-    dbInstances.delete(vaultId);
+  const dbName = `${DB_PREFIX}${vaultId}`;
+  if (activeDb && activeVaultId === vaultId) {
+    activeDb.close();
+    activeDb = null;
+    activeVaultId = null;
   }
-  await Dexie.delete(`MarkdownDeckDB_${vaultId}`);
+  await Dexie.delete(dbName);
 }
