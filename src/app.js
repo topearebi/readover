@@ -1,6 +1,27 @@
 // src/app.js
-import { getDeckQueue, markSeen, toggleHide, toggleStar, restoreAllHidden, resetReviewHistory } from './db.js';
-import { syncRepoManifest, fetchNoteContent, preloadBatchContent, saveGitHubConfig, getGitHubConfig } from './github.js';
+import {
+  initVaultDB,
+  getActiveDB,
+  getDeckQueue,
+  markSeen,
+  toggleHide,
+  toggleStar,
+  restoreAllHidden,
+  resetReviewHistory,
+  deleteVaultDB,
+} from './db.js';
+
+import {
+  getVaultProfiles,
+  getActiveVaultId,
+  setActiveVaultId,
+  saveVaultProfile,
+  deleteVaultProfile,
+  syncRepoManifest,
+  fetchNoteContent,
+  preloadBatchContent,
+} from './github.js';
+
 import { parseMarkdownToCard } from './parser.js';
 import { createCardElement } from './components/card.js';
 
@@ -14,16 +35,19 @@ class AppController {
 
     this.initElements();
     this.bindEvents();
-    this.start();
+    this.boot();
   }
 
   initElements() {
+    this.vaultSelect = document.getElementById('vault-select');
     this.folderSelect = document.getElementById('folder-select');
     this.settingsModal = document.getElementById('settings-modal');
     this.managementModal = document.getElementById('management-modal');
+    this.vaultListEl = document.getElementById('vault-profile-list');
   }
 
   bindEvents() {
+    // Top Bar Actions
     document.getElementById('settings-btn').addEventListener('click', () => {
       this.openSettings();
     });
@@ -32,14 +56,37 @@ class AppController {
       this.managementModal.classList.add('open');
     });
 
-    document.getElementById('save-settings-btn').addEventListener('click', () => {
-      this.saveSettings();
-    });
-
     document.getElementById('sync-btn').addEventListener('click', () => {
       this.triggerSync();
     });
 
+    // Vault Selection Dropdown
+    this.vaultSelect.addEventListener('change', async (e) => {
+      const selectedId = e.target.value;
+      if (selectedId === '__NEW__') {
+        this.openSettings();
+        return;
+      }
+      setActiveVaultId(selectedId);
+      await this.switchVault(selectedId);
+    });
+
+    // Folder Filter Dropdown
+    this.folderSelect.addEventListener('change', (e) => {
+      this.activeFolder = e.target.value;
+      this.reloadDeck();
+    });
+
+    // Settings Profile Actions
+    document.getElementById('add-vault-btn').addEventListener('click', () => {
+      this.clearVaultForm();
+    });
+
+    document.getElementById('save-vault-btn').addEventListener('click', () => {
+      this.saveCurrentVaultForm();
+    });
+
+    // Feed Management Actions
     document.getElementById('restore-hidden-btn').addEventListener('click', async () => {
       await restoreAllHidden();
       alert('All archived notes restored to rotation.');
@@ -54,12 +101,7 @@ class AppController {
       this.reloadDeck();
     });
 
-    this.folderSelect.addEventListener('change', (e) => {
-      this.activeFolder = e.target.value;
-      this.reloadDeck();
-    });
-
-    // Close buttons on modals
+    // Modal Close Triggers
     document.querySelectorAll('.modal-close').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.target.closest('.modal').classList.remove('open');
@@ -67,13 +109,77 @@ class AppController {
     });
   }
 
-  async start() {
-    const config = getGitHubConfig();
-    if (!config || !config.repo) {
+  async boot() {
+    const profiles = getVaultProfiles();
+    let activeId = getActiveVaultId();
+
+    if (profiles.length === 0) {
       this.openSettings();
       return;
     }
+
+    if (!activeId || !profiles.some((p) => p.id === activeId)) {
+      activeId = profiles[0].id;
+      setActiveVaultId(activeId);
+    }
+
+    this.renderVaultDropdown();
+    await this.switchVault(activeId);
+  }
+
+  renderVaultDropdown() {
+    const profiles = getVaultProfiles();
+    const activeId = getActiveVaultId();
+
+    this.vaultSelect.innerHTML = '';
+    profiles.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name || `${p.owner}/${p.repo}`;
+      if (p.id === activeId) opt.selected = true;
+      this.vaultSelect.appendChild(opt);
+    });
+
+    const addOpt = document.createElement('option');
+    addOpt.value = '__NEW__';
+    addOpt.textContent = '+ Add Vault...';
+    this.vaultSelect.appendChild(addOpt);
+  }
+
+  async switchVault(vaultId) {
+    this.statusEl.textContent = 'Switching vault...';
+    initVaultDB(vaultId);
+    this.activeFolder = 'ALL';
+
+    await this.populateFoldersFromDB();
     await this.reloadDeck();
+    this.statusEl.textContent = '';
+  }
+
+  async populateFoldersFromDB() {
+    try {
+      const db = getActiveDB();
+      const records = await db.manifest.toArray();
+      const folders = new Set();
+
+      records.forEach((r) => {
+        if (r.folder && r.folder !== 'Root') {
+          folders.add(r.folder);
+        }
+      });
+
+      this.folderSelect.innerHTML = '<option value="ALL">All Notes</option>';
+      Array.from(folders)
+        .sort()
+        .forEach((f) => {
+          const opt = document.createElement('option');
+          opt.value = f;
+          opt.textContent = f;
+          this.folderSelect.appendChild(opt);
+        });
+    } catch (err) {
+      console.warn('Could not populate folders from DB:', err);
+    }
   }
 
   async reloadDeck() {
@@ -98,7 +204,7 @@ class AppController {
       this.statusEl.textContent = '';
       this.deckQueue.push(...candidates);
 
-      // Preload the next few card contents in the background
+      // Preload next 8 markdown contents in background
       const pathsToPreload = candidates.slice(0, 8).map((c) => c.path);
       preloadBatchContent(pathsToPreload);
     } catch (err) {
@@ -109,28 +215,30 @@ class AppController {
   }
 
   async renderTopCards() {
-    // Keep 3 cards staged in the visual stack
     while (this.container.children.length < 3 && this.deckQueue.length > 0) {
       const item = this.deckQueue.shift();
-      const rawMarkdown = await fetchNoteContent(item.path);
-      const cardData = parseMarkdownToCard(rawMarkdown, item.path);
+      try {
+        const rawMarkdown = await fetchNoteContent(item.path);
+        const cardData = parseMarkdownToCard(rawMarkdown, item.path);
 
-      const cardEl = createCardElement(cardData, {
-        onSwipeRight: async (path) => {
-          await markSeen(path);
-          this.onCardDismissed();
-        },
-        onSwipeLeft: async (path) => {
-          await toggleHide(path, 1);
-          this.onCardDismissed();
-        },
-        onStarToggle: async (path) => {
-          await toggleStar(path);
-        },
-      });
+        const cardEl = createCardElement(cardData, {
+          onSwipeRight: async (path) => {
+            await markSeen(path);
+            this.onCardDismissed();
+          },
+          onSwipeLeft: async (path) => {
+            await toggleHide(path, 1);
+            this.onCardDismissed();
+          },
+          onStarToggle: async (path) => {
+            await toggleStar(path);
+          },
+        });
 
-      // Insert behind existing cards
-      this.container.insertBefore(cardEl, this.container.firstChild);
+        this.container.insertBefore(cardEl, this.container.firstChild);
+      } catch (err) {
+        console.warn(`Error rendering card for ${item.path}:`, err);
+      }
     }
 
     if (this.container.children.length === 0 && this.deckQueue.length === 0) {
@@ -145,42 +253,14 @@ class AppController {
     }
   }
 
-  openSettings() {
-    const config = getGitHubConfig() || {};
-    document.getElementById('cfg-token').value = config.token || '';
-    document.getElementById('cfg-owner').value = config.owner || '';
-    document.getElementById('cfg-repo').value = config.repo || '';
-    document.getElementById('cfg-branch').value = config.branch || 'main';
-    this.settingsModal.classList.add('open');
-  }
-
-  saveSettings() {
-    const token = document.getElementById('cfg-token').value.trim();
-    const owner = document.getElementById('cfg-owner').value.trim();
-    const repo = document.getElementById('cfg-repo').value.trim();
-    const branch = document.getElementById('cfg-branch').value.trim() || 'main';
-
-    saveGitHubConfig({ token, owner, repo, branch });
-    this.settingsModal.classList.remove('open');
-    this.triggerSync();
-  }
-
   async triggerSync() {
     this.statusEl.textContent = 'Syncing repository manifest...';
     try {
-      const folders = await syncRepoManifest((msg) => {
+      await syncRepoManifest((msg) => {
         this.statusEl.textContent = msg;
       });
 
-      // Populate folder select dropdown
-      this.folderSelect.innerHTML = '<option value="ALL">All Folders</option>';
-      folders.forEach((folder) => {
-        const opt = document.createElement('option');
-        opt.value = folder;
-        opt.textContent = folder;
-        this.folderSelect.appendChild(opt);
-      });
-
+      await this.populateFoldersFromDB();
       this.statusEl.textContent = 'Sync finished.';
       setTimeout(() => (this.statusEl.textContent = ''), 2000);
       this.reloadDeck();
@@ -189,9 +269,118 @@ class AppController {
       this.statusEl.textContent = 'Sync error.';
     }
   }
+
+  /* --- Profile & Settings Management --- */
+
+  openSettings() {
+    this.renderSettingsProfileList();
+    this.clearVaultForm();
+    this.settingsModal.classList.add('open');
+  }
+
+  renderSettingsProfileList() {
+    const profiles = getVaultProfiles();
+    const activeId = getActiveVaultId();
+
+    this.vaultListEl.innerHTML = '';
+    profiles.forEach((p) => {
+      const row = document.createElement('div');
+      row.className = `vault-item ${p.id === activeId ? 'active-vault' : ''}`;
+      row.innerHTML = `
+        <div class="vault-info">
+          <strong>${escapeHtml(p.name)}</strong>
+          <span>${escapeHtml(p.owner)}/${escapeHtml(p.repo)} (${escapeHtml(p.branch || 'main')})</span>
+        </div>
+        <div class="vault-actions">
+          <button class="edit-btn">Edit</button>
+          <button class="delete-btn">Delete</button>
+        </div>
+      `;
+
+      row.querySelector('.edit-btn').addEventListener('click', () => {
+        this.loadVaultIntoForm(p);
+      });
+
+      row.querySelector('.delete-btn').addEventListener('click', async () => {
+        if (confirm(`Delete vault profile "${p.name}" and its cached data?`)) {
+          deleteVaultProfile(p.id);
+          await deleteVaultDB(p.id);
+          this.renderSettingsProfileList();
+          this.renderVaultDropdown();
+          const nextActive = getActiveVaultId();
+          if (nextActive) {
+            await this.switchVault(nextActive);
+          } else {
+            this.container.innerHTML = '';
+            this.folderSelect.innerHTML = '<option value="ALL">All Notes</option>';
+          }
+        }
+      });
+
+      this.vaultListEl.appendChild(row);
+    });
+  }
+
+  clearVaultForm() {
+    document.getElementById('cfg-id').value = '';
+    document.getElementById('cfg-name').value = '';
+    document.getElementById('cfg-owner').value = '';
+    document.getElementById('cfg-repo').value = '';
+    document.getElementById('cfg-branch').value = 'main';
+    document.getElementById('cfg-token').value = '';
+  }
+
+  loadVaultIntoForm(profile) {
+    document.getElementById('cfg-id').value = profile.id;
+    document.getElementById('cfg-name').value = profile.name || '';
+    document.getElementById('cfg-owner').value = profile.owner;
+    document.getElementById('cfg-repo').value = profile.repo;
+    document.getElementById('cfg-branch').value = profile.branch || 'main';
+    document.getElementById('cfg-token').value = profile.token || '';
+  }
+
+  async saveCurrentVaultForm() {
+    const existingId = document.getElementById('cfg-id').value;
+    const name = document.getElementById('cfg-name').value.trim();
+    const owner = document.getElementById('cfg-owner').value.trim();
+    const repo = document.getElementById('cfg-repo').value.trim();
+    const branch = document.getElementById('cfg-branch').value.trim() || 'main';
+    const token = document.getElementById('cfg-token').value.trim();
+
+    if (!owner || !repo) {
+      alert('Owner and Repository fields are required.');
+      return;
+    }
+
+    const id = existingId || `vault_${Date.now()}`;
+    const profile = {
+      id,
+      name: name || `${owner}/${repo}`,
+      owner,
+      repo,
+      branch,
+      token,
+    };
+
+    saveVaultProfile(profile);
+    setActiveVaultId(id);
+
+    this.renderSettingsProfileList();
+    this.renderVaultDropdown();
+    this.settingsModal.classList.remove('open');
+
+    await this.switchVault(id);
+    await this.triggerSync();
+  }
 }
 
-// Boot application
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/[&<>'"]/g, 
+    (tag) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+  );
+}
+
 window.addEventListener('DOMContentLoaded', () => {
   new AppController();
 });
