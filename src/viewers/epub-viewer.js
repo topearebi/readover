@@ -7,7 +7,6 @@ async function getEpubEngine() {
   if (ePubEngine) return ePubEngine;
 
   try {
-    // esm.sh bundles jszip and transitive dependencies cleanly
     const module = await import('https://esm.sh/epubjs@0.3.93?bundle');
     ePubEngine = module.default || module;
     return ePubEngine;
@@ -34,7 +33,7 @@ export async function openEpubViewer(path, epubSource, title = 'Book') {
       <div class="reader-header">
         <div class="reader-header-left">
           <span class="format-badge epub">EPUB</span>
-          <span id="epub-title" class="card-folder-badge" style="max-width: 200px;"></span>
+          <span id="epub-title" class="card-folder-badge" style="max-width: 180px;"></span>
           <span id="epub-progress-indicator" class="reader-status">Loading...</span>
         </div>
         <div class="reader-header-right">
@@ -84,7 +83,6 @@ export async function openEpubViewer(path, epubSource, title = 'Book') {
 
   closeBtn.onclick = teardown;
 
-  // Keyboard Navigation
   const handleKeydown = (e) => {
     if (!modal.classList.contains('open') || !rendition) return;
     if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
@@ -119,34 +117,49 @@ export async function openEpubViewer(path, epubSource, title = 'Book') {
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
-    function applyReaderTheme() {
+    function updateReaderThemeAndFont() {
       const bgColor = isDark ? '#161321' : '#ffffff';
       const textColor = isDark ? '#f0f2f5' : '#1f2328';
       const linkColor = isDark ? '#8c7ae6' : '#6c5ce7';
 
-      rendition.themes.default({
-        body: {
-          background: `${bgColor} !important`,
-          color: `${textColor} !important`,
+      // Register theme with broad selector specificity to override embedded book stylesheets
+      rendition.themes.register('active-theme', {
+        'body': {
+          'background-color': `${bgColor} !important`,
+          'color': `${textColor} !important`,
           'font-family': "'Literata', Georgia, serif !important",
           'line-height': '1.8 !important',
-          padding: '0 20px !important',
-          'font-size': `${currentFontSize}% !important`,
+          'padding': '0 20px !important',
         },
-        p: { 'margin-bottom': '1.4em !important' },
-        a: { color: `${linkColor} !important`, 'text-decoration': 'none !important' },
-        'img, svg': { 'max-width': '100% !important', height: 'auto !important' },
+        'body, p, span, div, li, em, strong, a': {
+          'font-size': `${currentFontSize}% !important`,
+          'color': `${textColor} !important`,
+        },
+        'p': {
+          'margin-bottom': '1.4em !important',
+        },
+        'a': {
+          'color': `${linkColor} !important`,
+          'text-decoration': 'none !important',
+        },
+        'img, svg': {
+          'max-width': '100% !important',
+          'height': 'auto !important',
+        },
       });
+
+      rendition.themes.select('active-theme');
     }
 
-    applyReaderTheme();
+    rendition.hooks.content.register((contents) => {
+      updateReaderThemeAndFont();
+    });
 
     const savedRecord = await getReadingProgress(path);
     const initialLocation = savedRecord && savedRecord.location ? savedRecord.location : undefined;
 
     await rendition.display(initialLocation);
 
-    // Continuous location tracking
     book.ready.then(() => book.locations.generate(1024)).then(() => {
       updateProgressIndicator(rendition.currentLocation());
     }).catch(console.warn);
@@ -170,22 +183,21 @@ export async function openEpubViewer(path, epubSource, title = 'Book') {
       updateProgressIndicator(location);
     });
 
-    // Tap/Click Navigation
     nextBtn.onclick = () => rendition.next();
     prevBtn.onclick = () => rendition.prev();
 
-    // Font Sizing
+    // Robust font-size handlers
     fontIncBtn.onclick = () => {
       if (currentFontSize < 160) {
         currentFontSize += 10;
-        rendition.themes.fontSize(`${currentFontSize}%`);
+        updateReaderThemeAndFont();
       }
     };
 
     fontDecBtn.onclick = () => {
       if (currentFontSize > 80) {
         currentFontSize -= 10;
-        rendition.themes.fontSize(`${currentFontSize}%`);
+        updateReaderThemeAndFont();
       }
     };
 
