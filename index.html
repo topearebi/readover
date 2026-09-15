@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Notes Deck</title>
+  
+  <!-- PWA Meta -->
+  <meta name="theme-color" content="#121212" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="./manifest.json" />
+
+  <!-- Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="./src/style.css" />
+</head>
+<body>
+
+  <!-- Top App Navigation -->
+  <header class="app-header">
+    <div class="header-left">
+      <select id="folder-select" aria-label="Select Folder">
+        <option value="ALL">All Notes</option>
+      </select>
+    </div>
+    <div class="header-right">
+      <button id="sync-btn" class="icon-btn" title="Sync Manifest">↻</button>
+      <button id="manage-btn" class="icon-btn" title="Manage Feed">☰</button>
+      <button id="settings-btn" class="icon-btn" title="GitHub Settings">⚙</button>
+    </div>
+  </header>
+
+  <!-- Swipe Arena -->
+  <main class="deck-container">
+    <div id="card-stack" class="card-stack"></div>
+    <div id="status-indicator" class="status-indicator"></div>
+  </main>
+
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal">
+    <div class="modal-content">
+      <h2>GitHub Connection</h2>
+      <label>Personal Access Token (Read repo scope)
+        <input type="password" id="cfg-token" placeholder="ghp_..." />
+      </label>
+      <label>Owner (User or Org)
+        <input type="text" id="cfg-owner" placeholder="e.g. username" />
+      </label>
+      <label>Repository
+        <input type="text" id="cfg-repo" placeholder="e.g. my-notes" />
+      </label>
+      <label>Branch
+        <input type="text" id="cfg-branch" value="main" />
+      </label>
+      <button id="save-settings-btn" class="btn-primary">Save & Sync</button>
+      <button class="btn-secondary modal-close">Cancel</button>
+    </div>
+  </div>
+
+  <!-- Feed Management Modal -->
+  <div id="management-modal" class="modal">
+    <div class="modal-content">
+      <h2>Feed Management</h2>
+      <button id="restore-hidden-btn" class="btn-secondary">Restore All Archived Notes</button>
+      <button id="reset-seen-btn" class="btn-secondary">Reset Review History</button>
+      <button class="btn-secondary modal-close">Close</button>
+    </div>
+  </div>
+
+  <!-- Service Worker Registration for PWA Offline Cache -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(console.warn);
+      });
+    }
+  </script>
+
+  <!-- ES Module Entry -->
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
