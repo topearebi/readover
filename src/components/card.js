@@ -1,137 +1,121 @@
 // src/components/card.js
 
 /**
- * Creates and mounts a swipeable card component.
+ * Creates and mounts a full-viewport TikTok-style snap card.
  * 
  * @param {Object} cardData - Parsed card object from parseMarkdownToCard
- * @param {Object} callbacks - { onSwipeRight, onSwipeLeft, onStarToggle }
- * @returns {HTMLElement} The card DOM node
+ * @param {boolean} isStarred - Initial starred state from DB
+ * @param {Object} callbacks - { onStarToggle }
+ * @returns {HTMLElement} The card container element
  */
-export function createCardElement(cardData, { onSwipeRight, onSwipeLeft, onStarToggle }) {
-  const card = document.createElement('div');
-  card.className = 'note-card';
+export function createCardElement(cardData, isStarred = false, { onStarToggle } = {}) {
+  const card = document.createElement('section');
+  card.className = 'snap-card';
   card.dataset.path = cardData.path;
 
   card.innerHTML = `
-    <div class="card-header">
-      <span class="card-folder">${escapeHtml(cardData.folder)}</span>
-      <button class="card-star-btn" aria-label="Star note">
-        <svg class="star-icon" viewBox="0 0 24 24" width="20" height="20">
-          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-        </svg>
-      </button>
-    </div>
+    <div class="card-inner">
+      <div class="card-header">
+        <span class="card-folder-badge">${escapeHtml(cardData.folder)}</span>
+        <span class="reading-time">${cardData.readingTime} min read</span>
+      </div>
 
-    <div class="card-content">
-      <h2 class="card-title">${escapeHtml(cardData.title)}</h2>
-      <p class="card-teaser">${escapeHtml(cardData.teaser)}</p>
-    </div>
+      <div class="card-body">
+        <h1 class="card-title">${escapeHtml(cardData.title)}</h1>
+        <div class="markdown-preview">${cardData.fullHtml}</div>
+        <div class="card-overflow-fade"></div>
+        <div class="expand-prompt-pill">
+          <span>Read full note</span>
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </div>
+      </div>
 
-    <div class="card-footer">
-      <span class="reading-time">${cardData.readingTime} min read</span>
-      ${!cardData.isCompact ? '<span class="read-more-pill">Tap to read full note →</span>' : ''}
-    </div>
+      <!-- Floating Interaction Rail (TikTok Style) -->
+      <aside class="floating-rail">
+        <button class="rail-btn star-btn ${isStarred ? 'starred' : ''}" aria-label="Favorite Note" title="Favorite">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="${isStarred ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+          </svg>
+        </button>
 
-    <div class="swipe-indicator indicator-keep">KEEP</div>
-    <div class="swipe-indicator indicator-hide">ARCHIVE</div>
+        <button class="rail-btn expand-btn" aria-label="Open Reader" title="Expand Full Note">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
+          </svg>
+        </button>
+
+        <button class="rail-btn share-btn" aria-label="Share Note" title="Share">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="18" cy="5" r="3"></circle>
+            <circle cx="6" cy="12" r="3"></circle>
+            <circle cx="18" cy="19" r="3"></circle>
+            <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+            <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+          </svg>
+        </button>
+      </aside>
+    </div>
   `;
 
-  // Interaction State
-  let startX = 0;
-  let currentX = 0;
-  let isDragging = false;
-  let hasVibrated = false;
-  const THRESHOLD = 120;
+  const bodyEl = card.querySelector('.card-body');
+  const starBtn = card.querySelector('.star-btn');
+  const expandBtn = card.querySelector('.expand-btn');
+  const shareBtn = card.querySelector('.share-btn');
 
-  const starBtn = card.querySelector('.card-star-btn');
-  const keepBadge = card.querySelector('.indicator-keep');
-  const hideBadge = card.querySelector('.indicator-hide');
-
-  // Star button listener
-  starBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const isStarred = starBtn.classList.toggle('active');
-    if ('vibrate' in navigator) navigator.vibrate(8);
-    onStarToggle(cardData.path, isStarred);
+  // Measure content overflow once attached to layout
+  requestAnimationFrame(() => {
+    if (bodyEl.scrollHeight > bodyEl.clientHeight + 10) {
+      bodyEl.classList.add('has-overflow');
+    }
   });
 
-  // Tap to expand reading modal
-  card.addEventListener('click', (e) => {
-    if (Math.abs(currentX) > 10) return; // Ignore if user was dragging
+  // Tapping the body opens the reader modal only if content is truncated
+  bodyEl.addEventListener('click', (e) => {
+    if (bodyEl.classList.contains('has-overflow')) {
+      openReaderModal(cardData);
+    }
+  });
+
+  // Expand modal trigger
+  expandBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
     openReaderModal(cardData);
   });
 
-  // Native Pointer Gestures (Touch + Mouse)
-  card.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.card-star-btn')) return;
-    isDragging = true;
-    startX = e.clientX;
-    currentX = 0;
-    hasVibrated = false;
-    card.style.transition = 'none';
-    card.setPointerCapture(e.pointerId);
-  });
+  // Star / Favorite trigger
+  starBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const isNowStarred = starBtn.classList.toggle('starred');
+    const svg = starBtn.querySelector('svg');
+    svg.setAttribute('fill', isNowStarred ? 'currentColor' : 'none');
 
-  card.addEventListener('pointermove', (e) => {
-    if (!isDragging) return;
-    currentX = e.clientX - startX;
-    const rotate = currentX * 0.08;
-
-    card.style.transform = `translate3d(${currentX}px, 0, 0) rotate(${rotate}deg)`;
-
-    // Visual indicators
-    if (currentX > 30) {
-      keepBadge.style.opacity = Math.min((currentX - 30) / 80, 1);
-      hideBadge.style.opacity = '0';
-    } else if (currentX < -30) {
-      hideBadge.style.opacity = Math.min((-currentX - 30) / 80, 1);
-      keepBadge.style.opacity = '0';
-    } else {
-      keepBadge.style.opacity = '0';
-      hideBadge.style.opacity = '0';
-    }
-
-    // Single haptic feedback upon crossing swipe threshold
-    if (Math.abs(currentX) > THRESHOLD && !hasVibrated) {
-      if ('vibrate' in navigator) navigator.vibrate(12);
-      hasVibrated = true;
-    } else if (Math.abs(currentX) <= THRESHOLD) {
-      hasVibrated = false;
+    if ('vibrate' in navigator) navigator.vibrate(10);
+    if (onStarToggle) {
+      await onStarToggle(cardData.path, isNowStarred);
     }
   });
 
-  const onPointerEnd = () => {
-    if (!isDragging) return;
-    isDragging = false;
-    card.style.transition = 'transform 0.28s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.2s';
+  // Native share sheet or clipboard fallback
+  shareBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if ('vibrate' in navigator) navigator.vibrate(8);
 
-    if (currentX > THRESHOLD) {
-      // Swiped Right -> Keep in rotation
-      card.style.transform = `translate3d(120vw, 0, 0) rotate(25deg)`;
-      card.style.opacity = '0';
-      setTimeout(() => {
-        card.remove();
-        onSwipeRight(cardData.path);
-      }, 250);
-    } else if (currentX < -THRESHOLD) {
-      // Swiped Left -> Archive from feed
-      card.style.transform = `translate3d(-120vw, 0, 0) rotate(-25deg)`;
-      card.style.opacity = '0';
-      setTimeout(() => {
-        card.remove();
-        onSwipeLeft(cardData.path);
-      }, 250);
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: cardData.title,
+          text: `${cardData.title}\n\n${cardData.teaser}`,
+        });
+      } catch (err) {
+        // User canceled share
+      }
     } else {
-      // Return to Center
-      card.style.transform = 'translate3d(0, 0, 0) rotate(0deg)';
-      keepBadge.style.opacity = '0';
-      hideBadge.style.opacity = '0';
+      navigator.clipboard.writeText(`${cardData.title}\n\n${cardData.fullHtml}`);
+      alert('Note copied to clipboard!');
     }
-    currentX = 0;
-  };
-
-  card.addEventListener('pointerup', onPointerEnd);
-  card.addEventListener('pointercancel', onPointerEnd);
+  });
 
   return card;
 }
@@ -147,9 +131,10 @@ export function openReaderModal(cardData) {
     modal.className = 'reader-modal';
     modal.innerHTML = `
       <div class="reader-header">
-        <button id="reader-close-btn" class="reader-close-btn">✕ Close</button>
+        <span class="card-folder-badge" id="reader-folder"></span>
+        <button id="reader-close-btn" class="reader-close-btn">✕ Done</button>
       </div>
-      <article class="reader-body markdown-body"></article>
+      <article class="reader-body markdown-preview"></article>
     `;
     document.body.appendChild(modal);
 
@@ -158,11 +143,11 @@ export function openReaderModal(cardData) {
     });
   }
 
+  modal.querySelector('#reader-folder').textContent = cardData.folder;
   const body = modal.querySelector('.reader-body');
   body.innerHTML = `
     <header class="reader-meta">
-      <span class="card-folder">${escapeHtml(cardData.folder)}</span>
-      <h1>${escapeHtml(cardData.title)}</h1>
+      <h1 class="card-title">${escapeHtml(cardData.title)}</h1>
     </header>
     ${cardData.fullHtml}
   `;
@@ -173,6 +158,6 @@ export function openReaderModal(cardData) {
 function escapeHtml(str) {
   if (!str) return '';
   return str.replace(/[&<>'"]/g, 
-    tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+    (tag) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
   );
 }
