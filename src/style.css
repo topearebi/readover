@@ -128,6 +128,11 @@ html, body {
   white-space: nowrap;
 }
 
+.header-left select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 @media (min-width: 480px) {
   .header-left select {
     max-width: 140px;
@@ -136,7 +141,7 @@ html, body {
   }
 }
 
-/* Compact Two-State Segmented Filter */
+/* Compact Segmented Filter (All vs Starred) */
 .media-filter-bar {
   display: flex;
   background: var(--border-color);
@@ -365,7 +370,7 @@ html, body {
 /* Layout 1: Text Notes */
 .card-body.type-text {
   justify-content: flex-start;
-  padding-right: 76px; /* Avoid collision with floating rail */
+  padding-right: 76px; /* Gutter prevents overlap with floating rail */
 }
 
 .card-title {
@@ -407,44 +412,76 @@ html, body {
   font-family: monospace;
 }
 
-/* Layout 2: Visual Documents (EPUB & PDF) */
+/* Layout 2: Visual Documents (EPUB & PDF) - Centered Flex Column */
 .card-body.type-document {
-  display: grid;
-  grid-template-rows: 1fr auto;
+  display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-items: center;
-  gap: 12px;
-  padding: 14px 20px 20px 20px;
+  justify-content: space-between;
+  width: 100%;
+  height: 100%;
+  padding: 16px 20px 20px 20px;
+  box-sizing: border-box;
 }
 
 .document-cover-wrap {
+  flex: 1;
   width: 100%;
-  height: 100%;
+  min-height: 0; /* Critical flex overflow prevention */
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
+  margin: 0 auto;
+  position: relative;
 }
 
 .document-cover-img {
   max-width: 82%;
   max-height: 100%;
+  width: auto;
+  height: auto;
+  margin: 0 auto; /* Strict horizontal centering */
   object-fit: contain;
+  display: block;
   border-radius: 10px;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
   transition: transform 0.2s ease;
+}
+
+@media (min-width: 768px) {
+  .document-cover-img {
+    max-width: 380px; /* Constrains aspect ratio on desktop */
+  }
 }
 
 .card-inner:hover .document-cover-img {
   transform: translateY(-2px);
 }
 
-/* Resolved Progress Bar Overlap */
+.document-cover-placeholder {
+  width: 220px;
+  height: 320px;
+  max-height: 80%;
+  background: var(--primary-surface);
+  border: 1.5px dashed var(--border-color);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 16px;
+  margin: 0 auto;
+}
+
+/* Metadata Plate & Progress Bar */
 .document-meta-plate {
   width: 100%;
+  max-width: 100%;
   text-align: left;
-  padding-right: 68px; /* Strict gutter prevents overlap with floating rail */
-  position: relative;
+  padding-right: 68px; /* Dedicated gutter prevents overlap with floating rail */
+  box-sizing: border-box;
+  flex-shrink: 0;
+  margin-top: 12px;
 }
 
 .document-meta-plate .card-title {
@@ -564,7 +601,7 @@ html, body {
   fill: var(--accent-star);
 }
 
-/* --- Slide-Up Modals & Viewer Container --- */
+/* --- Modals & Sheet Containers --- */
 .modal {
   position: fixed;
   top: 0;
@@ -774,7 +811,7 @@ html, body {
   flex: 1;
 }
 
-/* Full Reader Sheet Container */
+/* Full-Screen Reader Modal */
 .reader-modal {
   position: fixed;
   top: 0;
@@ -888,6 +925,7 @@ html, body {
   -webkit-user-select: text;
 }
 
+/* Ambient System Status Pill */
 .status-indicator {
   position: fixed;
   bottom: 12px;
