@@ -1,13 +1,11 @@
 // src/db.js
 import Dexie from 'https://cdn.jsdelivr.net/npm/dexie@4.0.8/+esm';
 
-// Cache open DB instances so switching between repos doesn't re-instantiate Dexie objects
 const dbInstances = new Map();
 let currentVaultId = null;
 
 /**
- * Initializes and switches to an isolated IndexedDB database for a specific vault profile.
- * @param {string} vaultId - Unique identifier for the vault profile
+ * Initializes and switches to an isolated IndexedDB database for a vault profile.
  */
 export function initVaultDB(vaultId) {
   if (!vaultId) {
@@ -20,11 +18,11 @@ export function initVaultDB(vaultId) {
     const dbName = `MarkdownDeckDB_${vaultId}`;
     const db = new Dexie(dbName);
 
-    // Schema: 1 = true, 0 = false for numeric boolean indexing in IndexedDB
+    // Indexed fields: path is primary key; lastSeen and starred are queryable
     db.version(1).stores({
       manifest: '&path, sha, folder, filename',
       content: '&path, fetchedAt',
-      state: '&path, lastSeen, hidden, starred',
+      state: '&path, lastSeen, starred',
     });
 
     dbInstances.set(vaultId, db);
@@ -34,7 +32,7 @@ export function initVaultDB(vaultId) {
 }
 
 /**
- * Returns the currently active database instance.
+ * Returns the active Dexie instance.
  */
 export function getActiveDB() {
   if (!currentVaultId || !dbInstances.has(currentVaultId)) {
@@ -44,7 +42,7 @@ export function getActiveDB() {
 }
 
 /**
- * Ensures a state record exists for a note path without overwriting existing triage flags.
+ * Ensures a state record exists for a note without overriding existing data.
  */
 export async function ensureNoteState(path) {
   const db = getActiveDB();
@@ -53,14 +51,13 @@ export async function ensureNoteState(path) {
     await db.state.put({
       path,
       lastSeen: 0,
-      hidden: 0,
       starred: 0,
     });
   }
 }
 
 /**
- * Marks a note as seen right now (Swipe Right / Keep in rotation).
+ * Updates lastSeen timestamp when a card snaps into view.
  */
 export async function markSeen(path) {
   const db = getActiveDB();
@@ -68,15 +65,7 @@ export async function markSeen(path) {
 }
 
 /**
- * Flags a note as hidden/archived from the swipe feed (Swipe Left / Archive).
- */
-export async function toggleHide(path, hiddenStatus = 1) {
-  const db = getActiveDB();
-  await db.state.update(path, { hidden: hiddenStatus ? 1 : 0 });
-}
-
-/**
- * Toggles the starred flag (Bookmark).
+ * Toggles the starred/favorite status.
  */
 export async function toggleStar(path) {
   const db = getActiveDB();
@@ -87,7 +76,7 @@ export async function toggleStar(path) {
 }
 
 /**
- * Resets all review timestamps in the current vault so notes recycle.
+ * Resets all review timestamps in the current vault so notes recycle from the beginning.
  */
 export async function resetReviewHistory() {
   const db = getActiveDB();
@@ -95,39 +84,29 @@ export async function resetReviewHistory() {
 }
 
 /**
- * Restores all hidden notes in the current vault back into rotation.
- */
-export async function restoreAllHidden() {
-  const db = getActiveDB();
-  await db.state.toCollection().modify({ hidden: 0 });
-}
-
-/**
- * Queries and prioritizes card candidates for the active vault.
+ * Queries candidate notes for the infinite scroll stream.
+ * 
+ * Priority:
+ * 1. Unseen notes (lastSeen === 0)
+ * 2. Notes seen furthest in the past (lastSeen ASC)
+ * 3. Soft jitter to avoid strictly deterministic ordering
+ * 
  * @param {string|null} folderFilter - Optional folder path prefix
  * @param {number} limit - Number of card paths to return
  */
-export async function getDeckQueue(folderFilter = null, limit = 50) {
+export async function getDeckQueue(folderFilter = null, limit = 20) {
   const db = getActiveDB();
 
-  // 1. Fetch only paths that are NOT hidden
-  const activeStates = await db.state
-    .where('hidden')
-    .equals(0)
-    .toArray();
+  const allStates = await db.state.toArray();
+  const stateMap = new Map(allStates.map((s) => [s.path, s]));
 
-  const stateMap = new Map(activeStates.map((s) => [s.path, s]));
-
-  // 2. Fetch manifest records matching active states
   let candidates = await db.manifest.toArray();
 
   if (folderFilter && folderFilter !== 'ALL') {
     candidates = candidates.filter((m) => m.folder.startsWith(folderFilter));
   }
 
-  candidates = candidates.filter((m) => stateMap.has(m.path));
-
-  // 3. Sort: unreviewed first (lastSeen === 0), then oldest lastSeen ASC + random jitter
+  // Sort unseen first, then oldest seen with jitter
   candidates.sort((a, b) => {
     const stateA = stateMap.get(a.path);
     const stateB = stateMap.get(b.path);
@@ -138,7 +117,7 @@ export async function getDeckQueue(folderFilter = null, limit = 50) {
     if (timeA === 0 && timeB !== 0) return -1;
     if (timeB === 0 && timeA !== 0) return 1;
 
-    // Jitter (± 1 hour) prevents deterministic card sequencing across runs
+    // Subtle random jitter (± 1 hour) keeps the feed feeling organic
     const jitter = (Math.random() - 0.5) * 3600000;
     return timeA + jitter - timeB;
   });
@@ -147,7 +126,7 @@ export async function getDeckQueue(folderFilter = null, limit = 50) {
 }
 
 /**
- * Fetches cached raw Markdown content from the active vault's DB.
+ * Retrieves raw Markdown text from the active vault's local cache.
  */
 export async function getCachedContent(path) {
   const db = getActiveDB();
@@ -155,7 +134,7 @@ export async function getCachedContent(path) {
 }
 
 /**
- * Writes or updates raw Markdown text into the active vault's cache.
+ * Stores raw Markdown text in the active vault's local cache.
  */
 export async function setCachedContent(path, rawMarkdown) {
   const db = getActiveDB();
@@ -167,7 +146,7 @@ export async function setCachedContent(path, rawMarkdown) {
 }
 
 /**
- * Deletes the entire IndexedDB database for a given vault (used when deleting a profile).
+ * Purges the database for a specific vault profile.
  */
 export async function deleteVaultDB(vaultId) {
   if (dbInstances.has(vaultId)) {
