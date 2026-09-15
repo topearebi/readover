@@ -6,6 +6,8 @@ import {
   markSeen,
   toggleStar,
   deleteVaultDB,
+  getCachedContent,
+  getCachedThumbnail,
 } from './db.js';
 
 import {
@@ -16,24 +18,36 @@ import {
   deleteVaultProfile,
   getGlobalToken,
   setGlobalToken,
-  getActiveVaultConfig,
-  checkRemoteUpdates,
   syncRepoManifest,
   fetchNoteContent,
   saveNoteFile,
   preloadBatchContent,
 } from './github.js';
 
+import {
+  getLocalProfiles,
+  saveLocalProfile,
+  deleteLocalProfile,
+  pickLocalDirectory,
+  scanLocalDirectory,
+  getLocalFileBlob,
+  indexFallbackDirectory,
+} from './local-fs.js';
+
 import { parseMarkdownToCard } from './parser.js';
 import { createCardElement } from './components/card.js';
+import { extractPdfCover } from './parsers/pdf-cover.js';
+import { extractEpubCover } from './parsers/epub-cover.js';
+import { openPdfViewer } from './viewers/pdf-viewer.js';
+import { openEpubViewer } from './viewers/epub-viewer.js';
 
 class AppController {
   constructor() {
-    this.deckQueue = [];
     this.activeFolder = 'ALL';
-    this.filterMode = 'all';
+    this.mediaFilter = 'all'; // 'all', 'text', 'epub', 'pdf', 'starred'
     this.isLoading = false;
     this.hasMore = true;
+    this.currentSourceType = 'github'; // 'github' | 'local'
 
     this.viewport = document.getElementById('feed-viewport');
     this.statusEl = document.getElementById('status-indicator');
@@ -43,43 +57,42 @@ class AppController {
     this.initObserver();
     this.bindEvents();
     this.bindKeyboardShortcuts();
-    this.initAutoSyncWatcher();
+    this.startGamepadLoop();
     this.boot();
   }
 
   initTheme() {
-    const savedTheme = localStorage.getItem('md_deck_theme') || 'light';
+    const savedTheme = localStorage.getItem('readover_theme') || 'dark';
     this.setTheme(savedTheme);
   }
 
   setTheme(theme) {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('md_deck_theme', theme);
+    localStorage.setItem('readover_theme', theme);
     const themeBtn = document.getElementById('theme-btn');
     if (themeBtn) {
       themeBtn.textContent = theme === 'light' ? '🌙' : '☀️';
     }
     const metaTheme = document.querySelector('meta[name="theme-color"]');
     if (metaTheme) {
-      metaTheme.setAttribute('content', theme === 'light' ? '#6c5ce7' : '#110f17');
+      metaTheme.setAttribute('content', theme === 'light' ? '#f8f7fc' : '#110f17');
     }
   }
 
   toggleTheme() {
-    const current = document.documentElement.getAttribute('data-theme') || 'light';
+    const current = document.documentElement.getAttribute('data-theme') || 'dark';
     this.setTheme(current === 'light' ? 'dark' : 'light');
     if ('vibrate' in navigator) navigator.vibrate(8);
   }
 
   initElements() {
-    this.vaultSelect = document.getElementById('vault-select');
+    this.sourceSelect = document.getElementById('source-select');
     this.folderSelect = document.getElementById('folder-select');
     this.settingsModal = document.getElementById('settings-modal');
     this.createModal = document.getElementById('create-modal');
-    this.vaultListEl = document.getElementById('vault-profile-list');
+    this.sourceListEl = document.getElementById('source-list');
 
-    this.filterAllBtn = document.getElementById('filter-all-btn');
-    this.filterStarredBtn = document.getElementById('filter-starred-btn');
+    this.filterPills = document.querySelectorAll('.filter-pill');
 
     this.globalTokenInput = document.getElementById('cfg-global-token');
     this.globalTokenStatus = document.getElementById('global-token-status');
@@ -88,6 +101,9 @@ class AppController {
     this.confirmCreateBtn = document.getElementById('confirm-create-btn');
     this.newNotePathInput = document.getElementById('new-note-path');
     this.newNoteContentInput = document.getElementById('new-note-content');
+
+    this.openLocalFolderBtn = document.getElementById('open-local-folder-btn');
+    this.legacyFolderInput = document.getElementById('legacy-folder-input');
   }
 
   initObserver() {
@@ -116,33 +132,19 @@ class AppController {
     );
   }
 
-  initAutoSyncWatcher() {
-    // Check for remote commits when the tab or PWA regains focus
-    document.addEventListener('visibilitychange', async () => {
-      if (document.visibilityState === 'visible') {
-        const hasUpdates = await checkRemoteUpdates();
-        if (hasUpdates) {
-          this.statusEl.textContent = 'Remote changes detected. Auto-syncing...';
-          await this.triggerSync(true);
-        }
-      }
-    });
-  }
-
   bindEvents() {
     document.getElementById('theme-btn').addEventListener('click', () => this.toggleTheme());
     document.getElementById('settings-btn').addEventListener('click', () => this.openSettings());
     document.getElementById('sync-btn').addEventListener('click', () => this.triggerSync());
 
-    // Vault & Folder Switches
-    this.vaultSelect.addEventListener('change', async (e) => {
+    // Source & Folder Switching
+    this.sourceSelect.addEventListener('change', async (e) => {
       const selectedId = e.target.value;
       if (selectedId === '__NEW__') {
         this.openSettings();
         return;
       }
-      setActiveVaultId(selectedId);
-      await this.switchVault(selectedId);
+      await this.switchSource(selectedId);
     });
 
     this.folderSelect.addEventListener('change', (e) => {
@@ -150,24 +152,47 @@ class AppController {
       this.reloadFeed();
     });
 
-    // All vs Starred Filters
-    this.filterAllBtn.addEventListener('click', () => {
-      if (this.filterMode === 'all') return;
-      this.filterMode = 'all';
-      this.filterAllBtn.classList.add('active');
-      this.filterStarredBtn.classList.remove('active');
+    // Media Filter Tabs
+    this.filterPills.forEach((pill) => {
+      pill.addEventListener('click', () => {
+        this.filterPills.forEach((p) => p.classList.remove('active'));
+        pill.classList.add('active');
+        this.mediaFilter = pill.dataset.filter;
+        this.reloadFeed();
+      });
+    });
+
+    // Local Directory Picker
+    this.openLocalFolderBtn.addEventListener('click', async () => {
+      try {
+        const { profile } = await pickLocalDirectory();
+        this.settingsModal.classList.remove('open');
+        await this.switchSource(profile.id);
+        await this.triggerSync();
+      } catch (err) {
+        if (err.message === 'NATIVE_PICKER_UNSUPPORTED') {
+          this.legacyFolderInput.click();
+        } else if (err.name !== 'AbortError') {
+          alert(`Directory access failed: ${err.message}`);
+        }
+      }
+    });
+
+    this.legacyFolderInput.addEventListener('change', async (e) => {
+      if (e.target.files.length === 0) return;
+      const profileId = `local_fallback_${Date.now()}`;
+      const profile = { id: profileId, name: 'Local Import', type: 'local' };
+      saveLocalProfile(profile);
+      this.settingsModal.classList.remove('open');
+      await this.switchSource(profile.id);
+
+      this.statusEl.textContent = 'Indexing files...';
+      const folders = await indexFallbackDirectory(e.target.files, (m) => (this.statusEl.textContent = m));
+      await this.populateFolders(folders);
       this.reloadFeed();
     });
 
-    this.filterStarredBtn.addEventListener('click', () => {
-      if (this.filterMode === 'starred') return;
-      this.filterMode = 'starred';
-      this.filterStarredBtn.classList.add('active');
-      this.filterAllBtn.classList.remove('active');
-      this.reloadFeed();
-    });
-
-    // Create Note Modal Actions
+    // Note Creation Actions
     this.fabCreateBtn.addEventListener('click', () => {
       const activeFolder = this.activeFolder !== 'ALL' ? `${this.activeFolder}/` : '';
       this.newNotePathInput.value = activeFolder;
@@ -178,17 +203,16 @@ class AppController {
 
     this.confirmCreateBtn.addEventListener('click', () => this.handleCreateNote());
 
-    // Global Token Input
+    // Settings Profile Actions
     this.globalTokenInput.addEventListener('change', (e) => {
       setGlobalToken(e.target.value);
       this.updateGlobalTokenBadge();
     });
 
-    // Settings Profile Actions
     document.getElementById('add-vault-btn').addEventListener('click', () => this.clearVaultForm());
     document.getElementById('save-vault-btn').addEventListener('click', () => this.saveCurrentVaultForm());
 
-    // Modal Closures
+    // Modals Close
     document.querySelectorAll('.modal-close').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.target.closest('.modal').classList.remove('open');
@@ -200,17 +224,13 @@ class AppController {
     window.addEventListener('keydown', (e) => {
       if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
 
-      const readerModal = document.getElementById('reader-modal');
-      const isReaderOpen = readerModal && readerModal.classList.contains('open');
-
+      const openModal = document.querySelector('.modal.open, .reader-modal.open');
       if (e.key === 'Escape') {
-        if (isReaderOpen) readerModal.classList.remove('open');
-        this.settingsModal.classList.remove('open');
-        this.createModal.classList.remove('open');
+        if (openModal) openModal.classList.remove('open');
         return;
       }
 
-      if (isReaderOpen) return;
+      if (openModal) return;
 
       const currentCard = this.getCurrentVisibleCard();
 
@@ -219,21 +239,18 @@ class AppController {
         case 'j':
         case 'J':
           e.preventDefault();
-          this.scrollToNextCard(1);
+          this.scrollToCard(1);
           break;
         case 'ArrowUp':
         case 'k':
         case 'K':
           e.preventDefault();
-          this.scrollToNextCard(-1);
+          this.scrollToCard(-1);
           break;
         case 's':
         case 'S':
           e.preventDefault();
-          if (currentCard) {
-            const starBtn = currentCard.querySelector('.star-btn');
-            if (starBtn) starBtn.click();
-          }
+          if (currentCard) currentCard.querySelector('.star-btn')?.click();
           break;
         case 'c':
         case 'C':
@@ -243,13 +260,58 @@ class AppController {
         case ' ':
         case 'Enter':
           e.preventDefault();
-          if (currentCard) {
-            const expandBtn = currentCard.querySelector('.expand-btn');
-            if (expandBtn) expandBtn.click();
-          }
+          if (currentCard) currentCard.querySelector('.expand-btn')?.click();
           break;
       }
     });
+  }
+
+  startGamepadLoop() {
+    let lastButtonState = {};
+
+    const poll = () => {
+      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
+      const gp = gamepads[0];
+
+      if (gp) {
+        const isPressed = (btnIndex) => gp.buttons[btnIndex] && gp.buttons[btnIndex].pressed;
+        const currentCard = this.getCurrentVisibleCard();
+        const activeModal = document.querySelector('.reader-modal.open');
+
+        // D-Pad Down (btn 13) or Stick Down
+        if ((isPressed(13) || gp.axes[1] > 0.6) && !lastButtonState.down) {
+          if (!activeModal) this.scrollToCard(1);
+        }
+        // D-Pad Up (btn 12) or Stick Up
+        if ((isPressed(12) || gp.axes[1] < -0.6) && !lastButtonState.up) {
+          if (!activeModal) this.scrollToCard(-1);
+        }
+        // Button A (btn 0) -> Expand/Open
+        if (isPressed(0) && !lastButtonState.btnA) {
+          if (!activeModal && currentCard) currentCard.querySelector('.expand-btn')?.click();
+        }
+        // Button Y (btn 3) -> Star/Favorite
+        if (isPressed(3) && !lastButtonState.btnY) {
+          if (!activeModal && currentCard) currentCard.querySelector('.star-btn')?.click();
+        }
+        // Button B (btn 1) -> Close Modal
+        if (isPressed(1) && !lastButtonState.btnB) {
+          if (activeModal) activeModal.classList.remove('open');
+        }
+
+        lastButtonState = {
+          down: isPressed(13) || gp.axes[1] > 0.6,
+          up: isPressed(12) || gp.axes[1] < -0.6,
+          btnA: isPressed(0),
+          btnY: isPressed(3),
+          btnB: isPressed(1),
+        };
+      }
+
+      requestAnimationFrame(poll);
+    };
+
+    requestAnimationFrame(poll);
   }
 
   getCurrentVisibleCard() {
@@ -263,7 +325,7 @@ class AppController {
     });
   }
 
-  scrollToNextCard(direction = 1) {
+  scrollToCard(direction = 1) {
     const current = this.getCurrentVisibleCard();
     if (!current) return;
     const cards = Array.from(this.viewport.querySelectorAll('.snap-card'));
@@ -275,74 +337,84 @@ class AppController {
   }
 
   async boot() {
-    const profiles = getVaultProfiles();
+    const sources = this.getAllSources();
     let activeId = getActiveVaultId();
 
-    if (profiles.length === 0) {
+    if (sources.length === 0) {
       this.openSettings();
       return;
     }
 
-    if (!activeId || !profiles.some((p) => p.id === activeId)) {
-      activeId = profiles[0].id;
+    if (!activeId || !sources.some((s) => s.id === activeId)) {
+      activeId = sources[0].id;
       setActiveVaultId(activeId);
     }
 
-    this.renderVaultDropdown();
-    await this.switchVault(activeId);
+    this.renderSourceDropdown();
+    await this.switchSource(activeId);
   }
 
-  renderVaultDropdown() {
-    const profiles = getVaultProfiles();
+  getAllSources() {
+    const githubs = getVaultProfiles().map((p) => ({ ...p, type: 'github' }));
+    const locals = getLocalProfiles().map((p) => ({ ...p, type: 'local' }));
+    return [...githubs, ...locals];
+  }
+
+  renderSourceDropdown() {
+    const sources = this.getAllSources();
     const activeId = getActiveVaultId();
 
-    this.vaultSelect.innerHTML = '';
-    profiles.forEach((p) => {
+    this.sourceSelect.innerHTML = '';
+    sources.forEach((s) => {
       const opt = document.createElement('option');
-      opt.value = p.id;
-      opt.textContent = p.name || `${p.owner}/${p.repo}`;
-      if (p.id === activeId) opt.selected = true;
-      this.vaultSelect.appendChild(opt);
+      opt.value = s.id;
+      opt.textContent = `${s.type === 'local' ? '📁 ' : '☁️ '}${s.name || s.repo}`;
+      if (s.id === activeId) opt.selected = true;
+      this.sourceSelect.appendChild(opt);
     });
 
     const addOpt = document.createElement('option');
     addOpt.value = '__NEW__';
-    addOpt.textContent = '+ Add Vault...';
-    this.vaultSelect.appendChild(addOpt);
+    addOpt.textContent = '+ Add Source...';
+    this.sourceSelect.appendChild(addOpt);
   }
 
-  async switchVault(vaultId) {
-    initVaultDB(vaultId);
+  async switchSource(sourceId) {
+    setActiveVaultId(sourceId);
+    const sources = this.getAllSources();
+    const activeSource = sources.find((s) => s.id === sourceId);
+    this.currentSourceType = activeSource ? activeSource.type : 'github';
+
+    initVaultDB(sourceId);
     this.activeFolder = 'ALL';
 
     await this.populateFoldersFromDB();
     await this.reloadFeed();
   }
 
-  async populateFoldersFromDB() {
-    try {
+  async populateFolders(folderList = null) {
+    let folders = folderList;
+    if (!folders) {
       const db = getActiveDB();
       const records = await db.manifest.toArray();
-      const folders = new Set();
-
+      const folderSet = new Set();
       records.forEach((r) => {
-        if (r.folder && r.folder !== 'Root') {
-          folders.add(r.folder);
-        }
+        if (r.folder && r.folder !== 'Root') folderSet.add(r.folder);
       });
-
-      this.folderSelect.innerHTML = '<option value="ALL">All Folders</option>';
-      Array.from(folders)
-        .sort()
-        .forEach((f) => {
-          const opt = document.createElement('option');
-          opt.value = f;
-          opt.textContent = f;
-          this.folderSelect.appendChild(opt);
-        });
-    } catch (err) {
-      console.warn('Could not populate folders from DB:', err);
+      folders = Array.from(folderSet).sort();
     }
+
+    this.folderSelect.innerHTML = '<option value="ALL">All Folders</option>';
+    folders.forEach((f) => {
+      const opt = document.createElement('option');
+      opt.value = f;
+      opt.textContent = f;
+      this.folderSelect.appendChild(opt);
+    });
+  }
+
+  async populateFoldersFromDB() {
+    return this.populateFolders();
   }
 
   async reloadFeed() {
@@ -358,9 +430,9 @@ class AppController {
 
     try {
       const db = getActiveDB();
-
       let candidates = [];
-      if (this.filterMode === 'starred') {
+
+      if (this.mediaFilter === 'starred') {
         const starredStates = await db.state.where('starred').equals(1).toArray();
         const starMap = new Set(starredStates.map((s) => s.path));
         let manifest = await db.manifest.toArray();
@@ -369,7 +441,7 @@ class AppController {
         }
         candidates = manifest.filter((m) => starMap.has(m.path));
       } else {
-        candidates = await getDeckQueue(this.activeFolder, 15);
+        candidates = await getDeckQueue(this.activeFolder, this.mediaFilter, 15);
       }
 
       const existingPaths = new Set(
@@ -383,19 +455,28 @@ class AppController {
         return;
       }
 
-      preloadBatchContent(newItems.map((c) => c.path));
+      if (this.currentSourceType === 'github') {
+        const textPaths = newItems.filter((i) => i.mediaType === 'text').map((i) => i.path);
+        preloadBatchContent(textPaths);
+      }
 
       for (const item of newItems) {
-        const rawMarkdown = await fetchNoteContent(item.path);
-        const cardData = parseMarkdownToCard(rawMarkdown, item.path);
+        let contentData = null;
+
+        if (item.mediaType === 'text') {
+          const rawMarkdown = await this.retrieveContent(item.path);
+          contentData = parseMarkdownToCard(rawMarkdown, item.path);
+        } else {
+          // Trigger lazy cover generation if missing
+          await this.ensureThumbnailCached(item);
+        }
 
         const state = await db.state.get(item.path);
         const isStarred = state ? state.starred === 1 : false;
 
-        const cardEl = createCardElement(cardData, isStarred, {
-          onStarToggle: async (path) => {
-            await toggleStar(path);
-          },
+        const cardEl = await createCardElement(item, contentData, isStarred, {
+          onStarToggle: async (path) => toggleStar(path),
+          onOpenDocument: async (docItem) => this.handleOpenDocument(docItem),
         });
 
         this.viewport.appendChild(cardEl);
@@ -408,34 +489,90 @@ class AppController {
     }
   }
 
+  async retrieveContent(path) {
+    if (this.currentSourceType === 'local') {
+      const activeId = getActiveVaultId();
+      const file = await getLocalFileBlob(activeId, path);
+      return await file.text();
+    }
+    return await fetchNoteContent(path);
+  }
+
+  async retrieveBlob(path) {
+    if (this.currentSourceType === 'local') {
+      const activeId = getActiveVaultId();
+      return await getLocalFileBlob(activeId, path);
+    }
+    const response = await fetchNoteContent(path);
+    return new Blob([response]);
+  }
+
+  async ensureThumbnailCached(item) {
+    const existing = await getCachedThumbnail(item.path);
+    if (existing) return;
+
+    try {
+      const blob = await this.retrieveBlob(item.path);
+      if (item.mediaType === 'pdf') {
+        await extractPdfCover(item.path, blob);
+      } else if (item.mediaType === 'epub') {
+        await extractEpubCover(item.path, blob);
+      }
+    } catch (err) {
+      console.warn(`Cover extraction failed for ${item.path}:`, err);
+    }
+  }
+
+  async handleOpenDocument(item) {
+    this.statusEl.textContent = `Opening ${item.filename}...`;
+    try {
+      const blob = await this.retrieveBlob(item.path);
+      if (item.mediaType === 'pdf') {
+        await openPdfViewer(item.path, blob, item.filename);
+      } else if (item.mediaType === 'epub') {
+        await openEpubViewer(item.path, blob, item.filename);
+      }
+      this.statusEl.textContent = '';
+    } catch (err) {
+      alert(`Could not load document: ${err.message}`);
+      this.statusEl.textContent = '';
+    }
+  }
+
   async handleCreateNote() {
     let rawPath = this.newNotePathInput.value.trim();
     const content = this.newNoteContentInput.value;
 
     if (!rawPath) {
-      alert('Please enter a note title or path.');
+      alert('Please enter a note title.');
       return;
     }
-
-    if (!rawPath.endsWith('.md')) {
-      rawPath += '.md';
-    }
+    if (!rawPath.endsWith('.md')) rawPath += '.md';
 
     this.confirmCreateBtn.disabled = true;
-    this.statusEl.textContent = 'Creating note on GitHub...';
+    this.statusEl.textContent = 'Saving note...';
 
     try {
+      if (this.currentSourceType === 'local') {
+        alert('Local note authoring is available in GitHub vaults.');
+        return;
+      }
+
       await saveNoteFile(rawPath, content, null);
       this.createModal.classList.remove('open');
 
       const cardData = parseMarkdownToCard(content, rawPath);
-      const cardEl = createCardElement(cardData, false, {
-        onStarToggle: async (path) => {
-          await toggleStar(path);
-        },
+      const manifestRecord = {
+        path: rawPath,
+        filename: rawPath.split('/').pop(),
+        folder: rawPath.includes('/') ? rawPath.substring(0, rawPath.lastIndexOf('/')) : 'Root',
+        mediaType: 'text',
+      };
+
+      const cardEl = await createCardElement(manifestRecord, cardData, false, {
+        onStarToggle: async (path) => toggleStar(path),
       });
 
-      // Insert at very top and snap to it
       this.viewport.insertBefore(cardEl, this.viewport.firstChild);
       this.observer.observe(cardEl);
       cardEl.scrollIntoView({ behavior: 'smooth' });
@@ -444,38 +581,38 @@ class AppController {
       this.statusEl.textContent = 'Note created!';
       setTimeout(() => (this.statusEl.textContent = ''), 2000);
     } catch (err) {
-      alert(`Could not create note: ${err.message}`);
-      this.statusEl.textContent = 'Creation failed.';
+      alert(`Creation failed: ${err.message}`);
     } finally {
       this.confirmCreateBtn.disabled = false;
     }
   }
 
-  async triggerSync(silent = false) {
-    if (!silent) this.statusEl.textContent = 'Syncing repository manifest...';
+  async triggerSync() {
+    this.statusEl.textContent = 'Syncing manifest...';
     try {
-      await syncRepoManifest((msg) => {
-        if (!silent) this.statusEl.textContent = msg;
-      });
+      const activeId = getActiveVaultId();
 
-      await this.populateFoldersFromDB();
-      if (!silent) {
-        this.statusEl.textContent = 'Sync complete.';
-        setTimeout(() => (this.statusEl.textContent = ''), 2000);
+      if (this.currentSourceType === 'local') {
+        const folders = await scanLocalDirectory(activeId, (msg) => (this.statusEl.textContent = msg));
+        await this.populateFolders(folders);
       } else {
-        this.statusEl.textContent = '';
+        await syncRepoManifest((msg) => (this.statusEl.textContent = msg));
+        await this.populateFoldersFromDB();
       }
+
+      this.statusEl.textContent = 'Sync complete.';
+      setTimeout(() => (this.statusEl.textContent = ''), 2000);
       this.reloadFeed();
     } catch (err) {
-      if (!silent) alert(`Sync failed: ${err.message}`);
-      this.statusEl.textContent = 'Sync error.';
+      alert(`Sync failed: ${err.message}`);
+      this.statusEl.textContent = 'Sync error';
     }
   }
 
-  /* --- Settings & Hierarchical Auth --- */
+  /* --- Settings & Auth --- */
 
   openSettings() {
-    this.renderSettingsProfileList();
+    this.renderSourceList();
     this.clearVaultForm();
     this.globalTokenInput.value = getGlobalToken();
     this.updateGlobalTokenBadge();
@@ -485,7 +622,7 @@ class AppController {
   updateGlobalTokenBadge() {
     const token = getGlobalToken();
     if (token) {
-      this.globalTokenStatus.textContent = '✓ Active (5,000 req/hr)';
+      this.globalTokenStatus.textContent = '✓ Active';
       this.globalTokenStatus.style.color = 'var(--primary)';
     } else {
       this.globalTokenStatus.textContent = 'Optional';
@@ -493,47 +630,49 @@ class AppController {
     }
   }
 
-  renderSettingsProfileList() {
-    const profiles = getVaultProfiles();
+  renderSourceList() {
+    const sources = this.getAllSources();
     const activeId = getActiveVaultId();
 
-    this.vaultListEl.innerHTML = '';
-    profiles.forEach((p) => {
-      const hasCustomToken = Boolean(p.token && p.token.trim());
+    this.sourceListEl.innerHTML = '';
+    sources.forEach((s) => {
       const row = document.createElement('div');
-      row.className = `vault-item ${p.id === activeId ? 'active-vault' : ''}`;
+      row.className = `source-item ${s.id === activeId ? 'active-source' : ''}`;
       row.innerHTML = `
-        <div class="vault-info">
-          <strong>${escapeHtml(p.name)}</strong>
-          <span>${escapeHtml(p.owner)}/${escapeHtml(p.repo)} · ${hasCustomToken ? 'Custom Token' : 'Default Auth'}</span>
+        <div class="source-meta">
+          <strong>${s.type === 'local' ? '📁' : '☁️'} ${escapeHtml(s.name || s.repo)}</strong>
+          <span>${s.type === 'local' ? 'Local Directory' : `${escapeHtml(s.owner)}/${escapeHtml(s.repo)}`}</span>
         </div>
-        <div class="vault-actions">
-          <button class="edit-btn">Edit</button>
-          <button class="delete-btn">Delete</button>
+        <div class="source-actions">
+          ${s.type === 'github' ? '<button class="edit-btn">Edit</button>' : ''}
+          <button class="delete-btn">Remove</button>
         </div>
       `;
 
-      row.querySelector('.edit-btn').addEventListener('click', () => {
-        this.loadVaultIntoForm(p);
-      });
+      if (s.type === 'github') {
+        row.querySelector('.edit-btn').addEventListener('click', () => this.loadVaultIntoForm(s));
+      }
 
       row.querySelector('.delete-btn').addEventListener('click', async () => {
-        if (confirm(`Delete vault profile "${p.name}" and its cached data?`)) {
-          deleteVaultProfile(p.id);
-          await deleteVaultDB(p.id);
-          this.renderSettingsProfileList();
-          this.renderVaultDropdown();
-          const nextActive = getActiveVaultId();
-          if (nextActive) {
-            await this.switchVault(nextActive);
+        if (confirm(`Remove library "${s.name || s.repo}" and cached data?`)) {
+          if (s.type === 'local') {
+            await deleteLocalProfile(s.id);
+          } else {
+            deleteVaultProfile(s.id);
+          }
+          await deleteVaultDB(s.id);
+          this.renderSourceList();
+          this.renderSourceDropdown();
+          const remaining = this.getAllSources();
+          if (remaining.length > 0) {
+            await this.switchSource(remaining[0].id);
           } else {
             this.viewport.innerHTML = '';
-            this.folderSelect.innerHTML = '<option value="ALL">All Folders</option>';
           }
         }
       });
 
-      this.vaultListEl.appendChild(row);
+      this.sourceListEl.appendChild(row);
     });
   }
 
@@ -544,22 +683,15 @@ class AppController {
     document.getElementById('cfg-repo').value = '';
     document.getElementById('cfg-branch').value = 'main';
     document.getElementById('cfg-token').value = '';
-    document.querySelector('.vault-override-details').removeAttribute('open');
   }
 
-  loadVaultIntoForm(profile) {
-    document.getElementById('cfg-id').value = profile.id;
-    document.getElementById('cfg-name').value = profile.name || '';
-    document.getElementById('cfg-owner').value = profile.owner;
-    document.getElementById('cfg-repo').value = profile.repo;
-    document.getElementById('cfg-branch').value = profile.branch || 'main';
-    document.getElementById('cfg-token').value = profile.token || '';
-
-    if (profile.token && profile.token.trim()) {
-      document.querySelector('.vault-override-details').setAttribute('open', '');
-    } else {
-      document.querySelector('.vault-override-details').removeAttribute('open');
-    }
+  loadVaultIntoForm(p) {
+    document.getElementById('cfg-id').value = p.id;
+    document.getElementById('cfg-name').value = p.name || '';
+    document.getElementById('cfg-owner').value = p.owner;
+    document.getElementById('cfg-repo').value = p.repo;
+    document.getElementById('cfg-branch').value = p.branch || 'main';
+    document.getElementById('cfg-token').value = p.token || '';
   }
 
   async saveCurrentVaultForm() {
@@ -571,37 +703,32 @@ class AppController {
     const token = document.getElementById('cfg-token').value.trim();
 
     if (!owner || !repo) {
-      alert('Owner and Repository fields are required.');
+      alert('Owner and Repository are required.');
       return;
     }
 
     const id = existingId || `vault_${Date.now()}`;
-    const profile = {
-      id,
-      name: name || `${owner}/${repo}`,
-      owner,
-      repo,
-      branch,
-      token,
-    };
+    const profile = { id, name: name || `${owner}/${repo}`, owner, repo, branch, token };
 
     saveVaultProfile(profile);
-    setActiveVaultId(id);
-
-    this.renderSettingsProfileList();
-    this.renderVaultDropdown();
+    this.renderSourceList();
+    this.renderSourceDropdown();
     this.settingsModal.classList.remove('open');
 
-    await this.switchVault(id);
+    await this.switchSource(id);
     await this.triggerSync();
   }
 }
 
 function escapeHtml(str) {
   if (!str) return '';
-  return str.replace(/[&<>'"]/g, 
-    (tag) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
-  );
+  return str.replace(/[&<>'"]/g, (tag) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;',
+  }[tag] || tag));
 }
 
 window.addEventListener('DOMContentLoaded', () => {
