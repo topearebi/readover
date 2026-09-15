@@ -2,7 +2,9 @@
 import {
   initVaultDB,
   getActiveDB,
+  getDBForSource,
   getDeckQueue,
+  getAllSourcesDeckQueue,
   markSeen,
   toggleStar,
   deleteVaultDB,
@@ -44,11 +46,12 @@ import { openEpubViewer } from './viewers/epub-viewer.js';
 
 class AppController {
   constructor() {
+    this.activeSourceId = 'ALL_SOURCES';
     this.activeFolder = 'ALL';
-    this.mediaFilter = 'all'; // 'all', 'text', 'epub', 'pdf', 'starred'
+    this.mediaFilter = 'all'; // 'all' | 'starred'
     this.isLoading = false;
     this.hasMore = true;
-    this.currentSourceType = 'github'; // 'github' | 'local'
+    this.currentSourceType = 'aggregate'; // 'aggregate' | 'github' | 'local'
 
     this.viewport = document.getElementById('feed-viewport');
     this.statusEl = document.getElementById('status-indicator');
@@ -114,8 +117,10 @@ class AppController {
           if (entry.isIntersecting) {
             const cardEl = entry.target;
             const path = cardEl.dataset.path;
+            const sourceId = cardEl.dataset.sourceId;
             if (path) {
-              markSeen(path);
+              const targetDb = sourceId ? getDBForSource(sourceId) : null;
+              markSeen(path, targetDb);
             }
 
             const allCards = this.viewport.querySelectorAll('.snap-card');
@@ -165,6 +170,7 @@ class AppController {
       try {
         const { profile } = await pickLocalDirectory();
         this.settingsModal.classList.remove('open');
+        this.renderSourceDropdown();
         await this.switchSource(profile.id);
         await this.triggerSync();
       } catch (err) {
@@ -182,6 +188,7 @@ class AppController {
       const profile = { id: profileId, name: 'Local Import', type: 'local' };
       saveLocalProfile(profile);
       this.settingsModal.classList.remove('open');
+      this.renderSourceDropdown();
       await this.switchSource(profile.id);
 
       this.statusEl.textContent = 'Indexing files...';
@@ -191,6 +198,13 @@ class AppController {
     });
 
     this.fabCreateBtn.addEventListener('click', () => {
+      if (this.activeSourceId === 'ALL_SOURCES') {
+        const sources = this.getAllSources().filter((s) => s.type === 'github');
+        if (sources.length === 0) {
+          alert('Connect a GitHub vault in Settings to author new notes.');
+          return;
+        }
+      }
       const activeFolder = this.activeFolder !== 'ALL' ? `${this.activeFolder}/` : '';
       this.newNotePathInput.value = activeFolder;
       this.newNoteContentInput.value = '';
@@ -328,20 +342,14 @@ class AppController {
 
   async boot() {
     const sources = this.getAllSources();
-    let activeId = getActiveVaultId();
-
     if (sources.length === 0) {
       this.openSettings();
       return;
     }
 
-    if (!activeId || !sources.some((s) => s.id === activeId)) {
-      activeId = sources[0].id;
-      setActiveVaultId(activeId);
-    }
-
+    const savedActiveId = getActiveVaultId() || 'ALL_SOURCES';
     this.renderSourceDropdown();
-    await this.switchSource(activeId);
+    await this.switchSource(savedActiveId);
   }
 
   getAllSources() {
@@ -352,14 +360,21 @@ class AppController {
 
   renderSourceDropdown() {
     const sources = this.getAllSources();
-    const activeId = getActiveVaultId();
-
     this.sourceSelect.innerHTML = '';
+
+    // Root Aggregated Entry
+    const allOpt = document.createElement('option');
+    allOpt.value = 'ALL_SOURCES';
+    allOpt.textContent = '🌟 All Sources';
+    if (this.activeSourceId === 'ALL_SOURCES') allOpt.selected = true;
+    this.sourceSelect.appendChild(allOpt);
+
+    // Individual Sources
     sources.forEach((s) => {
       const opt = document.createElement('option');
       opt.value = s.id;
       opt.textContent = `${s.type === 'local' ? '📁 ' : '☁️ '}${s.name || s.repo}`;
-      if (s.id === activeId) opt.selected = true;
+      if (s.id === this.activeSourceId) opt.selected = true;
       this.sourceSelect.appendChild(opt);
     });
 
@@ -370,19 +385,32 @@ class AppController {
   }
 
   async switchSource(sourceId) {
+    this.activeSourceId = sourceId;
     setActiveVaultId(sourceId);
+
     const sources = this.getAllSources();
-    const activeSource = sources.find((s) => s.id === sourceId);
-    this.currentSourceType = activeSource ? activeSource.type : 'github';
 
-    initVaultDB(sourceId);
-    this.activeFolder = 'ALL';
+    if (sourceId === 'ALL_SOURCES') {
+      this.currentSourceType = 'aggregate';
+      this.activeFolder = 'ALL';
+      this.folderSelect.innerHTML = '<option value="ALL">All Sources (Aggregate)</option>';
+      this.folderSelect.disabled = true;
+    } else {
+      const activeSource = sources.find((s) => s.id === sourceId);
+      this.currentSourceType = activeSource ? activeSource.type : 'github';
+      this.activeFolder = 'ALL';
+      this.folderSelect.disabled = false;
+      initVaultDB(sourceId);
+      await this.populateFoldersFromDB();
+    }
 
-    await this.populateFoldersFromDB();
+    this.renderSourceDropdown();
     await this.reloadFeed();
   }
 
   async populateFolders(folderList = null) {
+    if (this.activeSourceId === 'ALL_SOURCES') return;
+
     let folders = folderList;
     if (!folders) {
       const db = getActiveDB();
@@ -394,7 +422,7 @@ class AppController {
       folders = Array.from(folderSet).sort();
     }
 
-    this.folderSelect.innerHTML = '<option value="ALL">All Folders</option>';
+    this.folderSelect.innerHTML = '<option value="ALL">All Subfolders</option>';
     folders.forEach((f) => {
       const opt = document.createElement('option');
       opt.value = f;
@@ -419,25 +447,36 @@ class AppController {
     this.isLoading = true;
 
     try {
-      const db = getActiveDB();
       let candidates = [];
+      const sources = this.getAllSources();
 
-      if (this.mediaFilter === 'starred') {
-        const starredStates = await db.state.where('starred').equals(1).toArray();
-        const starMap = new Set(starredStates.map((s) => s.path));
-        let manifest = await db.manifest.toArray();
-        if (this.activeFolder !== 'ALL') {
-          manifest = manifest.filter((m) => m.folder.startsWith(this.activeFolder));
-        }
-        candidates = manifest.filter((m) => starMap.has(m.path));
+      if (this.activeSourceId === 'ALL_SOURCES') {
+        candidates = await getAllSourcesDeckQueue(sources, this.mediaFilter, 16);
       } else {
-        candidates = await getDeckQueue(this.activeFolder, this.mediaFilter, 15);
+        const db = getActiveDB();
+        if (this.mediaFilter === 'starred') {
+          const starredStates = await db.state.where('starred').equals(1).toArray();
+          const starMap = new Set(starredStates.map((s) => s.path));
+          let manifest = await db.manifest.toArray();
+          if (this.activeFolder !== 'ALL') {
+            manifest = manifest.filter((m) => m.folder === this.activeFolder || m.folder.startsWith(`${this.activeFolder}/`));
+          }
+          candidates = manifest.filter((m) => starMap.has(m.path));
+        } else {
+          candidates = await getDeckQueue(this.activeFolder, this.mediaFilter, 15);
+        }
+        candidates = candidates.map((item) => ({
+          ...item,
+          _sourceId: this.activeSourceId,
+          _sourceType: this.currentSourceType,
+        }));
       }
 
       const existingPaths = new Set(
-        Array.from(this.viewport.querySelectorAll('.snap-card')).map((el) => el.dataset.path)
+        Array.from(this.viewport.querySelectorAll('.snap-card')).map((el) => `${el.dataset.sourceId}:${el.dataset.path}`)
       );
-      const newItems = candidates.filter((c) => !existingPaths.has(c.path));
+
+      const newItems = candidates.filter((c) => !existingPaths.has(`${c._sourceId}:${c.path}`));
 
       if (newItems.length === 0) {
         this.hasMore = false;
@@ -445,17 +484,21 @@ class AppController {
         return;
       }
 
-      if (this.currentSourceType === 'github') {
-        const textPaths = newItems.filter((i) => i.mediaType === 'text').map((i) => i.path);
-        preloadBatchContent(textPaths);
+      // Preload text notes
+      const remoteTextPaths = newItems
+        .filter((i) => i.mediaType === 'text' && i._sourceType === 'github')
+        .map((i) => i.path);
+      if (remoteTextPaths.length > 0) {
+        preloadBatchContent(remoteTextPaths);
       }
 
       for (const item of newItems) {
+        const targetDb = getDBForSource(item._sourceId);
         let contentData = null;
 
         if (item.mediaType === 'text') {
           try {
-            const rawMarkdown = await this.retrieveContent(item.path);
+            const rawMarkdown = await this.retrieveContent(item.path, item._sourceId, item._sourceType);
             contentData = parseMarkdownToCard(rawMarkdown || '# Empty Note\n\n*No content available.*', item.path);
           } catch (err) {
             contentData = parseMarkdownToCard(`# ${item.filename}\n\n*Unable to load note content.*`, item.path);
@@ -464,14 +507,15 @@ class AppController {
           await this.ensureThumbnailCached(item);
         }
 
-        const state = await db.state.get(item.path);
+        const state = await targetDb.state.get(item.path);
         const isStarred = state ? state.starred === 1 : false;
 
         const cardEl = await createCardElement(item, contentData, isStarred, {
-          onStarToggle: async (path) => toggleStar(path),
+          onStarToggle: async (path, starred) => toggleStar(path, starred, targetDb),
           onOpenDocument: async (docItem) => this.handleOpenDocument(docItem),
         });
 
+        cardEl.dataset.sourceId = item._sourceId;
         this.viewport.appendChild(cardEl);
         this.observer.observe(cardEl);
       }
@@ -482,34 +526,31 @@ class AppController {
     }
   }
 
-  async retrieveContent(path) {
-    if (this.currentSourceType === 'local') {
-      const activeId = getActiveVaultId();
-      const file = await getLocalFileBlob(activeId, path);
+  async retrieveContent(path, sourceId, sourceType) {
+    if (sourceType === 'local') {
+      const file = await getLocalFileBlob(sourceId, path);
       return await file.text();
     }
     return await fetchNoteContent(path);
   }
 
-  async retrieveBlob(path) {
-    if (this.currentSourceType === 'local') {
-      const activeId = getActiveVaultId();
-      return await getLocalFileBlob(activeId, path);
+  async retrieveBlob(path, sourceId, sourceType) {
+    if (sourceType === 'local') {
+      return await getLocalFileBlob(sourceId, path);
     }
-    // Remote binary files from GitHub API
     return await fetchBinaryBlob(path);
   }
 
   async ensureThumbnailCached(item) {
-    const existing = await getCachedThumbnail(item.path);
+    const existing = await getCachedThumbnail(item.path, item._sourceId);
     if (existing) return;
 
     try {
-      const blob = await this.retrieveBlob(item.path);
+      const blob = await this.retrieveBlob(item.path, item._sourceId, item._sourceType);
       if (item.mediaType === 'pdf') {
-        await extractPdfCover(item.path, blob);
+        await extractPdfCover(item.path, blob, item._sourceId);
       } else if (item.mediaType === 'epub') {
-        await extractEpubCover(item.path, blob);
+        await extractEpubCover(item.path, blob, item._sourceId);
       }
     } catch (err) {
       console.warn(`Cover extraction failed for ${item.path}:`, err);
@@ -519,11 +560,11 @@ class AppController {
   async handleOpenDocument(item) {
     this.statusEl.textContent = `Opening ${item.filename}...`;
     try {
-      const blob = await this.retrieveBlob(item.path);
+      const blob = await this.retrieveBlob(item.path, item._sourceId, item._sourceType);
       if (item.mediaType === 'pdf') {
-        await openPdfViewer(item.path, blob, item.filename);
+        await openPdfViewer(item.path, blob, item.filename, item._sourceId);
       } else if (item.mediaType === 'epub') {
-        await openEpubViewer(item.path, blob, item.filename);
+        await openEpubViewer(item.path, blob, item.filename, item._sourceId);
       }
     } catch (err) {
       alert(`Could not load document: ${err.message}`);
@@ -547,7 +588,7 @@ class AppController {
 
     try {
       if (this.currentSourceType === 'local') {
-        alert('Local note authoring is available in GitHub vaults.');
+        alert('Local note authoring is supported in GitHub vaults.');
         return;
       }
 
@@ -560,12 +601,15 @@ class AppController {
         filename: rawPath.split('/').pop(),
         folder: rawPath.includes('/') ? rawPath.substring(0, rawPath.lastIndexOf('/')) : 'Root',
         mediaType: 'text',
+        _sourceId: this.activeSourceId,
+        _sourceType: this.currentSourceType,
       };
 
       const cardEl = await createCardElement(manifestRecord, cardData, false, {
-        onStarToggle: async (path) => toggleStar(path),
+        onStarToggle: async (path, starred) => toggleStar(path, starred),
       });
 
+      cardEl.dataset.sourceId = this.activeSourceId;
       this.viewport.insertBefore(cardEl, this.viewport.firstChild);
       this.observer.observe(cardEl);
       cardEl.scrollIntoView({ behavior: 'smooth' });
@@ -583,14 +627,24 @@ class AppController {
   async triggerSync() {
     this.statusEl.textContent = 'Syncing manifest...';
     try {
-      const activeId = getActiveVaultId();
-
-      if (this.currentSourceType === 'local') {
-        const folders = await scanLocalDirectory(activeId, (msg) => (this.statusEl.textContent = msg));
-        await this.populateFolders(folders);
+      if (this.activeSourceId === 'ALL_SOURCES') {
+        const sources = this.getAllSources();
+        for (const src of sources) {
+          if (src.type === 'local') {
+            await scanLocalDirectory(src.id);
+          } else {
+            initVaultDB(src.id);
+            await syncRepoManifest();
+          }
+        }
       } else {
-        await syncRepoManifest((msg) => (this.statusEl.textContent = msg));
-        await this.populateFoldersFromDB();
+        if (this.currentSourceType === 'local') {
+          const folders = await scanLocalDirectory(this.activeSourceId, (m) => (this.statusEl.textContent = m));
+          await this.populateFolders(folders);
+        } else {
+          await syncRepoManifest((m) => (this.statusEl.textContent = m));
+          await this.populateFoldersFromDB();
+        }
       }
 
       this.statusEl.textContent = 'Sync complete.';
@@ -602,7 +656,7 @@ class AppController {
     }
   }
 
-  /* --- Settings & Auth --- */
+  /* --- Settings & Profiles --- */
 
   openSettings() {
     this.renderSourceList();
@@ -625,12 +679,11 @@ class AppController {
 
   renderSourceList() {
     const sources = this.getAllSources();
-    const activeId = getActiveVaultId();
-
     this.sourceListEl.innerHTML = '';
+
     sources.forEach((s) => {
       const row = document.createElement('div');
-      row.className = `source-item ${s.id === activeId ? 'active-source' : ''}`;
+      row.className = `source-item ${s.id === this.activeSourceId ? 'active-source' : ''}`;
       row.innerHTML = `
         <div class="source-meta">
           <strong>${s.type === 'local' ? '📁' : '☁️'} ${escapeHtml(s.name || s.repo)}</strong>
@@ -656,12 +709,7 @@ class AppController {
           await deleteVaultDB(s.id);
           this.renderSourceList();
           this.renderSourceDropdown();
-          const remaining = this.getAllSources();
-          if (remaining.length > 0) {
-            await this.switchSource(remaining[0].id);
-          } else {
-            this.viewport.innerHTML = '';
-          }
+          await this.switchSource('ALL_SOURCES');
         }
       });
 
