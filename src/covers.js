@@ -1,7 +1,7 @@
 // Book covers + metadata, cached per file version.
 import { thumbs } from './store.js';
 import { readBlob } from './library.js';
-import { loadPdfJs, loadJSZip } from './lib/vendor.js';
+import { loadPdfJs, loadFoliate } from './lib/vendor.js';
 
 const inflight = new Map();
 
@@ -14,7 +14,7 @@ export function getCover(item) {
         const cached = await thumbs.get(item.key);
         if (cached && cached.sha === item.sha) return cached;
         const file = await readBlob(item);
-        const meta = item.kind === 'pdf' ? await pdfCover(file) : await epubCover(file);
+        const meta = item.kind === 'pdf' ? await pdfCover(file) : await ebookCover(file, item.name);
         const rec = { key: item.key, sourceId: item.sourceId, sha: item.sha, ...meta };
         await thumbs.put(rec);
         return rec;
@@ -50,47 +50,19 @@ async function pdfCover(file) {
   }
 }
 
-async function epubCover(file) {
-  const JSZip = await loadJSZip();
-  const zip = await JSZip.loadAsync(file);
-  const container = await zip.file('META-INF/container.xml')?.async('string');
-  const opfPath = container && /full-path=["']([^"']+)["']/i.exec(container)?.[1];
-  if (!opfPath) return { blob: null, title: '', author: '' };
-  const opfText = await zip.file(opfPath)?.async('string');
-  if (!opfText) return { blob: null, title: '', author: '' };
-  const opf = new DOMParser().parseFromString(opfText, 'application/xml');
-  const byTag = (tag) => opf.getElementsByTagNameNS('*', tag)[0]?.textContent?.trim() || '';
-  const title = byTag('title');
-  const author = byTag('creator');
-
-  const items = [...opf.getElementsByTagNameNS('*', 'item')];
-  const metaCover = [...opf.getElementsByTagNameNS('*', 'meta')].find((m) => m.getAttribute('name') === 'cover');
-  let href =
-    (metaCover && items.find((i) => i.getAttribute('id') === metaCover.getAttribute('content'))?.getAttribute('href')) ||
-    items.find((i) => /(^|\s)cover-image(\s|$)/.test(i.getAttribute('properties') || ''))?.getAttribute('href') ||
-    items
-      .find((i) => (i.getAttribute('media-type') || '').startsWith('image/') && /cover/i.test(`${i.getAttribute('id')} ${i.getAttribute('href')}`))
-      ?.getAttribute('href');
-
+/** EPUB, MOBI/AZW3, FB2, CBZ: foliate-js reads metadata and the cover for all of them. */
+async function ebookCover(file, name) {
+  const { makeBook } = await loadFoliate();
+  const book = await makeBook(new File([file], name, { type: file.type }));
+  const text = (x) => (typeof x === 'string' ? x : x && typeof x === 'object' ? Object.values(x)[0] || '' : '');
+  const people = (x) => (Array.isArray(x) ? x : x ? [x] : []).map((p) => text(p?.name ?? p)).filter(Boolean).join(', ');
   let blob = null;
-  if (href) {
-    const dir = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
-    const path = normalize(dir + decodeURIComponent(href));
-    const entry = zip.file(path);
-    if (entry) {
-      const ext = path.split('.').pop().toLowerCase();
-      const type = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml' }[ext] || 'image/jpeg';
-      blob = new Blob([await entry.async('uint8array')], { type });
-    }
-  }
-  return { blob, title, author };
-}
-
-function normalize(path) {
-  const out = [];
-  for (const p of path.split('/')) {
-    if (p === '..') out.pop();
-    else if (p && p !== '.') out.push(p);
-  }
-  return out.join('/');
+  try {
+    blob = (await book.getCover?.()) || null;
+  } catch {}
+  let title = text(book.metadata?.title).trim();
+  if (!title || title === name) title = name.replace(/\.[^.]+$/, ''); // comics often have no title of their own
+  const meta = { blob, title, author: people(book.metadata?.author).trim() };
+  book.destroy?.();
+  return meta;
 }

@@ -2,7 +2,7 @@
 
 @font-face {
   font-family: 'Literata';
-  src: url('../vendor/fonts/literata-latin-wght-normal.woff2') format('woff2');
+  src: url('../vendor/literata-5.2.5/literata-latin-wght-normal.woff2') format('woff2');
   font-weight: 200 900;
   font-style: normal;
   font-display: swap;
@@ -10,7 +10,7 @@
 }
 @font-face {
   font-family: 'Literata';
-  src: url('../vendor/fonts/literata-latin-ext-wght-normal.woff2') format('woff2');
+  src: url('../vendor/literata-5.2.5/literata-latin-ext-wght-normal.woff2') format('woff2');
   font-weight: 200 900;
   font-style: normal;
   font-display: swap;
@@ -18,13 +18,14 @@
 }
 @font-face {
   font-family: 'Literata';
-  src: url('../vendor/fonts/literata-latin-wght-italic.woff2') format('woff2');
+  src: url('../vendor/literata-5.2.5/literata-latin-wght-italic.woff2') format('woff2');
   font-weight: 200 900;
   font-style: italic;
   font-display: swap;
 }
 
 :root {
+  --tabbar: calc(54px + env(safe-area-inset-bottom));
   --paper: #e8ebe3;
   --card: #f7f8f3;
   --ink: #1d2320;
@@ -1023,7 +1024,17 @@ details.field[open] summary {
   gap: 12px;
   background: color-mix(in srgb, var(--paper) 70%, var(--line));
 }
+.pdf-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+}
+.pdf-wrap .pdf-stage {
+  flex: 1;
+}
 .pdf-page {
+  position: relative;
   background: #fff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
   flex: none;
@@ -1033,6 +1044,60 @@ details.field[open] summary {
   display: block;
   width: 100%;
   height: 100%;
+}
+/* PDF.js text layer (selectable, invisible text over the page image) */
+.textLayer {
+  position: absolute;
+  text-align: initial;
+  inset: 0;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  z-index: 0;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.textLayer span.markedContent {
+  top: 0;
+  height: 0;
+}
+.textLayer ::selection {
+  background: color-mix(in srgb, var(--marker) 55%, transparent);
+}
+.textLayer br::selection {
+  background: transparent;
+}
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+}
+.textLayer span.ro-hl {
+  background: rgba(243, 213, 74, 0.45);
+  border-radius: 2px;
+}
+.flash-page {
+  animation: flash-page 2.4s ease-out;
+}
+@keyframes flash-page {
+  0%,
+  35% {
+    box-shadow: 0 0 0 4px var(--marker), 0 1px 4px rgba(0, 0, 0, 0.18);
+  }
 }
 
 /* EPUB */
@@ -1185,4 +1250,699 @@ details.field[open] summary {
 .hl-quote {
   min-height: 0;
   flex: 0 1 auto;
+}
+
+/* Sync status dot */
+.sync-dot {
+  width: 32px;
+  height: 42px;
+  border: 0;
+  background: none;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+}
+.sync-dot span {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--faint);
+  transition: background-color 0.3s, border-color 0.3s, opacity 0.6s;
+}
+.sync-dot[data-state='done'] span {
+  background: var(--action);
+  border-color: var(--action);
+}
+.sync-dot[data-state='error'] span {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+.outbox-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+  font-size: 0.875rem;
+}
+.outbox-item p {
+  flex: 1;
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.outbox-item b {
+  color: var(--ink);
+  font-weight: 600;
+}
+.outbox-item .err {
+  color: var(--danger);
+}
+.outbox-item button {
+  border: 0;
+  background: none;
+  color: var(--action);
+  font-weight: 600;
+  font-size: 0.875rem;
+  padding: 2px 4px;
+}
+
+/* "You wrote this 3 days ago": why a card is back */
+.card-reason {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.card-reason::before {
+  content: '';
+  width: 14px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--marker);
+  flex: none;
+}
+.card-book .card-reason {
+  justify-content: center;
+}
+
+/* Keep-safe setup */
+.setup-intro {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 1.0625rem;
+  line-height: 1.55;
+}
+.setup-steps {
+  margin: 0;
+  padding: 0 0 0 1.4em;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.setup-steps li::marker {
+  font-weight: 700;
+  color: var(--action);
+}
+.setup-steps h3 {
+  margin: 0 0 4px;
+}
+.setup-steps p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+.setup-steps .btn {
+  display: inline-block;
+  text-decoration: none;
+}
+.setup-steps .field + .field {
+  margin-top: 10px;
+}
+.card-nudge h2 {
+  max-width: 18ch;
+}
+
+@media (max-width: 520px) {
+  /* Library rows: actions go under the details so names aren't squeezed */
+  .source {
+    grid-template-columns: 1fr;
+  }
+  .source-actions {
+    grid-row: auto;
+    grid-column: 1;
+    margin-left: -8px;
+    flex-wrap: wrap;
+  }
+}
+
+/* Your own note on a highlight */
+.hl-comment {
+  margin: 18px 0 0;
+  padding: 10px 0 0 14px;
+  border-left: 2px solid var(--line);
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre-line;
+}
+
+/* Note on a highlight */
+.note-quote {
+  margin: 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--marker);
+  font-family: var(--serif);
+  font-style: italic;
+  color: var(--muted);
+  line-height: 1.5;
+}
+/* Book contents */
+.toc {
+  display: flex;
+  flex-direction: column;
+}
+.toc-item {
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  padding: 12px;
+  font-family: var(--serif);
+  font-size: 1rem;
+  color: var(--ink);
+}
+.toc-item:hover {
+  background: var(--paper);
+}
+.epub-area foliate-view {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.selection-bar .btn-quiet {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+.selection-bar .btn {
+  white-space: nowrap;
+}
+
+/* ---------- Bottom tab bar ---------- */
+.tabbar {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: 20;
+  height: var(--tabbar);
+  padding-bottom: env(safe-area-inset-bottom);
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-top: 1px solid var(--line);
+}
+.tab {
+  flex: 0 1 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.tab .i {
+  width: 22px;
+  height: 22px;
+}
+.tab[aria-current='page'] {
+  color: var(--ink);
+}
+.tab[aria-current='page'] .i {
+  stroke-width: 2;
+}
+/* Leave room for the tab bar */
+.card {
+  padding-bottom: calc(24px + var(--tabbar));
+}
+.rail {
+  bottom: calc(24px + var(--tabbar));
+}
+.toast {
+  bottom: calc(14px + var(--tabbar));
+}
+
+/* ---------- Shelf ---------- */
+.shelf {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  padding: var(--top) 0 var(--tabbar);
+}
+.shelf-inner {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 12px 20px 40px;
+}
+.shelf-heading {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1.35rem;
+  margin: 18px 0 14px;
+}
+.shelf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(140px, 100%), 1fr));
+  gap: 22px 18px;
+}
+@media (max-width: 420px) {
+  .shelf-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.shelf-book {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 0;
+  background: none;
+  padding: 0;
+  text-align: left;
+  color: var(--ink);
+}
+.shelf-cover {
+  aspect-ratio: 2 / 3;
+  width: 100%;
+  border-radius: 3px 7px 7px 3px;
+  overflow: hidden;
+  background: var(--tone, #2e5b4f);
+  box-shadow: 0 12px 24px -14px rgba(0, 0, 0, 0.5);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: flex-end;
+}
+.shelf-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.shelf-cover span {
+  padding: 14px 12px;
+  color: #f5f3ea;
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1rem;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.shelf-title {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 0.9375rem;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.shelf-meta {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shelf-progress {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+  margin-top: 4px;
+}
+.shelf-progress i {
+  display: block;
+  height: 100%;
+  background: var(--action);
+}
+.shelf-empty {
+  max-width: 30rem;
+  margin: 18vh auto 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: flex-start;
+}
+.shelf-empty h2 {
+  font-family: var(--serif);
+  font-size: 1.8rem;
+  margin: 0;
+}
+.shelf-empty p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+@media (min-width: 900px) {
+  .rail {
+    bottom: 50%;
+  }
+}
+
+/* ---------- Notes view ---------- */
+.notes {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  padding: var(--top) 0 var(--tabbar);
+}
+.notes-inner {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 10px 20px 40px;
+}
+.notes-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--paper);
+  padding: 6px 0 8px;
+}
+.notes-search {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--card);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 1rem;
+  color: var(--ink);
+}
+.notes-coverage {
+  margin: 8px 2px 0;
+}
+.linklike {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--action);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.notes-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 10px 0 6px;
+}
+.notes-bar .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  flex: none;
+}
+.notes-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+  font-size: 0.9375rem;
+  color: var(--muted);
+}
+.crumb-btn {
+  border: 0;
+  background: none;
+  padding: 4px 2px;
+  color: var(--action);
+  font-weight: 600;
+}
+.crumb-btn[aria-current] {
+  color: var(--ink);
+}
+.crumb-btn + .crumb-btn::before {
+  content: '/';
+  color: var(--faint);
+  font-weight: 400;
+  margin: 0 6px 0 2px;
+}
+.notes-list {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--line);
+}
+.note-row,
+.folder-row,
+.pick-item,
+.backlink {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  padding: 13px 4px;
+  color: var(--ink);
+}
+.note-row b,
+.pick-item b,
+.backlink b {
+  font-family: var(--serif);
+  font-weight: 600;
+  font-size: 1.0625rem;
+}
+.note-row span,
+.pick-item span,
+.backlink span {
+  color: var(--muted);
+  font-size: 0.875rem;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.folder-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+.folder-name {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.folder-name::before {
+  content: '';
+  width: 16px;
+  height: 12px;
+  border: 1.6px solid var(--faint);
+  border-radius: 2px 3px 3px 3px;
+  box-shadow: inset 0 3px 0 -1.6px var(--faint);
+}
+.folder-count {
+  color: var(--faint);
+  font-size: 0.875rem;
+}
+.note-row:hover,
+.folder-row:hover,
+.pick-item:hover,
+.backlink:hover {
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+}
+.notes-empty {
+  color: var(--muted);
+  padding: 20px 4px;
+  line-height: 1.5;
+}
+
+/* Menus and pickers */
+.menu-list {
+  display: flex;
+  flex-direction: column;
+}
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: none;
+  padding: 14px 4px;
+  font-size: 1rem;
+  color: var(--ink);
+  text-align: left;
+}
+.menu-item .i {
+  color: var(--muted);
+}
+.menu-item.danger,
+.menu-item.danger .i {
+  color: var(--danger);
+}
+.pick-list {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  min-height: 0;
+}
+.sheet-inner > input[type='search'] {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  border-radius: 10px;
+  padding: 11px 13px;
+  font-size: 1rem;
+  color: var(--ink);
+}
+.btn-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+/* Linked from */
+.backlinks {
+  margin-top: 40px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.backlinks h2 {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 0 0 4px;
+}
+.backlink {
+  width: 100%;
+}
+.prose a.wikilink {
+  color: var(--action);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--action) 45%, transparent);
+  cursor: pointer;
+}
+
+/* ---------- Engagement ---------- */
+/* Long notes: one section per slide */
+.slides {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  min-height: 0;
+  flex: 0 1 auto;
+  gap: 0;
+  overscroll-behavior-x: contain;
+}
+.slides::-webkit-scrollbar {
+  display: none;
+}
+.slide {
+  flex: 0 0 100%;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  max-height: 52dvh;
+  overflow: hidden;
+  position: relative;
+  padding-right: 4px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 82%, transparent);
+  mask-image: linear-gradient(to bottom, #000 82%, transparent);
+}
+.slide h2:first-child {
+  margin-top: 0;
+}
+.slide-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+.slide-dots {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+}
+.slide-dots i {
+  width: 18px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+}
+.slide-dots i.on {
+  background: var(--marker);
+}
+.slide-count {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.slide-nav {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 1.2rem;
+  line-height: 1;
+}
+.slide-nav:disabled {
+  opacity: 0.35;
+}
+
+/* Connected: two notes that link to each other */
+.card-connection .card-body {
+  justify-content: center;
+  gap: 4px;
+}
+.conn-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  border: 1px solid var(--line);
+  background: var(--card);
+  border-radius: 14px;
+  padding: 18px 18px 20px;
+  color: var(--ink);
+}
+.conn-note b {
+  font-family: var(--serif);
+  font-size: 1.3rem;
+  line-height: 1.2;
+}
+.conn-note span {
+  font-family: var(--serif);
+  color: var(--muted);
+  line-height: 1.5;
+}
+.conn-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--faint);
+  font-size: 0.8125rem;
+  margin: 6px 18px;
+}
+.conn-link i {
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+/* Settings: learning */
+.check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.9375rem;
+  margin-bottom: 10px;
+}
+.check input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--action);
+}
+.learn-summary ul {
+  margin: 4px 0 10px;
+  padding-left: 1.2em;
+  font-size: 0.9375rem;
+}
+.learn-label {
+  margin: 8px 0 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
 }

@@ -9,6 +9,16 @@ import { initSettings } from './ui/settings.js';
 import { initCompose } from './ui/compose.js';
 import { openSheet, toast, haptic, el, hasOverlay, closeTop } from './ui/overlay.js';
 import { VERSION } from './version.js';
+import * as dataSync from './sync.js';
+import * as outbox from './outbox.js';
+import { initStatus } from './ui/status.js';
+import { initSetup, shouldNudge, snoozeNudge } from './ui/setup.js';
+import { initShelf } from './ui/shelf.js';
+import { initNotes } from './ui/notes.js';
+import * as learn from './learn.js';
+import { markHighlightSeen } from './feed.js';
+import { linkedPairs } from './notes-index.js';
+import { createConnectionCard } from './ui/card.js';
 
 const $ = (id) => document.getElementById(id);
 const feedEl = $('feed');
@@ -16,9 +26,11 @@ const BATCH = 4;
 const SYNC_EVERY = 15 * 60 * 1000;
 
 const app = {
+  view: 'feed',
   queue: [],
   cursor: 0,
   states: new Map(),
+  reasons: new Map(),
   current: null,
   syncing: new Set(),
 };
@@ -54,7 +66,6 @@ function updateScopeLabel() {
   if (folder) parts.push(folder.split('/').pop());
   else if (src) parts.push(library.displayName(src));
   $('scope-label').textContent = parts.join(' in ') || 'Everything';
-  $('star-filter').setAttribute('aria-pressed', String(filter === 'starred'));
 }
 
 async function openScope() {
@@ -100,16 +111,32 @@ const hydrateObserver = new IntersectionObserver(
 );
 
 let dwell = null;
+// What you do with each card teaches the feed (learn.js) and moves review schedules on.
+let viewing = { card: null, since: 0 };
+function leaveCard(card) {
+  const ms = Date.now() - viewing.since;
+  if (!card?._item || !card._hydrated || card.classList.contains('card-error')) return;
+  if (ms < 1200) learn.signal(card._item, 'skip');
+  else if (ms > 8000) learn.signal(card._item, 'dwell');
+}
+
 const viewObserver = new IntersectionObserver(
   (entries) => {
     for (const e of entries) {
       if (!e.isIntersecting) continue;
-      app.current = e.target;
-      clearTimeout(dwell);
       const card = e.target;
+      if (viewing.card !== card) {
+        leaveCard(viewing.card);
+        viewing = { card, since: Date.now() };
+      }
+      app.current = card;
+      clearTimeout(dwell);
       if (card._item) {
         dwell = setTimeout(() => {
           store.markSeen(card._item).then((s) => app.states.set(card._item.key, s));
+          if (card._forcedCfi) markHighlightSeen(card._forcedCfi);
+          countToday();
+          maybeSuggestBreak(card);
         }, 1500);
       }
       const cards = feedEl.children;
@@ -120,10 +147,52 @@ const viewObserver = new IntersectionObserver(
   { root: feedEl, threshold: 0.6 }
 );
 
-function cardContext() {
-  return { states: app.states, mix: store.getPrefs().highlightMix, actions };
+/* ---------------- Healthy limits ---------------- */
+
+const todayKey = () => new Date().toISOString().slice(0, 10);
+function countToday() {
+  app.sessionSeen = (app.sessionSeen || 0) + 1;
+  const t = store.readJSON('readover.today', {});
+  store.writeJSON('readover.today', { day: todayKey(), n: t.day === todayKey() ? (t.n || 0) + 1 : 1 });
+}
+const seenToday = () => {
+  const t = store.readJSON('readover.today', {});
+  return t.day === todayKey() ? t.n || 0 : 0;
+};
+
+/** Optional (Settings → Reading): after N cards, a gentle card suggesting a break. */
+function maybeSuggestBreak(card) {
+  const limit = Number(store.getPrefs().breakAfter || 0);
+  if (!limit || app.breakShown || app.sessionSeen < limit) return;
+  app.breakShown = true;
+  const brk = messageCard(
+    `That's ${app.sessionSeen} cards.`,
+    'A good place to stop? Whatever you read today will come round again.',
+    [
+      button('Keep going', () => {
+        const next = brk.nextElementSibling;
+        next?.scrollIntoView({ behavior: 'smooth' });
+        setTimeout(() => brk.remove(), 400);
+      }, true),
+    ]
+  );
+  brk.classList.add('card-break');
+  card.after(brk);
 }
 
+/** The number on the home-screen icon: notes and highlights due for review today. */
+function updateBadge(count) {
+  try {
+    if (count > 0) navigator.setAppBadge?.(count);
+    else navigator.clearAppBadge?.();
+  } catch {}
+}
+
+function cardContext() {
+  return { states: app.states, reasons: app.reasons, forced: app.forced, mix: store.getPrefs().highlightMix, actions };
+}
+
+const CONNECTION_EVERY = 9;
 function appendBatch(n = BATCH) {
   if (app.cursor >= app.queue.length) return;
   const ctx = cardContext();
@@ -133,6 +202,12 @@ function appendBatch(n = BATCH) {
     feedEl.append(card);
     hydrateObserver.observe(card);
     viewObserver.observe(card);
+    // Now and then, two of your notes that link to each other.
+    if (app.cursor > 0 && app.cursor % CONNECTION_EVERY === CONNECTION_EVERY - 1 && app.pairs?.length) {
+      const conn = createConnectionCard(app.pairs.pop(), { openItem: (item) => openNoteItem(item) });
+      feedEl.append(conn);
+      viewObserver.observe(conn);
+    }
   }
   if (app.cursor >= app.queue.length) feedEl.append(endCard());
 }
@@ -158,19 +233,46 @@ function button(label, onclick, primary = false) {
 }
 
 function endCard() {
-  return messageCard('You have reached the end of this shuffle.', 'Everything in view has come round once. Shuffle again for a new order.', [
+  const n = seenToday();
+  const today = n > 1 ? ` You've revisited ${n} today.` : '';
+  return messageCard('You have reached the end of this shuffle.', `Everything in view has come round once.${today} Shuffle again for a new order, or write down something new.`, [
     button('Shuffle again', () => reload(), true),
+    button('Write a note', () => compose.open()),
   ]);
 }
 
+/** Shown once the on-device notebook starts to matter. */
+function nudgeCard() {
+  const card = messageCard(
+    'These notes only live in this browser.',
+    "If this browser's data is ever cleared, they're gone. A private GitHub repository holds them for free, and they'll follow you to any device.",
+    [
+      button('Keep them safe', () => setup.open(), true),
+      button('Not now', () => {
+        snoozeNudge();
+        const next = card.nextElementSibling;
+        next?.scrollIntoView();
+        setTimeout(() => card.remove(), 300);
+      }),
+    ]
+  );
+  card.classList.add('card-nudge');
+  return card;
+}
+
 async function emptyCard() {
-  const sources = store.getSources();
+  const sources = store.getSources().filter((s) => s.type !== 'device');
   const { filter, folder, scope } = store.getPrefs();
-  if (!sources.length) {
+  const deviceNotes = library.deviceSource() ? (await store.items.byIndex('sourceId', library.DEVICE_ID)).length : 0;
+  if (!sources.length && !deviceNotes) {
     return messageCard(
       'Your notes, one at a time.',
-      'Readover turns your Markdown notes, highlights and books into a full-screen feed, in a new order every time you open it. Old notes you had forgotten come back round.',
-      [button('Add a GitHub repo', () => settings.open(), true), button('Open a folder', () => addFolder())]
+      "Write down something you want to remember. Readover brings it back tomorrow, in a few days, then in a week, so it sticks. Already keep notes in GitHub or a folder? Connect them instead.",
+      [
+        button('Write your first note', () => compose.open(), true),
+        button('Connect GitHub', () => settings.open()),
+        button('Open a folder', () => addFolder()),
+      ]
     );
   }
   const inScope = (await store.items.all()).some((i) => scopeSourceIds().includes(i.sourceId));
@@ -194,10 +296,20 @@ async function reload() {
   const gen = ++generation;
   updateScopeLabel();
   const { folder, filter } = store.getPrefs();
-  const { queue, states } = await buildQueue({ sourceIds: scopeSourceIds(), folder, filter });
+  const [{ queue, states, reasons, forced, dueCount }, pairs] = await Promise.all([
+    buildQueue({ sourceIds: scopeSourceIds(), folder, filter }),
+    linkedPairs().catch(() => []),
+  ]);
   if (gen !== generation) return; // a newer reload started meanwhile
   app.queue = queue;
   app.states = states;
+  app.reasons = reasons;
+  app.forced = forced;
+  const scope = new Set(scopeSourceIds());
+  app.pairs = pairs
+    .filter((p) => scope.has(p.a.item.sourceId) && !states.get(p.a.item.key)?.hidden && !states.get(p.b.item.key)?.hidden)
+    .sort(() => Math.random() - 0.5);
+  updateBadge(dueCount);
   app.cursor = 0;
   clearTimeout(dwell);
   hydrateObserver.disconnect();
@@ -207,7 +319,13 @@ async function reload() {
   if (!queue.length) {
     const card = await emptyCard();
     if (gen === generation) feedEl.replaceChildren(card);
-  } else appendBatch();
+  } else {
+    appendBatch();
+    if (await shouldNudge()) {
+      const anchor = feedEl.children[2] || null; // after a couple of cards, not in the way
+      feedEl.insertBefore(nudgeCard(), anchor);
+    }
+  }
 }
 
 /** After a background sync: keep what's on screen, reshuffle what's still to come. */
@@ -216,9 +334,11 @@ async function refreshQueue() {
   if (!shown.size) return reload();
   const gen = generation;
   const { folder, filter } = store.getPrefs();
-  const { queue, states } = await buildQueue({ sourceIds: scopeSourceIds(), folder, filter });
+  const { queue, states, reasons, forced } = await buildQueue({ sourceIds: scopeSourceIds(), folder, filter });
   if (gen !== generation) return;
   app.states = states;
+  app.reasons = reasons;
+  app.forced = forced;
   app.queue = queue.filter((i) => !shown.has(i.key));
   app.cursor = 0;
   feedEl.querySelectorAll('.card-message').forEach((c) => c.remove());
@@ -250,6 +370,7 @@ const actions = {
     const on = !app.states.get(item.key)?.starred;
     const st = await library.setFlag(item, 'starred', on);
     app.states.set(item.key, st);
+    learn.signal(item, on ? 'star' : 'unstar');
     const btn = card.querySelector('.star-btn');
     btn?.setAttribute('aria-pressed', String(on));
     btn?.classList.remove('pop');
@@ -264,6 +385,7 @@ const actions = {
     const unhide = store.getPrefs().filter === 'hidden';
     const st = await library.setFlag(item, 'hidden', !unhide);
     app.states.set(item.key, st);
+    if (!unhide) learn.signal(item, 'hide');
     haptic(10);
     const next = card.nextElementSibling;
     const restore = () => {
@@ -291,60 +413,110 @@ const actions = {
     } catch {}
   },
 
-  async open(card) {
+  async open(card, extra) {
     const item = card._item;
     haptic(6);
-    if (item.kind === 'note') {
-      try {
-        await openNote(item, {
-          starred: Boolean(app.states.get(item.key)?.starred),
-          highlight: card._highlight,
-          onStar: () => actions.star(card),
-          onSaved: () => {
-            card._hydrated = false;
-            card.className = 'card';
-            hydrateCard(card);
-          },
-        });
-      } catch (err) {
-        toast(err.message);
-      }
-      return;
+    learn.signal(item, 'open');
+    if (item.kind === 'note') return openNoteItem(item, { card, highlight: card._highlight, section: extra?.section });
+    await openBookItem(item, card._bookTitle);
+  },
+
+  /** A highlight card saved from a book: open the book at that passage. */
+  async openAt(card, at) {
+    haptic(6);
+    const item = await resolveBookRef(at.book);
+    if (!item) {
+      toast("That book isn't in your libraries on this device, so here's the note instead");
+      return actions.open(card);
     }
-    toast('Opening…');
-    try {
-      const blob = await library.readBlob(item);
-      const title = card._bookTitle || item.name;
-      if (item.kind === 'pdf') {
-        const { openPdf } = await import('./viewers/pdf.js');
-        await openPdf(item, blob, title);
-      } else {
-        const { openEpub } = await import('./viewers/epub.js');
-        await openEpub(item, blob, title, { onHighlight: (h) => saveBookHighlight(item, title, h) });
-      }
-      document.getElementById('toast').classList.remove('show');
-    } catch (err) {
-      toast(err.message);
-    }
+    await openBookItem(item, null, at.at);
   },
 };
 
-/** Book highlights become markdown in your library: Highlights/<Book>.md */
-async function saveBookHighlight(item, bookTitle, { text, chapter }) {
-  const own = store.getSource(item.sourceId);
+/** Open a note in the reader, from anywhere (feed card, Notes, a link in another note). */
+async function openNoteItem(item, { card = null, highlight = null, section = '' } = {}) {
+  try {
+    await openNote(item, {
+      starred: Boolean((await store.state.get(item.key))?.starred),
+      highlight,
+      section,
+      onStar: async (on) => {
+        if (card) return actions.star(card);
+        const st = await library.setFlag(item, 'starred', on);
+        app.states.set(item.key, st);
+      },
+      onSaved: () => {
+        if (!card) return;
+        card._item = { ...card._item, ...item };
+        card.dataset.key = item.key;
+        card._hydrated = false;
+        card.className = 'card';
+        hydrateCard(card);
+      },
+      openItem: (other) => openNoteItem(other),
+      createNote: (title) => compose.open({ sourceId: item.sourceId, folder: item.folder, title }),
+    });
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+/** "gh:owner/repo|path" (as stored in highlight anchors) → this device's item. */
+async function resolveBookRef(ref) {
+  const i = ref.indexOf('|');
+  const src = store.getSources().find((s) => store.sourceKey(s) === ref.slice(0, i));
+  return src ? store.items.get(store.keyOf(src.id, ref.slice(i + 1))) : null;
+}
+
+async function openBookItem(item, knownTitle, at) {
+  toast('Opening…');
+  try {
+    const blob = await library.readBlob(item);
+    const title = knownTitle || (await store.thumbs.get(item.key))?.title || item.name.replace(/\.[^.]+$/, '');
+    const onHighlight = (h) => saveBookHighlight(item, title, h);
+    if (item.kind === 'pdf') {
+      const { openPdf } = await import('./viewers/pdf.js');
+      await openPdf(item, blob, title, { at, onHighlight });
+    } else {
+      const { openBook } = await import('./viewers/book.js');
+      await openBook(item, blob, title, { at, onHighlight });
+    }
+    document.getElementById('toast').classList.remove('show');
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+/**
+ * Book highlights become Markdown: Highlights/<Book>.md in your highlights home
+ * (Settings → Reading; by default the data-home repo, so they sit with your notes
+ * rather than in a books repo). Without GitHub they go to the on-device notebook.
+ */
+function highlightHome(book) {
+  const { highlightHome: chosen } = store.getPrefs();
   const sources = store.getSources();
-  const dest =
-    (library.canWrite(own) && own) ||
+  const pick = (id) => sources.find((s) => s.id === id && library.canWrite(s));
+  return (
+    pick(chosen) ||
+    dataSync.dataHome() ||
     sources.find((s) => s.type === 'github' && library.canWrite(s)) ||
-    sources.find((s) => library.canWrite(s));
-  if (!dest) throw new Error('Add a GitHub token or open a folder to keep highlights as notes.');
+    (library.canWrite(book) && book) ||
+    library.deviceSource(true)
+  );
+}
+
+async function saveBookHighlight(item, bookTitle, { text, comment, chapter, page, at }) {
+  const dest = highlightHome(store.getSource(item.sourceId));
   const safe = bookTitle.replace(/[\\/:*?"<>|#^[\]]+/g, '').trim().slice(0, 90) || 'Book';
   const path = `Highlights/${safe}.md`;
-  const date = new Date().toISOString().slice(0, 10);
-  const header = `---\ntitle: ${safe}\nsource: ${item.path}\n---\n\n# ${safe}\n\nHighlights saved from Readover.`;
-  const block = `> ${text}\n>\n> — ${chapter ? `${chapter}, ` : ''}${date}`;
+  const header = `---\ntitle: ${safe}\nsource: ${item.path}\n---\n\n# ${safe}`;
+  const where = [chapter, page ? `p. ${page}` : ''].filter(Boolean).join(', ') || new Date().toISOString().slice(0, 10);
+  const anchor = JSON.stringify({ book: `${store.sourceKey(store.getSource(item.sourceId))}|${item.path}`, at });
+  const quote = text.split(/\n+/).map((l) => `> ${l}`).join('\n');
+  const block = `${quote}\n>\n> — ${where}\n<!-- readover ${anchor} -->${comment ? `\n\n${comment}` : ''}`;
   await library.appendToFile(dest, path, header, block, `Readover: highlight from ${safe}`);
-  return library.displayName(dest);
+  // `file` lets the feed bring this highlight back in a day or so (feed.js).
+  return { where: dest.type === 'device' ? '' : library.displayName(dest), file: `${store.sourceKey(dest)}|${path}` };
 }
 
 /* ---------------- Sources & sync ---------------- */
@@ -471,9 +643,21 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (hasOverlay()) return;
+  if (e.key === '/') {
+    e.preventDefault();
+    showView('notes');
+    notesView.focusSearch();
+    return;
+  }
+  if (app.view !== 'feed') {
+    if (e.key.toLowerCase() === 'n') compose.open();
+    return;
+  }
   const card = app.current;
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const run = {
+    ArrowRight: () => card?._slideBy?.(1),
+    ArrowLeft: () => card?._slideBy?.(-1),
     ArrowDown: () => scrollBy(1),
     j: () => scrollBy(1),
     ArrowUp: () => scrollBy(-1),
@@ -520,8 +704,30 @@ window.addEventListener('gamepadconnected', () => {
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') library.flushPending();
-  else syncAll();
+  if (document.visibilityState === 'visible') syncAll();
+});
+
+/* ---------------- Data home sync results ---------------- */
+
+window.addEventListener('readover:sync', async (e) => {
+  const r = e.detail;
+  if (r.phase || !r.ok || !r.at) return;
+  if (r.prefsChanged) applyTheme();
+  if (r.librariesAdded || r.librariesRemoved) {
+    if (r.librariesAdded) toast(`Added ${r.librariesAdded} ${r.librariesAdded === 1 ? 'library' : 'libraries'} from your other devices`);
+    settings.refresh();
+    await syncAll(); // fetch file lists for the new libraries
+    await reload();
+  } else if (r.updated) {
+    await refreshQueue(); // favourites/hidden from another device apply to what's still to come
+  }
+});
+
+window.addEventListener('readover:conflict', (e) => {
+  const name = e.detail.path.split('/').pop().replace(/\.md$/i, '');
+  if (e.detail.kind === 'delete') toast(`“${name}” was changed elsewhere, so it wasn't deleted`);
+  else toast(`“${name}” was changed elsewhere, so your edit was kept as a separate copy`);
+  window.dispatchEvent(new CustomEvent('readover:notes-changed'));
 });
 
 /* ---------------- Boot ---------------- */
@@ -537,8 +743,16 @@ const settings = initSettings({
   reimport,
   sourcesChanged: () => reload(),
   applyTheme,
+  openSetup: () => setup.open(),
 });
 const compose = initCompose({ showFirst });
+const setup = initSetup({
+  afterConnect: async (src) => {
+    await syncSource(src, { userGesture: true, quiet: true });
+    settings.refresh();
+  },
+  afterMove: () => reload(),
+});
 
 $('brand').onclick = () => {
   reload();
@@ -546,17 +760,61 @@ $('brand').onclick = () => {
 };
 $('scope-btn').onclick = openScope;
 $('settings-btn').onclick = () => settings.open();
-$('star-filter').onclick = () => {
-  const { filter } = store.getPrefs();
-  store.setPrefs({ filter: filter === 'starred' ? 'all' : 'starred' });
-  reload();
-};
-$('app-version').textContent = VERSION === 'dev' ? '(development)' : VERSION.slice(0, 7);
+$('write-btn').onclick = () => compose.open();
+
+/* ---------------- Views: Feed and Shelf ---------------- */
+
+const shelf = initShelf({
+  openBook: (item) => openBookItem(item),
+  connect: () => settings.open(),
+});
+
+const notesView = initNotes({
+  openItem: (item) => openNoteItem(item),
+  compose: (presets) => compose.open(presets),
+});
+
+/** Three views: Feed (reading), Shelf (books), Notes (working on notes). */
+function showView(name) {
+  app.view = name;
+  feedEl.hidden = name !== 'feed';
+  $('shelf').hidden = name !== 'shelf';
+  $('notes').hidden = name !== 'notes';
+  $('scope-btn').hidden = name !== 'feed'; // "What to show" filters the feed
+  for (const v of ['feed', 'shelf', 'notes']) {
+    const tab = $(`tab-${v}`);
+    if (v === name) tab.setAttribute('aria-current', 'page');
+    else tab.removeAttribute('aria-current');
+  }
+  if (name === 'shelf') shelf.render();
+  if (name === 'notes') notesView.render();
+}
+$('tab-feed').onclick = () => (app.view === 'feed' ? reload() : showView('feed'));
+$('tab-shelf').onclick = () => showView('shelf');
+$('tab-notes').onclick = () => showView('notes');
+
+// A note deleted or moved: drop stale cards from the feed.
+window.addEventListener('readover:notes-changed', async () => {
+  for (const card of [...feedEl.querySelectorAll('.card[data-key]')]) {
+    if (!(await store.items.get(card.dataset.key))) card.remove();
+  }
+});
+let shelfTimer;
+window.addEventListener('readover:progress', () => {
+  clearTimeout(shelfTimer);
+  shelfTimer = setTimeout(() => app.view === 'shelf' && shelf.render(), 800);
+});
+$('app-version').textContent = VERSION;
 
 async function boot() {
   applyTheme();
   await store.migrateLegacy();
+  initStatus({ openSettings: () => settings.open() });
   await reload();
+  dataSync.ensureDataHome();
+  dataSync.startAutoSync();
+  dataSync.syncNow({ includeSeen: false });
+  outbox.kick(0);
   const hasItems = (await store.items.all()).length > 0;
   await syncAll({ force: !hasItems && store.getSources().length > 0 });
   showPermissionBanner();
@@ -564,19 +822,9 @@ async function boot() {
 }
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  const hadController = Boolean(navigator.serviceWorker.controller); // false on first install
+  // updateViaCache 'none': always check sw.js itself against the server.
   navigator.serviceWorker
-    .register('./sw.js')
-    .then((reg) => {
-      reg.addEventListener('updatefound', () => {
-        const sw = reg.installing;
-        sw?.addEventListener('statechange', () => {
-          if (sw.state === 'activated' && hadController) {
-            toast('Readover has been updated', { label: 'Reload', run: () => location.reload() });
-          }
-        });
-      });
-    })
+    .register('./sw.js', { updateViaCache: 'none' })
     .catch((err) => console.warn('Service worker not registered', err));
 }
 

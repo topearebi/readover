@@ -14,7 +14,7 @@
   <link rel="manifest" href="./manifest.json" />
   <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
-  <link rel="preload" href="./vendor/fonts/literata-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+  <link rel="preload" href="./vendor/literata-5.2.5/literata-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="./src/style.css" />
   <script>
     // Apply theme before first paint to avoid a flash.
@@ -38,6 +38,9 @@
       <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
       <symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
       <symbol id="i-pen" viewBox="0 0 24 24"><path d="M15 5l4 4L8 20H4v-4zM13 7l4 4"/></symbol>
+      <symbol id="i-cards" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="15" rx="2"/><path d="M8.5 3h7a2 2 0 0 1 2 2"/></symbol>
+      <symbol id="i-feed" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></symbol>
+      <symbol id="i-shelf" viewBox="0 0 24 24"><path d="M4 4h4v16H4zM10 4h4v16h-4zM16.5 4.5l3.8 1 -3.8 15-3.8-1z"/></symbol>
       <symbol id="i-marker" viewBox="0 0 24 24"><path d="M9 11l-5 5v4h4l5-5M9 11l6-6 4 4-6 6M9 11l4 4M14 20h7"/></symbol>
     </defs>
   </svg>
@@ -45,12 +48,13 @@
   <header class="topbar">
     <button id="brand" class="brand" title="Shuffle again (R)">Readover</button>
     <div class="topbar-actions">
+      <button id="sync-dot" class="sync-dot" hidden data-state="idle"><span></span></button>
       <button id="scope-btn" class="scope-chip" aria-haspopup="dialog">
         <span id="scope-label">Everything</span>
         <svg class="i i-sm"><use href="#i-down"/></svg>
       </button>
-      <button id="star-filter" class="icon-btn" aria-pressed="false" title="Favourites only">
-        <svg class="i"><use href="#i-star"/></svg><span class="sr">Favourites only</span>
+      <button id="write-btn" class="icon-btn" title="Write a note (N)">
+        <svg class="i"><use href="#i-pen"/></svg><span class="sr">Write a note</span>
       </button>
       <button id="settings-btn" class="icon-btn" title="Settings">
         <svg class="i"><use href="#i-gear"/></svg><span class="sr">Settings</span>
@@ -60,6 +64,14 @@
 
   <div id="banner" class="banner" hidden></div>
   <main id="feed" class="feed" tabindex="-1" aria-label="Reading feed"></main>
+  <section id="shelf" class="shelf" aria-label="Shelf" hidden></section>
+  <section id="notes" class="notes" aria-label="Notes" hidden></section>
+
+  <nav class="tabbar" aria-label="Views">
+    <button id="tab-feed" class="tab" aria-current="page"><svg class="i"><use href="#i-cards"/></svg><span>Feed</span></button>
+    <button id="tab-shelf" class="tab"><svg class="i"><use href="#i-shelf"/></svg><span>Shelf</span></button>
+    <button id="tab-notes" class="tab"><svg class="i"><use href="#i-feed"/></svg><span>Notes</span></button>
+  </nav>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <!-- What to show -->
@@ -132,6 +144,19 @@
         </div>
       </form>
 
+      <section class="settings-group" id="sync-group">
+        <h3>Sync between devices</h3>
+        <p class="hint">Favourites, hidden items, where you are in each book, what you've already seen, your libraries and your preferences are kept in a <code>.readover</code> folder in one repo. Open Readover anywhere with the same token and it picks up where you left off.</p>
+        <label class="field">Keep Readover's data in
+          <select id="data-home-select"></select>
+        </label>
+        <p id="sync-info" class="hint"></p>
+        <div id="outbox-list"></div>
+        <div class="row-actions">
+          <button id="sync-now-btn" class="btn">Sync now</button>
+        </div>
+      </section>
+
       <section class="settings-group">
         <h3>GitHub token</h3>
         <p class="hint">Public repos work without one. A token lets Readover read private repos, sync favourites across your devices, save highlights and edit notes. Create a <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained token</a> limited to your notes repos, with <b>Contents: read and write</b>. It is stored only in this browser.</p>
@@ -147,6 +172,16 @@
             <option value="dark">Dark</option>
           </select>
         </label>
+        <label class="field">Save book highlights to
+          <select id="hl-home-select"></select>
+        </label>
+        <label class="field">Suggest a break
+          <select id="break-select">
+            <option value="0">Never</option>
+            <option value="20">After 20 cards</option>
+            <option value="40">After 40 cards</option>
+          </select>
+        </label>
         <label class="field">When a note has highlights
           <select id="mix-select">
             <option value="0.8">Usually show one highlight</option>
@@ -154,6 +189,16 @@
             <option value="0">Always show the whole note</option>
           </select>
         </label>
+      </section>
+
+      <section class="settings-group" id="learn-group">
+        <h3>What the feed has learned</h3>
+        <p class="hint">Readover notices what you open, favourite, stay on, skip and hide, and shows a little more of those folders and libraries (never more than twice as often). It only learns on this device and fades slowly, so your tastes can change.</p>
+        <label class="check"><input type="checkbox" id="learn-toggle" /> Learn from what I read</label>
+        <div id="learn-summary" class="learn-summary"></div>
+        <div class="row-actions">
+          <button id="learn-reset" class="btn">Forget what it learned</button>
+        </div>
       </section>
 
       <section class="settings-group">
@@ -174,11 +219,59 @@
           <dt>X</dt><dd>Hide</dd>
           <dt>R</dt><dd>Shuffle again</dd>
           <dt>N</dt><dd>New note</dd>
+          <dt>/</dt><dd>Search notes</dd>
           <dt>Esc</dt><dd>Close</dd>
         </dl>
       </section>
       <p class="hint version">Readover <span id="app-version"></span></p>
     </div>
+  </dialog>
+
+  <!-- Keep notes safe on GitHub -->
+  <dialog id="setup-sheet" class="sheet sheet-tall" aria-labelledby="setup-title">
+    <form id="setup-form" class="sheet-inner">
+      <div class="sheet-head">
+        <h2 id="setup-title">Keep your notes safe</h2>
+        <button class="icon-btn" type="button" data-close aria-label="Close"><svg class="i"><use href="#i-close"/></svg></button>
+      </div>
+      <p class="setup-intro">Right now your notes live only in this browser. If its data is cleared, they're gone. On GitHub they become plain Markdown files in a private repository only you can see. GitHub is free, and your favourites and reading positions will follow you to any device.</p>
+
+      <div id="setup-new">
+        <ol class="setup-steps">
+          <li>
+            <h3>Create a private repository</h3>
+            <p>It's filled in for you: just press <b>Create repository</b>. Already have one for notes? Skip this.</p>
+            <a class="btn" id="setup-repo-link" target="_blank" rel="noopener">Create it on GitHub</a>
+          </li>
+          <li>
+            <h3>Create a token for Readover</h3>
+            <p>Also filled in. Under <b>Repository access</b>, choose <b>Only select repositories</b> and pick your notes repository. Then press <b>Generate token</b> and copy it.</p>
+            <a class="btn" id="setup-token-link" target="_blank" rel="noopener">Create a token</a>
+          </li>
+          <li>
+            <h3>Connect</h3>
+            <label class="field">Repository
+              <input name="repo" placeholder="yourname/notes" autocomplete="off" autocapitalize="off" spellcheck="false" />
+            </label>
+            <label class="field">Token
+              <input name="token" type="password" placeholder="github_pat_…" autocomplete="off" />
+            </label>
+          </li>
+        </ol>
+      </div>
+
+      <div id="setup-existing" hidden>
+        <label class="field">Move them to
+          <select name="dest"></select>
+        </label>
+      </div>
+
+      <label class="field">Put them in this folder
+        <input name="folder" placeholder="Top level" autocapitalize="off" spellcheck="false" />
+      </label>
+      <button class="btn btn-primary" type="submit" id="setup-submit">Connect and move my notes</button>
+      <p class="hint">Your token stays in this browser. Readover only talks to GitHub.</p>
+    </form>
   </dialog>
 
   <!-- New note -->
@@ -188,6 +281,12 @@
         <h2 id="compose-title">New note</h2>
         <button class="icon-btn" type="button" data-close aria-label="Close"><svg class="i"><use href="#i-close"/></svg></button>
       </div>
+      <label class="field">Title
+        <input name="title" required placeholder="What's it about?" />
+      </label>
+      <label class="field grow">Note
+        <textarea name="body" rows="10" placeholder="Write it the way you'd want to read it again. Markdown works, and a line starting with > becomes a highlight."></textarea>
+      </label>
       <div class="field-pair">
         <label class="field">Save to
           <select name="source" required></select>
@@ -197,12 +296,6 @@
           <datalist id="compose-folders"></datalist>
         </label>
       </div>
-      <label class="field">Title
-        <input name="title" required />
-      </label>
-      <label class="field grow">Note
-        <textarea name="body" rows="10" placeholder="Markdown works here"></textarea>
-      </label>
       <button class="btn btn-primary" type="submit">Save note</button>
     </form>
   </dialog>

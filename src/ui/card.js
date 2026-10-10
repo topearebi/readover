@@ -1,0 +1,350 @@
+// Feed cards: note, highlight, book. A card is created as a skeleton and hydrated
+// when it comes near the viewport, so the feed appears instantly.
+import { readText, readRelative } from '../library.js';
+import { parseNote, escapeHtml, renderMarkdown } from '../markdown.js';
+import { getCover } from '../covers.js';
+import { learnDate, memoryLine } from '../dates.js';
+import { progress, getSource } from '../store.js';
+import { el, icon } from './overlay.js';
+
+/** @param ctx { states: Map, mix: number, actions: { star, hide, share, openNote, openBook } } */
+export function createCard(item, ctx) {
+  const card = el('section', { class: 'card', 'data-key': item.key, 'aria-roledescription': 'card' });
+  card._item = item;
+  card._ctx = ctx;
+  card.append(el('div', { class: 'skeleton', 'aria-hidden': 'true' }, el('i'), el('i'), el('i'), el('i'), el('i')));
+  return card;
+}
+
+export async function hydrateCard(card) {
+  if (card._hydrated) return;
+  card._hydrated = true;
+  const item = card._item;
+  try {
+    if (item.kind === 'note') await renderNote(card, item);
+    else await renderBook(card, item);
+    const reason = card._ctx.reasons?.get(item.key);
+    if (reason) setReason(card, reason);
+    else if (item.kind === 'note' && card._note) {
+      // Dates found in the note (or its history) can make it a memory: "From 3 years ago".
+      learnDate(item, card._note).then((d) => {
+        const line = memoryLine(d);
+        if (line && !card.querySelector('.card-reason')) setReason(card, line);
+      });
+    }
+  } catch (err) {
+    console.warn('Card failed', item.path, err);
+    renderError(card, item, err);
+  }
+}
+
+function where(item) {
+  const src = getSource(item.sourceId);
+  const crumbs = item.folder ? item.folder.split('/') : [];
+  return el(
+    'div',
+    { class: 'card-where' },
+    el('span', {}, ...[src?.name || 'Library', ...crumbs].map((c) => el('span', { class: 'crumb' }, c)))
+  );
+}
+
+function rail(card, item) {
+  const { actions, states } = card._ctx;
+  const st = states.get(item.key);
+  const starred = Boolean(st?.starred);
+  const starBtn = el(
+    'button',
+    { class: 'star-btn', 'aria-pressed': String(starred), title: 'Favourite (S)', 'aria-label': 'Favourite' },
+    icon('star')
+  );
+  starBtn.onclick = (e) => {
+    e.stopPropagation();
+    actions.star(card);
+  };
+  const hideBtn = el('button', { title: 'Hide from feed (X)', 'aria-label': 'Hide from feed' }, icon('hide'));
+  hideBtn.onclick = (e) => {
+    e.stopPropagation();
+    actions.hide(card);
+  };
+  const shareBtn = el('button', { title: 'Share', 'aria-label': 'Share' }, icon('share'));
+  shareBtn.onclick = (e) => {
+    e.stopPropagation();
+    actions.share(card);
+  };
+  const openBtn = el('button', { class: 'open-btn', title: 'Open (Enter)', 'aria-label': 'Open' }, icon('open'));
+  openBtn.onclick = (e) => {
+    e.stopPropagation();
+    actions.open(card);
+  };
+  return el('div', { class: 'rail' }, starBtn, hideBtn, shareBtn, openBtn);
+}
+
+function setReason(card, text) {
+  card.querySelector('.card-body')?.prepend(el('p', { class: 'card-reason' }, text));
+}
+
+const normText = (s) => (s || '').replace(/[*_`=>]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+async function renderNote(card, item) {
+  const text = await readText(item);
+  const note = parseNote(text, item.path);
+  card._note = note;
+  const { mix } = card._ctx;
+  const forced = card._ctx.forced?.get(item.key); // a highlight the feed is bringing back
+
+  // Exports from other readers are always shown one highlight at a time.
+  const useHighlight = note.highlights.length > 0 && (forced || note.imported || Math.random() < mix);
+  card.replaceChildren();
+
+  if (useHighlight) {
+    const wanted = forced && note.highlights.find((x) => normText(x.text) === normText(forced.text));
+    const h = wanted || note.highlights[Math.floor(Math.random() * note.highlights.length)];
+    if (wanted) card._forcedCfi = forced.cfi;
+    card._highlight = h;
+    card.classList.add('card-highlight');
+    const html = renderMarkdown(h.text);
+    const quote = el('blockquote', { class: `hl-quote${h.text.length > 320 ? ' long' : ''}` });
+    quote.innerHTML = html;
+    // Wrap each paragraph's contents in the highlighter swipe
+    quote.querySelectorAll('p, li').forEach((p) => {
+      const span = el('span', { class: 'swipe' });
+      span.append(...p.childNodes);
+      p.append(span);
+    });
+    if (!quote.querySelector('.swipe')) {
+      const span = el('span', { class: 'swipe' });
+      span.append(...quote.childNodes);
+      quote.append(span);
+    }
+    // Highlights saved from a book open the book at that passage; others open the note.
+    const inBook = Boolean(h.at?.book);
+    const from = el(
+      'button',
+      { class: 'hl-from', title: inBook ? 'Open the book at this passage' : 'Open the note' },
+      el('b', {}, h.source || note.title),
+      inBook ? 'Open at this passage' : item.folder ? item.folder.replace(/\//g, ' / ') : getSource(item.sourceId)?.name || ''
+    );
+    from.onclick = () => (inBook ? card._ctx.actions.openAt(card, h.at) : card._ctx.actions.open(card));
+    card.append(
+      el(
+        'div',
+        { class: 'card-body' },
+        quote,
+        h.note ? el('p', { class: 'hl-note' }, h.note) : null,
+        h.comment ? el('p', { class: 'hl-comment' }, h.comment) : null,
+        from
+      ),
+      rail(card, item)
+    );
+    fitText(quote);
+  } else if (sectionsOf(note).length >= 3) {
+    renderSections(card, item, note);
+  } else {
+    card.classList.add('card-note');
+    const preview = el('div', { class: 'preview prose' });
+    preview.innerHTML = note.html;
+    const more = el('button', { class: 'more', hidden: true }, `Keep reading (${note.minutes} min)`);
+    more.onclick = () => card._ctx.actions.open(card);
+    const title = el('h2', { class: 'card-title' }, note.title);
+    const body = el('div', { class: 'card-body' }, where(item), title, preview, more);
+    card.append(body, rail(card, item));
+    resolveImages(preview, item);
+    requestAnimationFrame(() => {
+      if (preview.scrollHeight > preview.clientHeight + 4) {
+        preview.classList.add('clipped');
+        more.hidden = false;
+      }
+    });
+    preview.addEventListener('click', (e) => {
+      if (!e.target.closest('a')) card._ctx.actions.open(card);
+    });
+    title.addEventListener('click', () => card._ctx.actions.open(card));
+  }
+}
+
+/* ---------- Long notes: one section per slide ---------- */
+
+/** Split a note at its "## " headings. The part before the first heading counts if it has words. */
+export function sectionsOf(note) {
+  if (note.imported || note.words < 220) return [];
+  const parts = note.body.split(/^(?=##\s)/m).map((p) => p.trim()).filter(Boolean);
+  if (parts.length < 2) return [];
+  return parts.filter((p) => p.replace(/^##.*$/m, '').trim().split(/\s+/).length >= 8);
+}
+
+function renderSections(card, item, note) {
+  const sections = sectionsOf(note);
+  card.classList.add('card-note', 'card-sections');
+  // Start somewhere different each time, so a long note shows a new side of itself.
+  const start = Math.floor(Math.random() * sections.length);
+  const track = el('div', { class: 'slides', role: 'group', 'aria-roledescription': 'carousel', 'aria-label': `${note.title}, ${sections.length} sections` });
+  const slides = sections.map((md, i) => {
+    const slide = el('div', { class: 'slide prose', role: 'group', 'aria-roledescription': 'slide', 'aria-label': `${i + 1} of ${sections.length}` });
+    slide.innerHTML = renderMarkdown(md);
+    resolveImages(slide, item);
+    slide.addEventListener('click', (e) => {
+      if (!e.target.closest('a')) card._ctx.actions.open(card, { section: slide.querySelector('h2')?.textContent || '' });
+    });
+    return slide;
+  });
+  track.append(...slides);
+  const dots = el('div', { class: 'slide-dots', 'aria-hidden': 'true' }, ...sections.map(() => el('i')));
+  const counter = el('span', { class: 'slide-count' });
+  const prev = el('button', { class: 'slide-nav', 'aria-label': 'Previous section' }, '‹');
+  const next = el('button', { class: 'slide-nav', 'aria-label': 'Next section' }, '›');
+  const go = (i) => {
+    const target = slides[Math.max(0, Math.min(slides.length - 1, i))];
+    track.scrollTo({ left: target.offsetLeft - track.offsetLeft, behavior: 'smooth' });
+  };
+  const current = () => Math.round(track.scrollLeft / Math.max(1, track.clientWidth));
+  const update = () => {
+    const i = current();
+    card._slide = i;
+    [...dots.children].forEach((d, j) => d.classList.toggle('on', i === j));
+    counter.textContent = `${i + 1} of ${sections.length}`;
+    prev.disabled = i === 0;
+    next.disabled = i === sections.length - 1;
+  };
+  track.addEventListener('scroll', () => requestAnimationFrame(update), { passive: true });
+  prev.onclick = () => go(current() - 1);
+  next.onclick = () => go(current() + 1);
+  card._slideBy = (d) => go(current() + d);
+
+  const title = el('h2', { class: 'card-title' }, note.title);
+  title.addEventListener('click', () => card._ctx.actions.open(card));
+  card.append(
+    el('div', { class: 'card-body' }, where(item), title, track, el('div', { class: 'slide-bar' }, prev, dots, counter, next)),
+    rail(card, item)
+  );
+  requestAnimationFrame(() => {
+    track.scrollLeft = slides[start].offsetLeft - track.offsetLeft;
+    update();
+  });
+}
+
+/* ---------- Connections: two notes that link to each other ---------- */
+
+export function createConnectionCard(pair, actions) {
+  const side = (e) => {
+    const b = el('button', { class: 'conn-note' }, el('b', {}, e.title), el('span', {}, e.excerpt));
+    b.onclick = () => actions.openItem(e.item);
+    return b;
+  };
+  return el(
+    'section',
+    { class: 'card card-connection' },
+    el(
+      'div',
+      { class: 'card-body' },
+      el('p', { class: 'card-reason' }, 'Connected'),
+      side(pair.a),
+      el('div', { class: 'conn-link', 'aria-hidden': 'true' }, el('i'), 'links to', el('i')),
+      side(pair.b)
+    )
+  );
+}
+
+/** Shrink very long highlights until they fit the card. */
+function fitText(node) {
+  requestAnimationFrame(() => {
+    let size = parseFloat(getComputedStyle(node).fontSize);
+    let guard = 12;
+    while (node.scrollHeight > node.clientHeight + 2 && size > 15 && guard--) {
+      size *= 0.9;
+      node.style.fontSize = `${size}px`;
+    }
+  });
+}
+
+async function renderBook(card, item) {
+  card.classList.add('card-book');
+  const prog = await progress.get(item.key);
+  const pct = prog ? Math.round((prog.pct || 0) * 100) : 0;
+  const fallbackTitle = item.name.replace(/\.(pdf|epub)$/i, '').replace(/[_]+/g, ' ');
+
+  const coverBtn = el('button', { class: 'cover', 'aria-label': `Open ${fallbackTitle}` }, plainCover(fallbackTitle, ''));
+  const titleEl = el('h2', { class: 'book-title' }, fallbackTitle);
+  const authorEl = el('p', { class: 'book-author' }, item.name.split('.').pop().toUpperCase());
+  const readBtn = el('button', { class: 'btn btn-primary btn-read' }, pct > 0 ? `Continue at ${pct}%` : 'Start reading');
+  const open = () => card._ctx.actions.open(card);
+  coverBtn.onclick = open;
+  readBtn.onclick = open;
+
+  card.replaceChildren(
+    el(
+      'div',
+      { class: 'card-body' },
+      coverBtn,
+      titleEl,
+      authorEl,
+      pct > 0 ? el('div', { class: 'book-progress' }, el('i', { style: `width:${pct}%` })) : null,
+      readBtn
+    ),
+    rail(card, item)
+  );
+
+  try {
+    const meta = await getCover(item);
+    if (meta.title) titleEl.textContent = meta.title;
+    if (meta.author) authorEl.textContent = meta.author;
+    card._bookTitle = meta.title || fallbackTitle;
+    if (meta.blob) {
+      const img = el('img', { alt: '', src: URL.createObjectURL(meta.blob) });
+      coverBtn.replaceChildren(img);
+    } else {
+      coverBtn.replaceChildren(plainCover(meta.title || fallbackTitle, meta.author));
+    }
+  } catch (err) {
+    console.warn('Cover unavailable', item.path, err.message);
+  }
+}
+
+function plainCover(title, author) {
+  let h = 0;
+  for (const c of title) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  const tones = ['#2e5b4f', '#5a4632', '#3b4a63', '#6b3b3b', '#4a5530', '#40384f'];
+  return el(
+    'div',
+    { class: 'cover-plain', style: `--tone:${tones[h % tones.length]}` },
+    el('strong', {}, title),
+    el('span', {}, author || '')
+  );
+}
+
+function renderError(card, item, err) {
+  card.classList.add('card-message', 'card-error');
+  const retry = el('button', { class: 'btn' }, 'Try again');
+  retry.onclick = () => {
+    card._hydrated = false;
+    card.classList.remove('card-message', 'card-error');
+    hydrateCard(card);
+  };
+  card.replaceChildren(
+    el(
+      'div',
+      { class: 'card-body' },
+      where(item),
+      el('h2', {}, item.name),
+      el('p', { class: 'error-text' }, err.message || 'This item could not be loaded.'),
+      el('div', { class: 'row-actions' }, retry)
+    ),
+    rail(card, item)
+  );
+}
+
+/** Notes often embed images with relative paths; load them from the same source. */
+export function resolveImages(container, item) {
+  container.querySelectorAll('img').forEach(async (img) => {
+    const src = img.getAttribute('src') || '';
+    if (!src || /^(https?:|data:|blob:|\/\/)/i.test(src)) return;
+    img.removeAttribute('src');
+    try {
+      const blob = await readRelative(item, src.split('#')[0].split('?')[0]);
+      img.src = URL.createObjectURL(blob);
+    } catch {
+      img.alt = img.alt || src;
+    }
+  });
+}
+
+export { escapeHtml };

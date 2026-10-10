@@ -1,2 +1,2 @@
-// Replaced with the commit SHA by .github/workflows/pages.yml at deploy time.
-export const VERSION = 'dev';
+// Shown in Settings. Purely a label: caching does not depend on it.
+export const VERSION = '3.0';
