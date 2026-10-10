@@ -1,777 +1,583 @@
-// src/app.js
-import {
-  initVaultDB,
-  getActiveDB,
-  getDBForSource,
-  getDeckQueue,
-  getAllSourcesDeckQueue,
-  markSeen,
-  toggleStar,
-  deleteVaultDB,
-  getCachedContent,
-  getCachedThumbnail,
-} from './db.js';
+// Readover — app controller: feed, actions, sync orchestration.
+import * as store from './store.js';
+import * as library from './library.js';
+import * as local from './sources/local.js';
+import { buildQueue, foldersFor } from './feed.js';
+import { createCard, hydrateCard } from './ui/card.js';
+import { openNote } from './ui/reader.js';
+import { initSettings } from './ui/settings.js';
+import { initCompose } from './ui/compose.js';
+import { openSheet, toast, haptic, el, hasOverlay, closeTop } from './ui/overlay.js';
+import { VERSION } from './version.js';
 
-import {
-  getVaultProfiles,
-  getActiveVaultId,
-  setActiveVaultId,
-  saveVaultProfile,
-  deleteVaultProfile,
-  getGlobalToken,
-  setGlobalToken,
-  syncRepoManifest,
-  fetchNoteContent,
-  fetchBinaryBlob,
-  saveNoteFile,
-  preloadBatchContent,
-} from './github.js';
+const $ = (id) => document.getElementById(id);
+const feedEl = $('feed');
+const BATCH = 4;
+const SYNC_EVERY = 15 * 60 * 1000;
 
-import {
-  getLocalProfiles,
-  saveLocalProfile,
-  deleteLocalProfile,
-  pickLocalDirectory,
-  scanLocalDirectory,
-  getLocalFileBlob,
-  indexFallbackDirectory,
-} from './local-fs.js';
+const app = {
+  queue: [],
+  cursor: 0,
+  states: new Map(),
+  current: null,
+  syncing: new Set(),
+};
 
-import { parseMarkdownToCard } from './parser.js';
-import { createCardElement } from './components/card.js';
-import { extractPdfCover } from './parsers/pdf-cover.js';
-import { extractEpubCover } from './parsers/epub-cover.js';
-import { openPdfViewer } from './viewers/pdf-viewer.js';
-import { openEpubViewer } from './viewers/epub-viewer.js';
+/* ---------------- Theme ---------------- */
 
-class AppController {
-  constructor() {
-    this.activeSourceId = 'ALL_SOURCES';
-    this.activeFolder = 'ALL';
-    this.mediaFilter = 'all'; // 'all' | 'starred'
-    this.isLoading = false;
-    this.hasMore = true;
-    this.currentSourceType = 'aggregate'; // 'aggregate' | 'github' | 'local'
+function applyTheme() {
+  const { theme } = store.getPrefs();
+  if (theme === 'system') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  const paper = getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
+    if (theme === 'system') m.setAttribute('content', m.media.includes('dark') ? '#141816' : '#e8ebe3');
+    else m.setAttribute('content', paper);
+  });
+}
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
 
-    this.viewport = document.getElementById('feed-viewport');
-    this.statusEl = document.getElementById('status-indicator');
+/* ---------------- Scope ---------------- */
 
-    this.initTheme();
-    this.initElements();
-    this.initObserver();
-    this.bindEvents();
-    this.bindKeyboardShortcuts();
-    this.startGamepadLoop();
-    this.boot();
-  }
+function scopeSourceIds() {
+  const { scope } = store.getPrefs();
+  const all = store.getSources().map((s) => s.id);
+  return scope === 'all' || !all.includes(scope) ? all : [scope];
+}
 
-  initTheme() {
-    const savedTheme = localStorage.getItem('readover_theme') || 'dark';
-    this.setTheme(savedTheme);
-  }
+function updateScopeLabel() {
+  const { scope, folder, filter } = store.getPrefs();
+  const src = store.getSource(scope);
+  const parts = [];
+  const f = { notes: 'Notes', books: 'Books', starred: 'Favourites', hidden: 'Hidden' }[filter];
+  if (f) parts.push(f);
+  if (folder) parts.push(folder.split('/').pop());
+  else if (src) parts.push(library.displayName(src));
+  $('scope-label').textContent = parts.join(' in ') || 'Everything';
+  $('star-filter').setAttribute('aria-pressed', String(filter === 'starred'));
+}
 
-  setTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem('readover_theme', theme);
-    const themeBtn = document.getElementById('theme-btn');
-    if (themeBtn) {
-      themeBtn.textContent = theme === 'light' ? '🌙' : '☀️';
-    }
-    const metaTheme = document.querySelector('meta[name="theme-color"]');
-    if (metaTheme) {
-      metaTheme.setAttribute('content', theme === 'light' ? '#f8f7fc' : '#110f17');
-    }
-  }
+async function openScope() {
+  const sheet = $('scope-sheet');
+  const prefs = store.getPrefs();
+  const sources = store.getSources();
+  const srcSel = $('scope-source');
+  const folderSel = $('scope-folder');
+  srcSel.replaceChildren(
+    el('option', { value: 'all' }, 'All libraries'),
+    ...sources.map((s) => el('option', { value: s.id }, library.displayName(s)))
+  );
+  srcSel.value = sources.some((s) => s.id === prefs.scope) ? prefs.scope : 'all';
+  const allItems = await store.items.all();
+  const fillFolders = (keep) => {
+    const ids = srcSel.value === 'all' ? sources.map((s) => s.id) : [srcSel.value];
+    const folders = foldersFor(allItems, ids);
+    folderSel.replaceChildren(
+      el('option', { value: '' }, 'All folders'),
+      ...folders.map((f) => el('option', { value: f }, `${' '.repeat(f.split('/').length - 1)}${f.split('/').pop()}`))
+    );
+    folderSel.value = folders.includes(keep) ? keep : '';
+  };
+  fillFolders(prefs.folder);
+  srcSel.onchange = () => fillFolders('');
+  sheet.querySelector(`input[name=filter][value="${prefs.filter}"]`).checked = true;
 
-  toggleTheme() {
-    const current = document.documentElement.getAttribute('data-theme') || 'dark';
-    this.setTheme(current === 'light' ? 'dark' : 'light');
-    if ('vibrate' in navigator) navigator.vibrate(8);
-  }
+  const result = await openSheet(sheet);
+  if (result !== 'apply') return;
+  store.setPrefs({
+    scope: srcSel.value,
+    folder: folderSel.value,
+    filter: sheet.querySelector('input[name=filter]:checked').value,
+  });
+  reload();
+}
 
-  initElements() {
-    this.sourceSelect = document.getElementById('source-select');
-    this.folderSelect = document.getElementById('folder-select');
-    this.settingsModal = document.getElementById('settings-modal');
-    this.createModal = document.getElementById('create-modal');
-    this.sourceListEl = document.getElementById('source-list');
+/* ---------------- Feed ---------------- */
 
-    this.filterPills = document.querySelectorAll('.filter-pill');
+const hydrateObserver = new IntersectionObserver(
+  (entries) => entries.forEach((e) => e.isIntersecting && hydrateCard(e.target)),
+  { root: feedEl, rootMargin: '120% 0px' }
+);
 
-    this.globalTokenInput = document.getElementById('cfg-global-token');
-    this.globalTokenStatus = document.getElementById('global-token-status');
-
-    this.fabCreateBtn = document.getElementById('fab-create-btn');
-    this.confirmCreateBtn = document.getElementById('confirm-create-btn');
-    this.newNotePathInput = document.getElementById('new-note-path');
-    this.newNoteContentInput = document.getElementById('new-note-content');
-
-    this.openLocalFolderBtn = document.getElementById('open-local-folder-btn');
-    this.legacyFolderInput = document.getElementById('legacy-folder-input');
-  }
-
-  initObserver() {
-    this.observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            const cardEl = entry.target;
-            const path = cardEl.dataset.path;
-            const sourceId = cardEl.dataset.sourceId;
-            if (path) {
-              const targetDb = sourceId ? getDBForSource(sourceId) : null;
-              markSeen(path, targetDb);
-            }
-
-            const allCards = this.viewport.querySelectorAll('.snap-card');
-            const currentIndex = Array.from(allCards).indexOf(cardEl);
-            if (currentIndex >= allCards.length - 3 && !this.isLoading && this.hasMore) {
-              this.loadMoreCards();
-            }
-          }
-        });
-      },
-      {
-        root: this.viewport,
-        threshold: 0.6,
+let dwell = null;
+const viewObserver = new IntersectionObserver(
+  (entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      app.current = e.target;
+      clearTimeout(dwell);
+      const card = e.target;
+      if (card._item) {
+        dwell = setTimeout(() => {
+          store.markSeen(card._item).then((s) => app.states.set(card._item.key, s));
+        }, 1500);
       }
+      const cards = feedEl.children;
+      const idx = Array.prototype.indexOf.call(cards, card);
+      if (idx >= cards.length - 3) appendBatch();
+    }
+  },
+  { root: feedEl, threshold: 0.6 }
+);
+
+function cardContext() {
+  return { states: app.states, mix: store.getPrefs().highlightMix, actions };
+}
+
+function appendBatch(n = BATCH) {
+  if (app.cursor >= app.queue.length) return;
+  const ctx = cardContext();
+  const end = Math.min(app.cursor + n, app.queue.length);
+  for (; app.cursor < end; app.cursor++) {
+    const card = createCard(app.queue[app.cursor], ctx);
+    feedEl.append(card);
+    hydrateObserver.observe(card);
+    viewObserver.observe(card);
+  }
+  if (app.cursor >= app.queue.length) feedEl.append(endCard());
+}
+
+function messageCard(title, text, buttons = []) {
+  const card = el(
+    'section',
+    { class: 'card card-message' },
+    el(
+      'div',
+      { class: 'card-body' },
+      el('h2', {}, title),
+      text ? el('p', {}, text) : null,
+      buttons.length ? el('div', { class: 'row-actions' }, ...buttons) : null
+    )
+  );
+  viewObserver.observe(card);
+  return card;
+}
+
+function button(label, onclick, primary = false) {
+  return el('button', { class: `btn${primary ? ' btn-primary' : ''}`, onclick }, label);
+}
+
+function endCard() {
+  return messageCard('You have reached the end of this shuffle.', 'Everything in view has come round once. Shuffle again for a new order.', [
+    button('Shuffle again', () => reload(), true),
+  ]);
+}
+
+async function emptyCard() {
+  const sources = store.getSources();
+  const { filter, folder, scope } = store.getPrefs();
+  if (!sources.length) {
+    return messageCard(
+      'Your notes, one at a time.',
+      'Readover turns your Markdown notes, highlights and books into a full-screen feed, in a new order every time you open it. Old notes you had forgotten come back round.',
+      [button('Add a GitHub repo', () => settings.open(), true), button('Open a folder', () => addFolder())]
     );
   }
-
-  bindEvents() {
-    document.getElementById('theme-btn').addEventListener('click', () => this.toggleTheme());
-    document.getElementById('settings-btn').addEventListener('click', () => this.openSettings());
-    document.getElementById('sync-btn').addEventListener('click', () => this.triggerSync());
-
-    this.sourceSelect.addEventListener('change', async (e) => {
-      const selectedId = e.target.value;
-      if (selectedId === '__NEW__') {
-        this.openSettings();
-        return;
-      }
-      await this.switchSource(selectedId);
-    });
-
-    this.folderSelect.addEventListener('change', (e) => {
-      this.activeFolder = e.target.value;
-      this.reloadFeed();
-    });
-
-    this.filterPills.forEach((pill) => {
-      pill.addEventListener('click', () => {
-        this.filterPills.forEach((p) => p.classList.remove('active'));
-        pill.classList.add('active');
-        this.mediaFilter = pill.dataset.filter;
-        this.reloadFeed();
-      });
-    });
-
-    this.openLocalFolderBtn.addEventListener('click', async () => {
-      try {
-        const { profile } = await pickLocalDirectory();
-        this.settingsModal.classList.remove('open');
-        this.renderSourceDropdown();
-        await this.switchSource(profile.id);
-        await this.triggerSync();
-      } catch (err) {
-        if (err.message === 'NATIVE_PICKER_UNSUPPORTED') {
-          this.legacyFolderInput.click();
-        } else if (err.name !== 'AbortError') {
-          alert(`Directory access failed: ${err.message}`);
-        }
-      }
-    });
-
-    this.legacyFolderInput.addEventListener('change', async (e) => {
-      if (e.target.files.length === 0) return;
-      const profileId = `local_fallback_${Date.now()}`;
-      const profile = { id: profileId, name: 'Local Import', type: 'local' };
-      saveLocalProfile(profile);
-      this.settingsModal.classList.remove('open');
-      this.renderSourceDropdown();
-      await this.switchSource(profile.id);
-
-      this.statusEl.textContent = 'Indexing files...';
-      const folders = await indexFallbackDirectory(e.target.files, (m) => (this.statusEl.textContent = m));
-      await this.populateFolders(folders);
-      this.reloadFeed();
-    });
-
-    this.fabCreateBtn.addEventListener('click', () => {
-      if (this.activeSourceId === 'ALL_SOURCES') {
-        const sources = this.getAllSources().filter((s) => s.type === 'github');
-        if (sources.length === 0) {
-          alert('Connect a GitHub vault in Settings to author new notes.');
-          return;
-        }
-      }
-      const activeFolder = this.activeFolder !== 'ALL' ? `${this.activeFolder}/` : '';
-      this.newNotePathInput.value = activeFolder;
-      this.newNoteContentInput.value = '';
-      this.createModal.classList.add('open');
-      this.newNotePathInput.focus();
-    });
-
-    this.confirmCreateBtn.addEventListener('click', () => this.handleCreateNote());
-
-    this.globalTokenInput.addEventListener('change', (e) => {
-      setGlobalToken(e.target.value);
-      this.updateGlobalTokenBadge();
-    });
-
-    document.getElementById('add-vault-btn').addEventListener('click', () => this.clearVaultForm());
-    document.getElementById('save-vault-btn').addEventListener('click', () => this.saveCurrentVaultForm());
-
-    document.querySelectorAll('.modal-close').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
-        e.target.closest('.modal').classList.remove('open');
-      });
-    });
+  const inScope = (await store.items.all()).some((i) => scopeSourceIds().includes(i.sourceId));
+  if (!inScope) {
+    return messageCard('Nothing synced yet.', 'Sync to fetch the list of files from your libraries.', [
+      button('Sync now', () => syncAll({ force: true, userGesture: true }), true),
+    ]);
   }
+  const reset = button('Show everything', () => {
+    store.setPrefs({ filter: 'all', folder: '', scope: 'all' });
+    reload();
+  });
+  if (filter === 'starred') return messageCard('No favourites here yet.', 'Tap the star on anything worth coming back to.', [reset]);
+  if (filter === 'hidden') return messageCard('Nothing hidden.', 'Items you hide from the feed are listed here so you can bring them back.', [reset]);
+  if (folder || scope !== 'all' || filter !== 'all') return messageCard('Nothing matches this view.', 'Try a different folder or type.', [reset]);
+  return messageCard('No readable files found.', 'Readover reads .md, .txt, .pdf and .epub files.', [reset]);
+}
 
-  bindKeyboardShortcuts() {
-    window.addEventListener('keydown', (e) => {
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+let generation = 0;
+async function reload() {
+  const gen = ++generation;
+  updateScopeLabel();
+  const { folder, filter } = store.getPrefs();
+  const { queue, states } = await buildQueue({ sourceIds: scopeSourceIds(), folder, filter });
+  if (gen !== generation) return; // a newer reload started meanwhile
+  app.queue = queue;
+  app.states = states;
+  app.cursor = 0;
+  clearTimeout(dwell);
+  hydrateObserver.disconnect();
+  viewObserver.disconnect();
+  feedEl.replaceChildren();
+  feedEl.scrollTop = 0;
+  if (!queue.length) {
+    const card = await emptyCard();
+    if (gen === generation) feedEl.replaceChildren(card);
+  } else appendBatch();
+}
 
-      const openModal = document.querySelector('.modal.open, .reader-modal.open');
-      if (e.key === 'Escape') {
-        if (openModal) openModal.classList.remove('open');
-        return;
-      }
+/** After a background sync: keep what's on screen, reshuffle what's still to come. */
+async function refreshQueue() {
+  const shown = new Set([...feedEl.children].map((c) => c.dataset.key).filter(Boolean));
+  if (!shown.size) return reload();
+  const gen = generation;
+  const { folder, filter } = store.getPrefs();
+  const { queue, states } = await buildQueue({ sourceIds: scopeSourceIds(), folder, filter });
+  if (gen !== generation) return;
+  app.states = states;
+  app.queue = queue.filter((i) => !shown.has(i.key));
+  app.cursor = 0;
+  feedEl.querySelectorAll('.card-message').forEach((c) => c.remove());
+  appendBatch();
+}
 
-      if (openModal) return;
+function showFirst(item) {
+  const card = createCard(item, cardContext());
+  const anchor = app.current || feedEl.firstElementChild;
+  feedEl.insertBefore(card, anchor);
+  if (anchor && !anchor.dataset.key) anchor.remove(); // replace an empty-state card
+  hydrateObserver.observe(card);
+  viewObserver.observe(card);
+  card.scrollIntoView();
+}
 
-      const currentCard = this.getCurrentVisibleCard();
+function scrollBy(dir) {
+  const cards = [...feedEl.children];
+  const idx = cards.indexOf(app.current);
+  const target = cards[Math.max(0, idx + dir)];
+  target?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+}
 
-      switch (e.key) {
-        case 'ArrowDown':
-        case 'j':
-        case 'J':
-          e.preventDefault();
-          this.scrollToCard(1);
-          break;
-        case 'ArrowUp':
-        case 'k':
-        case 'K':
-          e.preventDefault();
-          this.scrollToCard(-1);
-          break;
-        case 's':
-        case 'S':
-          e.preventDefault();
-          if (currentCard) currentCard.querySelector('.star-btn')?.click();
-          break;
-        case 'c':
-        case 'C':
-          e.preventDefault();
-          this.fabCreateBtn.click();
-          break;
-        case ' ':
-        case 'Enter':
-          e.preventDefault();
-          if (currentCard) currentCard.querySelector('.expand-btn')?.click();
-          break;
-      }
-    });
-  }
+/* ---------------- Card actions ---------------- */
 
-  startGamepadLoop() {
-    let lastButtonState = {};
+const actions = {
+  async star(card) {
+    const item = card._item;
+    const on = !app.states.get(item.key)?.starred;
+    const st = await library.setFlag(item, 'starred', on);
+    app.states.set(item.key, st);
+    const btn = card.querySelector('.star-btn');
+    btn?.setAttribute('aria-pressed', String(on));
+    btn?.classList.remove('pop');
+    void btn?.offsetWidth;
+    if (on) btn?.classList.add('pop');
+    haptic(on ? [8, 30, 8] : 6);
+    return on;
+  },
 
-    const poll = () => {
-      const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
-      const gp = gamepads[0];
-
-      if (gp) {
-        const isPressed = (btnIndex) => gp.buttons[btnIndex] && gp.buttons[btnIndex].pressed;
-        const currentCard = this.getCurrentVisibleCard();
-        const activeModal = document.querySelector('.reader-modal.open');
-
-        if ((isPressed(13) || gp.axes[1] > 0.6) && !lastButtonState.down) {
-          if (!activeModal) this.scrollToCard(1);
-        }
-        if ((isPressed(12) || gp.axes[1] < -0.6) && !lastButtonState.up) {
-          if (!activeModal) this.scrollToCard(-1);
-        }
-        if (isPressed(0) && !lastButtonState.btnA) {
-          if (!activeModal && currentCard) currentCard.querySelector('.expand-btn')?.click();
-        }
-        if (isPressed(3) && !lastButtonState.btnY) {
-          if (!activeModal && currentCard) currentCard.querySelector('.star-btn')?.click();
-        }
-        if (isPressed(1) && !lastButtonState.btnB) {
-          if (activeModal) activeModal.classList.remove('open');
-        }
-
-        lastButtonState = {
-          down: isPressed(13) || gp.axes[1] > 0.6,
-          up: isPressed(12) || gp.axes[1] < -0.6,
-          btnA: isPressed(0),
-          btnY: isPressed(3),
-          btnB: isPressed(1),
-        };
-      }
-
-      requestAnimationFrame(poll);
+  async hide(card) {
+    const item = card._item;
+    const unhide = store.getPrefs().filter === 'hidden';
+    const st = await library.setFlag(item, 'hidden', !unhide);
+    app.states.set(item.key, st);
+    haptic(10);
+    const next = card.nextElementSibling;
+    const restore = () => {
+      library.setFlag(item, 'hidden', unhide).then((s) => app.states.set(item.key, s));
+      feedEl.insertBefore(card, next && next.isConnected ? next : null);
+      card.scrollIntoView();
     };
+    (next || card.previousElementSibling)?.scrollIntoView();
+    setTimeout(() => card.remove(), 350);
+    toast(unhide ? 'Back in your feed' : 'Hidden from your feed', { label: 'Undo', run: restore });
+  },
 
-    requestAnimationFrame(poll);
-  }
-
-  getCurrentVisibleCard() {
-    const cards = Array.from(this.viewport.querySelectorAll('.snap-card'));
-    const viewCenter = this.viewport.scrollTop + this.viewport.clientHeight / 2;
-
-    return cards.find((card) => {
-      const top = card.offsetTop;
-      const bottom = top + card.clientHeight;
-      return viewCenter >= top && viewCenter <= bottom;
-    });
-  }
-
-  scrollToCard(direction = 1) {
-    const current = this.getCurrentVisibleCard();
-    if (!current) return;
-    const cards = Array.from(this.viewport.querySelectorAll('.snap-card'));
-    const idx = cards.indexOf(current);
-    const target = cards[idx + direction];
-    if (target) {
-      target.scrollIntoView({ behavior: 'smooth' });
-    }
-  }
-
-  async boot() {
-    const sources = this.getAllSources();
-    if (sources.length === 0) {
-      this.openSettings();
-      return;
-    }
-
-    const savedActiveId = getActiveVaultId() || 'ALL_SOURCES';
-    this.renderSourceDropdown();
-    await this.switchSource(savedActiveId);
-  }
-
-  getAllSources() {
-    const githubs = getVaultProfiles().map((p) => ({ ...p, type: 'github' }));
-    const locals = getLocalProfiles().map((p) => ({ ...p, type: 'local' }));
-    return [...githubs, ...locals];
-  }
-
-  renderSourceDropdown() {
-    const sources = this.getAllSources();
-    this.sourceSelect.innerHTML = '';
-
-    // Root Aggregated Entry
-    const allOpt = document.createElement('option');
-    allOpt.value = 'ALL_SOURCES';
-    allOpt.textContent = '🌟 All Sources';
-    if (this.activeSourceId === 'ALL_SOURCES') allOpt.selected = true;
-    this.sourceSelect.appendChild(allOpt);
-
-    // Individual Sources
-    sources.forEach((s) => {
-      const opt = document.createElement('option');
-      opt.value = s.id;
-      opt.textContent = `${s.type === 'local' ? '📁 ' : '☁️ '}${s.name || s.repo}`;
-      if (s.id === this.activeSourceId) opt.selected = true;
-      this.sourceSelect.appendChild(opt);
-    });
-
-    const addOpt = document.createElement('option');
-    addOpt.value = '__NEW__';
-    addOpt.textContent = '+ Add Source...';
-    this.sourceSelect.appendChild(addOpt);
-  }
-
-  async switchSource(sourceId) {
-    this.activeSourceId = sourceId;
-    setActiveVaultId(sourceId);
-
-    const sources = this.getAllSources();
-
-    if (sourceId === 'ALL_SOURCES') {
-      this.currentSourceType = 'aggregate';
-      this.activeFolder = 'ALL';
-      this.folderSelect.innerHTML = '<option value="ALL">All Sources (Aggregate)</option>';
-      this.folderSelect.disabled = true;
-    } else {
-      const activeSource = sources.find((s) => s.id === sourceId);
-      this.currentSourceType = activeSource ? activeSource.type : 'github';
-      this.activeFolder = 'ALL';
-      this.folderSelect.disabled = false;
-      initVaultDB(sourceId);
-      await this.populateFoldersFromDB();
-    }
-
-    this.renderSourceDropdown();
-    await this.reloadFeed();
-  }
-
-  async populateFolders(folderList = null) {
-    if (this.activeSourceId === 'ALL_SOURCES') return;
-
-    let folders = folderList;
-    if (!folders) {
-      const db = getActiveDB();
-      const records = await db.manifest.toArray();
-      const folderSet = new Set();
-      records.forEach((r) => {
-        if (r.folder && r.folder !== 'Root') folderSet.add(r.folder);
-      });
-      folders = Array.from(folderSet).sort();
-    }
-
-    this.folderSelect.innerHTML = '<option value="ALL">All Subfolders</option>';
-    folders.forEach((f) => {
-      const opt = document.createElement('option');
-      opt.value = f;
-      opt.textContent = f;
-      this.folderSelect.appendChild(opt);
-    });
-  }
-
-  async populateFoldersFromDB() {
-    return this.populateFolders();
-  }
-
-  async reloadFeed() {
-    this.viewport.innerHTML = '';
-    this.hasMore = true;
-    this.isLoading = false;
-    await this.loadMoreCards();
-  }
-
-  async loadMoreCards() {
-    if (this.isLoading || !this.hasMore) return;
-    this.isLoading = true;
-
+  async share(card) {
+    const item = card._item;
+    const title = card._note?.title || card._bookTitle || item.name;
+    let text = title;
+    if (card._highlight) text = `“${card._highlight.text.replace(/[>*_=]/g, '').trim()}”\n— ${title}`;
+    else if (card._note) text = `${title}\n\n${card._note.body.replace(/[#>*_`=]/g, '').slice(0, 400).trim()}`;
     try {
-      let candidates = [];
-      const sources = this.getAllSources();
-
-      if (this.activeSourceId === 'ALL_SOURCES') {
-        candidates = await getAllSourcesDeckQueue(sources, this.mediaFilter, 16);
-      } else {
-        const db = getActiveDB();
-        if (this.mediaFilter === 'starred') {
-          const starredStates = await db.state.where('starred').equals(1).toArray();
-          const starMap = new Set(starredStates.map((s) => s.path));
-          let manifest = await db.manifest.toArray();
-          if (this.activeFolder !== 'ALL') {
-            manifest = manifest.filter((m) => m.folder === this.activeFolder || m.folder.startsWith(`${this.activeFolder}/`));
-          }
-          candidates = manifest.filter((m) => starMap.has(m.path));
-        } else {
-          candidates = await getDeckQueue(this.activeFolder, this.mediaFilter, 15);
-        }
-        candidates = candidates.map((item) => ({
-          ...item,
-          _sourceId: this.activeSourceId,
-          _sourceType: this.currentSourceType,
-        }));
+      if (navigator.share) await navigator.share({ title, text });
+      else {
+        await navigator.clipboard.writeText(text);
+        toast('Copied');
       }
+    } catch {}
+  },
 
-      const existingPaths = new Set(
-        Array.from(this.viewport.querySelectorAll('.snap-card')).map((el) => `${el.dataset.sourceId}:${el.dataset.path}`)
-      );
-
-      const newItems = candidates.filter((c) => !existingPaths.has(`${c._sourceId}:${c.path}`));
-
-      if (newItems.length === 0) {
-        this.hasMore = false;
-        this.isLoading = false;
-        return;
-      }
-
-      // Preload text notes
-      const remoteTextPaths = newItems
-        .filter((i) => i.mediaType === 'text' && i._sourceType === 'github')
-        .map((i) => i.path);
-      if (remoteTextPaths.length > 0) {
-        preloadBatchContent(remoteTextPaths);
-      }
-
-      for (const item of newItems) {
-        const targetDb = getDBForSource(item._sourceId);
-        let contentData = null;
-
-        if (item.mediaType === 'text') {
-          try {
-            const rawMarkdown = await this.retrieveContent(item.path, item._sourceId, item._sourceType);
-            contentData = parseMarkdownToCard(rawMarkdown || '# Empty Note\n\n*No content available.*', item.path);
-          } catch (err) {
-            contentData = parseMarkdownToCard(`# ${item.filename}\n\n*Unable to load note content.*`, item.path);
-          }
-        } else {
-          await this.ensureThumbnailCached(item);
-        }
-
-        const state = await targetDb.state.get(item.path);
-        const isStarred = state ? state.starred === 1 : false;
-
-        const cardEl = await createCardElement(item, contentData, isStarred, {
-          onStarToggle: async (path, starred) => toggleStar(path, starred, targetDb),
-          onOpenDocument: async (docItem) => this.handleOpenDocument(docItem),
+  async open(card) {
+    const item = card._item;
+    haptic(6);
+    if (item.kind === 'note') {
+      try {
+        await openNote(item, {
+          starred: Boolean(app.states.get(item.key)?.starred),
+          highlight: card._highlight,
+          onStar: () => actions.star(card),
+          onSaved: () => {
+            card._hydrated = false;
+            card.className = 'card';
+            hydrateCard(card);
+          },
         });
-
-        cardEl.dataset.sourceId = item._sourceId;
-        this.viewport.appendChild(cardEl);
-        this.observer.observe(cardEl);
+      } catch (err) {
+        toast(err.message);
       }
-    } catch (err) {
-      console.error('Error loading cards:', err);
-    } finally {
-      this.isLoading = false;
-    }
-  }
-
-  async retrieveContent(path, sourceId, sourceType) {
-    if (sourceType === 'local') {
-      const file = await getLocalFileBlob(sourceId, path);
-      return await file.text();
-    }
-    return await fetchNoteContent(path);
-  }
-
-  async retrieveBlob(path, sourceId, sourceType) {
-    if (sourceType === 'local') {
-      return await getLocalFileBlob(sourceId, path);
-    }
-    return await fetchBinaryBlob(path);
-  }
-
-  async ensureThumbnailCached(item) {
-    const existing = await getCachedThumbnail(item.path, item._sourceId);
-    if (existing) return;
-
-    try {
-      const blob = await this.retrieveBlob(item.path, item._sourceId, item._sourceType);
-      if (item.mediaType === 'pdf') {
-        await extractPdfCover(item.path, blob, item._sourceId);
-      } else if (item.mediaType === 'epub') {
-        await extractEpubCover(item.path, blob, item._sourceId);
-      }
-    } catch (err) {
-      console.warn(`Cover extraction failed for ${item.path}:`, err);
-    }
-  }
-
-  async handleOpenDocument(item) {
-    this.statusEl.textContent = `Opening ${item.filename}...`;
-    try {
-      const blob = await this.retrieveBlob(item.path, item._sourceId, item._sourceType);
-      if (item.mediaType === 'pdf') {
-        await openPdfViewer(item.path, blob, item.filename, item._sourceId);
-      } else if (item.mediaType === 'epub') {
-        await openEpubViewer(item.path, blob, item.filename, item._sourceId);
-      }
-    } catch (err) {
-      alert(`Could not load document: ${err.message}`);
-    } finally {
-      this.statusEl.textContent = '';
-    }
-  }
-
-  async handleCreateNote() {
-    let rawPath = this.newNotePathInput.value.trim();
-    const content = this.newNoteContentInput.value;
-
-    if (!rawPath) {
-      alert('Please enter a note title.');
       return;
     }
-    if (!rawPath.endsWith('.md')) rawPath += '.md';
-
-    this.confirmCreateBtn.disabled = true;
-    this.statusEl.textContent = 'Saving note...';
-
+    toast('Opening…');
     try {
-      if (this.currentSourceType === 'local') {
-        alert('Local note authoring is supported in GitHub vaults.');
-        return;
-      }
-
-      await saveNoteFile(rawPath, content, null);
-      this.createModal.classList.remove('open');
-
-      const cardData = parseMarkdownToCard(content, rawPath);
-      const manifestRecord = {
-        path: rawPath,
-        filename: rawPath.split('/').pop(),
-        folder: rawPath.includes('/') ? rawPath.substring(0, rawPath.lastIndexOf('/')) : 'Root',
-        mediaType: 'text',
-        _sourceId: this.activeSourceId,
-        _sourceType: this.currentSourceType,
-      };
-
-      const cardEl = await createCardElement(manifestRecord, cardData, false, {
-        onStarToggle: async (path, starred) => toggleStar(path, starred),
-      });
-
-      cardEl.dataset.sourceId = this.activeSourceId;
-      this.viewport.insertBefore(cardEl, this.viewport.firstChild);
-      this.observer.observe(cardEl);
-      cardEl.scrollIntoView({ behavior: 'smooth' });
-
-      await this.populateFoldersFromDB();
-      this.statusEl.textContent = 'Note created!';
-      setTimeout(() => (this.statusEl.textContent = ''), 2000);
-    } catch (err) {
-      alert(`Creation failed: ${err.message}`);
-    } finally {
-      this.confirmCreateBtn.disabled = false;
-    }
-  }
-
-  async triggerSync() {
-    this.statusEl.textContent = 'Syncing manifest...';
-    try {
-      if (this.activeSourceId === 'ALL_SOURCES') {
-        const sources = this.getAllSources();
-        for (const src of sources) {
-          if (src.type === 'local') {
-            await scanLocalDirectory(src.id);
-          } else {
-            initVaultDB(src.id);
-            await syncRepoManifest();
-          }
-        }
+      const blob = await library.readBlob(item);
+      const title = card._bookTitle || item.name;
+      if (item.kind === 'pdf') {
+        const { openPdf } = await import('./viewers/pdf.js');
+        await openPdf(item, blob, title);
       } else {
-        if (this.currentSourceType === 'local') {
-          const folders = await scanLocalDirectory(this.activeSourceId, (m) => (this.statusEl.textContent = m));
-          await this.populateFolders(folders);
-        } else {
-          await syncRepoManifest((m) => (this.statusEl.textContent = m));
-          await this.populateFoldersFromDB();
-        }
+        const { openEpub } = await import('./viewers/epub.js');
+        await openEpub(item, blob, title, { onHighlight: (h) => saveBookHighlight(item, title, h) });
       }
-
-      this.statusEl.textContent = 'Sync complete.';
-      setTimeout(() => (this.statusEl.textContent = ''), 2000);
-      this.reloadFeed();
+      document.getElementById('toast').classList.remove('show');
     } catch (err) {
-      alert(`Sync failed: ${err.message}`);
-      this.statusEl.textContent = 'Sync error';
+      toast(err.message);
     }
-  }
+  },
+};
 
-  /* --- Settings & Profiles --- */
+/** Book highlights become markdown in your library: Highlights/<Book>.md */
+async function saveBookHighlight(item, bookTitle, { text, chapter }) {
+  const own = store.getSource(item.sourceId);
+  const sources = store.getSources();
+  const dest =
+    (library.canWrite(own) && own) ||
+    sources.find((s) => s.type === 'github' && library.canWrite(s)) ||
+    sources.find((s) => library.canWrite(s));
+  if (!dest) throw new Error('Add a GitHub token or open a folder to keep highlights as notes.');
+  const safe = bookTitle.replace(/[\\/:*?"<>|#^[\]]+/g, '').trim().slice(0, 90) || 'Book';
+  const path = `Highlights/${safe}.md`;
+  const date = new Date().toISOString().slice(0, 10);
+  const header = `---\ntitle: ${safe}\nsource: ${item.path}\n---\n\n# ${safe}\n\nHighlights saved from Readover.`;
+  const block = `> ${text}\n>\n> — ${chapter ? `${chapter}, ` : ''}${date}`;
+  await library.appendToFile(dest, path, header, block, `Readover: highlight from ${safe}`);
+  return library.displayName(dest);
+}
 
-  openSettings() {
-    this.renderSourceList();
-    this.clearVaultForm();
-    this.globalTokenInput.value = getGlobalToken();
-    this.updateGlobalTokenBadge();
-    this.settingsModal.classList.add('open');
-  }
+/* ---------------- Sources & sync ---------------- */
 
-  updateGlobalTokenBadge() {
-    const token = getGlobalToken();
-    if (token) {
-      this.globalTokenStatus.textContent = '✓ Active';
-      this.globalTokenStatus.style.color = 'var(--primary)';
-    } else {
-      this.globalTokenStatus.textContent = 'Optional';
-      this.globalTokenStatus.style.color = 'var(--text-muted)';
-    }
-  }
-
-  renderSourceList() {
-    const sources = this.getAllSources();
-    this.sourceListEl.innerHTML = '';
-
-    sources.forEach((s) => {
-      const row = document.createElement('div');
-      row.className = `source-item ${s.id === this.activeSourceId ? 'active-source' : ''}`;
-      row.innerHTML = `
-        <div class="source-meta">
-          <strong>${s.type === 'local' ? '📁' : '☁️'} ${escapeHtml(s.name || s.repo)}</strong>
-          <span>${s.type === 'local' ? 'Local Directory' : `${escapeHtml(s.owner)}/${escapeHtml(s.repo)}`}</span>
-        </div>
-        <div class="source-actions">
-          ${s.type === 'github' ? '<button class="edit-btn">Edit</button>' : ''}
-          <button class="delete-btn">Remove</button>
-        </div>
-      `;
-
-      if (s.type === 'github') {
-        row.querySelector('.edit-btn').addEventListener('click', () => this.loadVaultIntoForm(s));
-      }
-
-      row.querySelector('.delete-btn').addEventListener('click', async () => {
-        if (confirm(`Remove library "${s.name || s.repo}" and cached data?`)) {
-          if (s.type === 'local') {
-            await deleteLocalProfile(s.id);
-          } else {
-            deleteVaultProfile(s.id);
-          }
-          await deleteVaultDB(s.id);
-          this.renderSourceList();
-          this.renderSourceDropdown();
-          await this.switchSource('ALL_SOURCES');
+async function syncSource(src, { userGesture = false, quiet = false } = {}) {
+  if (app.syncing.has(src.id)) return null;
+  app.syncing.add(src.id);
+  try {
+    if (src.type === 'local' && src.mode === 'handle') {
+      const perm = await local.permissionState(src);
+      if (perm !== 'granted') {
+        if (!userGesture || !(await local.requestPermission(src))) {
+          showPermissionBanner();
+          return null;
         }
-      });
-
-      this.sourceListEl.appendChild(row);
-    });
+      }
+    }
+    const result = await library.sync(src, quiet ? () => {} : (m) => toast(m));
+    localStorage.setItem(`readover.lastSync.${src.id}`, String(Date.now()));
+    if (!quiet) {
+      const bits = [`${result.total} items`];
+      if (result.added) bits.push(`${result.added} new`);
+      if (result.removed) bits.push(`${result.removed} removed`);
+      toast(`${library.displayName(src)}: ${bits.join(', ')}`);
+    }
+    return result;
+  } catch (err) {
+    if (!quiet || err.code !== 'PERMISSION') toast(err.message);
+    return null;
+  } finally {
+    app.syncing.delete(src.id);
   }
+}
 
-  clearVaultForm() {
-    document.getElementById('cfg-id').value = '';
-    document.getElementById('cfg-name').value = '';
-    document.getElementById('cfg-owner').value = '';
-    document.getElementById('cfg-repo').value = '';
-    document.getElementById('cfg-branch').value = 'main';
-    document.getElementById('cfg-token').value = '';
+async function syncAll({ force = false, userGesture = false } = {}) {
+  const due = store
+    .getSources()
+    .filter((s) => force || Date.now() - Number(localStorage.getItem(`readover.lastSync.${s.id}`) || 0) > SYNC_EVERY);
+  if (!due.length) return;
+  let changed = false;
+  for (const src of due) {
+    const r = await syncSource(src, { userGesture, quiet: !force });
+    if (r && (r.added || r.removed)) changed = true;
   }
+  if (changed || force) await refreshQueue();
+  showPermissionBanner();
+}
 
-  loadVaultIntoForm(p) {
-    document.getElementById('cfg-id').value = p.id;
-    document.getElementById('cfg-name').value = p.name || '';
-    document.getElementById('cfg-owner').value = p.owner;
-    document.getElementById('cfg-repo').value = p.repo;
-    document.getElementById('cfg-branch').value = p.branch || 'main';
-    document.getElementById('cfg-token').value = p.token || '';
+async function showPermissionBanner() {
+  const banner = $('banner');
+  const blocked = [];
+  for (const s of store.getSources()) {
+    if (s.type === 'local' && s.mode === 'handle' && (await local.permissionState(s).catch(() => 'missing')) === 'prompt') blocked.push(s);
   }
+  if (!blocked.length) {
+    banner.hidden = true;
+    return;
+  }
+  const names = blocked.map((s) => `“${s.name}”`).join(', ');
+  const allow = button('Allow', async () => {
+    for (const s of blocked) await local.requestPermission(s).catch(() => false);
+    banner.hidden = true;
+    for (const s of blocked) await syncSource(s, { userGesture: true, quiet: true });
+    refreshQueue();
+  }, true);
+  const later = button('Later', () => (banner.hidden = true));
+  later.classList.add('btn-quiet');
+  banner.replaceChildren(el('p', {}, `Allow Readover to read ${names} again.`), allow, later);
+  banner.hidden = false;
+}
 
-  async saveCurrentVaultForm() {
-    const existingId = document.getElementById('cfg-id').value;
-    const name = document.getElementById('cfg-name').value.trim();
-    const owner = document.getElementById('cfg-owner').value.trim();
-    const repo = document.getElementById('cfg-repo').value.trim();
-    const branch = document.getElementById('cfg-branch').value.trim() || 'main';
-    const token = document.getElementById('cfg-token').value.trim();
+async function addFolder() {
+  if (!local.supportsHandles()) {
+    $('folder-input').click();
+    return;
+  }
+  try {
+    const handle = await local.pickFolder();
+    const src = store.saveSource({ id: store.newId('fs'), type: 'local', mode: 'handle', name: handle.name });
+    await local.setHandle(src.id, handle);
+    await syncSource(src, { userGesture: true });
+    await reloadIfOpen();
+  } catch (err) {
+    if (err.name !== 'AbortError') toast(err.message);
+  }
+}
 
-    if (!owner || !repo) {
-      alert('Owner and Repository are required.');
+let reimportTarget = null;
+async function importFiles(fileList) {
+  if (!fileList?.length) return;
+  const first = fileList[0].webkitRelativePath?.split('/')[0] || 'Folder';
+  const src = reimportTarget || store.saveSource({ id: store.newId('fs'), type: 'local', mode: 'import', name: first });
+  reimportTarget = null;
+  try {
+    const r = await library.importFolder(src, fileList, (m) => toast(m));
+    localStorage.setItem(`readover.lastSync.${src.id}`, String(Date.now()));
+    toast(`${src.name}: ${r.total} items imported`);
+    await reloadIfOpen();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    $('folder-input').value = '';
+  }
+}
+
+function reimport(src) {
+  reimportTarget = src;
+  $('folder-input').click();
+}
+
+async function reloadIfOpen() {
+  if (feedEl.querySelector('.card-message') || !feedEl.children.length) await reload();
+  else await refreshQueue();
+}
+
+/* ---------------- Input ---------------- */
+
+window.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+  if (e.key === 'Escape') {
+    // <dialog> sheets handle Escape themselves (their 'cancel' event).
+    if (hasOverlay() && !document.querySelector('dialog[open]')) closeTop();
+    return;
+  }
+  if (hasOverlay()) return;
+  const card = app.current;
+  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  const run = {
+    ArrowDown: () => scrollBy(1),
+    j: () => scrollBy(1),
+    ArrowUp: () => scrollBy(-1),
+    k: () => scrollBy(-1),
+    Enter: () => card?._item && actions.open(card),
+    o: () => card?._item && actions.open(card),
+    s: () => card?._item && actions.star(card),
+    x: () => card?._item && actions.hide(card),
+    r: () => reload(),
+    n: () => compose.open(),
+  }[key];
+  if (run) {
+    e.preventDefault();
+    run();
+  }
+});
+
+// Gamepads (handy on handheld PCs / TVs). Polling only runs while one is connected.
+let padLoop = null;
+window.addEventListener('gamepadconnected', () => {
+  if (padLoop) return;
+  let last = {};
+  const tick = () => {
+    const gp = [...(navigator.getGamepads?.() || [])].find(Boolean);
+    if (!gp) {
+      padLoop = null;
       return;
     }
-
-    const id = existingId || `vault_${Date.now()}`;
-    const profile = { id, name: name || `${owner}/${repo}`, owner, repo, branch, token };
-
-    saveVaultProfile(profile);
-    this.renderSourceList();
-    this.renderSourceDropdown();
-    this.settingsModal.classList.remove('open');
-
-    await this.switchSource(id);
-    await this.triggerSync();
-  }
-}
-
-function escapeHtml(str) {
-  if (!str) return '';
-  return str.replace(/[&<>'"]/g, (tag) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    "'": '&#39;',
-    '"': '&quot;',
-  }[tag] || tag));
-}
-
-window.addEventListener('DOMContentLoaded', () => {
-  new AppController();
+    const b = (i) => Boolean(gp.buttons[i]?.pressed);
+    const now = { down: b(13) || gp.axes[1] > 0.6, up: b(12) || gp.axes[1] < -0.6, a: b(0), b: b(1), y: b(3) };
+    const pressed = (k) => now[k] && !last[k];
+    if (hasOverlay()) {
+      if (pressed('b')) closeTop();
+    } else {
+      if (pressed('down')) scrollBy(1);
+      if (pressed('up')) scrollBy(-1);
+      if (pressed('a') && app.current?._item) actions.open(app.current);
+      if (pressed('y') && app.current?._item) actions.star(app.current);
+    }
+    last = now;
+    padLoop = requestAnimationFrame(tick);
+  };
+  padLoop = requestAnimationFrame(tick);
 });
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') library.flushPending();
+  else syncAll();
+});
+
+/* ---------------- Boot ---------------- */
+
+const settings = initSettings({
+  syncSource: async (src, opts) => {
+    const r = await syncSource(src, opts);
+    await reloadIfOpen();
+    return r;
+  },
+  addFolder,
+  importFiles,
+  reimport,
+  sourcesChanged: () => reload(),
+  applyTheme,
+});
+const compose = initCompose({ showFirst });
+
+$('brand').onclick = () => {
+  reload();
+  feedEl.focus({ preventScroll: true });
+};
+$('scope-btn').onclick = openScope;
+$('settings-btn').onclick = () => settings.open();
+$('star-filter').onclick = () => {
+  const { filter } = store.getPrefs();
+  store.setPrefs({ filter: filter === 'starred' ? 'all' : 'starred' });
+  reload();
+};
+$('app-version').textContent = VERSION === 'dev' ? '(development)' : VERSION.slice(0, 7);
+
+async function boot() {
+  applyTheme();
+  await store.migrateLegacy();
+  await reload();
+  const hasItems = (await store.items.all()).length > 0;
+  await syncAll({ force: !hasItems && store.getSources().length > 0 });
+  showPermissionBanner();
+  navigator.storage?.persist?.().catch(() => {});
+}
+
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  const hadController = Boolean(navigator.serviceWorker.controller); // false on first install
+  navigator.serviceWorker
+    .register('./sw.js')
+    .then((reg) => {
+      reg.addEventListener('updatefound', () => {
+        const sw = reg.installing;
+        sw?.addEventListener('statechange', () => {
+          if (sw.state === 'activated' && hadController) {
+            toast('Readover has been updated', { label: 'Reload', run: () => location.reload() });
+          }
+        });
+      });
+    })
+    .catch((err) => console.warn('Service worker not registered', err));
+}
+
+boot();
