@@ -1,178 +1,212 @@
-<!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<!doctype html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-  <title>ReadOver</title>
-
-  <!-- PWA Meta & Web Clips -->
-  <meta name="theme-color" content="#110f17" />
-  <meta name="mobile-web-app-capable" content="yes" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Readover</title>
+  <meta name="description" content="Your notes, highlights and books as a full-screen reading feed." />
+  <meta name="theme-color" content="#e8ebe3" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#141816" media="(prefers-color-scheme: dark)" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="ReadOver" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Readover" />
   <link rel="manifest" href="./manifest.json" />
-
-  <!-- Preconnect Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-
+  <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <link rel="preload" href="./vendor/fonts/literata-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="./src/style.css" />
+  <script>
+    // Apply theme before first paint to avoid a flash.
+    try {
+      const t = (JSON.parse(localStorage.getItem('readover.prefs') || '{}').theme) || 'system';
+      if (t !== 'system') document.documentElement.dataset.theme = t;
+    } catch {}
+  </script>
 </head>
 <body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.2l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17.2l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></symbol>
+      <symbol id="i-hide" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 5.1A9.8 9.8 0 0 1 12 5c5 0 8.7 4.2 9.8 7a12.3 12.3 0 0 1-3.2 4.5M6.3 6.4A12.5 12.5 0 0 0 2.2 12c1.1 2.8 4.8 7 9.8 7 1.6 0 3-.4 4.3-1M9.9 9.9a3 3 0 0 0 4.2 4.2"/></symbol>
+      <symbol id="i-share" viewBox="0 0 24 24"><path d="M12 15V3m0 0L7.5 7.5M12 3l4.5 4.5M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></symbol>
+      <symbol id="i-open" viewBox="0 0 24 24"><path d="M3 5.5C5 4.5 8.5 4 12 6c3.5-2 7-1.5 9-.5V19c-2-1-5.5-1.5-9 .5-3.5-2-7-1.5-9-.5zM12 6v13.5"/></symbol>
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+      <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+      <symbol id="i-down" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></symbol>
+      <symbol id="i-pen" viewBox="0 0 24 24"><path d="M15 5l4 4L8 20H4v-4zM13 7l4 4"/></symbol>
+      <symbol id="i-marker" viewBox="0 0 24 24"><path d="M9 11l-5 5v4h4l5-5M9 11l6-6 4 4-6 6M9 11l4 4M14 20h7"/></symbol>
+    </defs>
+  </svg>
 
-  <!-- Top App Navigation -->
-  <header class="app-header">
-    <div class="header-left">
-      <div class="brand-title">ReadOver</div>
-      
-      <!-- Unified Source Selector (All Sources, GitHub Vaults & Local Folders) -->
-      <select id="source-select" aria-label="Select Source">
-        <!-- Dynamically injected options -->
-      </select>
-
-      <select id="folder-select" aria-label="Select Subfolder">
-        <option value="ALL">All Subfolders</option>
-      </select>
-    </div>
-
-    <!-- Streamlined Filter Segment (All vs Starred) -->
-    <nav class="media-filter-bar" aria-label="Deck Filter">
-      <button class="filter-pill active" data-filter="all">All</button>
-      <button class="filter-pill" data-filter="starred">★ Starred</button>
-    </nav>
-
-    <div class="header-right">
-      <button id="theme-btn" class="icon-btn" title="Toggle Theme" aria-label="Toggle Theme">☀️</button>
-      <button id="sync-btn" class="icon-btn" title="Sync Source" aria-label="Sync Source">↻</button>
-      <button id="settings-btn" class="icon-btn" title="Library Settings" aria-label="Settings">⚙</button>
+  <header class="topbar">
+    <button id="brand" class="brand" title="Shuffle again (R)">Readover</button>
+    <div class="topbar-actions">
+      <button id="scope-btn" class="scope-chip" aria-haspopup="dialog">
+        <span id="scope-label">Everything</span>
+        <svg class="i i-sm"><use href="#i-down"/></svg>
+      </button>
+      <button id="star-filter" class="icon-btn" aria-pressed="false" title="Favourites only">
+        <svg class="i"><use href="#i-star"/></svg><span class="sr">Favourites only</span>
+      </button>
+      <button id="settings-btn" class="icon-btn" title="Settings">
+        <svg class="i"><use href="#i-gear"/></svg><span class="sr">Settings</span>
+      </button>
     </div>
   </header>
 
-  <!-- Continuous Full-Bleed Vertical Snap Feed -->
-  <main id="feed-viewport" class="feed-viewport" tabindex="0">
-    <!-- Polymorphic Snap Cards Inject Here -->
-  </main>
+  <div id="banner" class="banner" hidden></div>
+  <main id="feed" class="feed" tabindex="-1" aria-label="Reading feed"></main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <!-- Floating Action Button (+ New Note) -->
-  <button id="fab-create-btn" class="fab-create" title="Create New Note" aria-label="Create New Note">+</button>
+  <!-- What to show -->
+  <dialog id="scope-sheet" class="sheet" aria-labelledby="scope-title">
+    <form method="dialog" class="sheet-inner">
+      <div class="sheet-head">
+        <h2 id="scope-title">What to show</h2>
+        <button class="icon-btn" value="close" aria-label="Close"><svg class="i"><use href="#i-close"/></svg></button>
+      </div>
+      <fieldset class="seg" id="filter-seg">
+        <legend class="sr">Type</legend>
+        <label><input type="radio" name="filter" value="all" /><span>All</span></label>
+        <label><input type="radio" name="filter" value="notes" /><span>Notes</span></label>
+        <label><input type="radio" name="filter" value="books" /><span>Books</span></label>
+        <label><input type="radio" name="filter" value="starred" /><span>Favourites</span></label>
+        <label><input type="radio" name="filter" value="hidden" /><span>Hidden</span></label>
+      </fieldset>
+      <label class="field">Library
+        <select id="scope-source"></select>
+      </label>
+      <label class="field">Folder
+        <select id="scope-folder"></select>
+      </label>
+      <button class="btn btn-primary" value="apply">Show these</button>
+    </form>
+  </dialog>
 
-  <!-- Ambient System Status Pill -->
-  <aside id="status-indicator" class="status-indicator" role="status" aria-live="polite"></aside>
-
-  <!-- Settings & Source Management Modal -->
-  <div id="settings-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2 id="settings-title">Sources & Storage</h2>
-        <div class="modal-header-actions">
-          <button id="open-local-folder-btn" class="btn-secondary">📁 Open Folder</button>
-          <button id="add-vault-btn" class="btn-secondary">+ Add GitHub</button>
-        </div>
+  <!-- Settings -->
+  <dialog id="settings-sheet" class="sheet sheet-tall" aria-labelledby="settings-title">
+    <div class="sheet-inner">
+      <div class="sheet-head">
+        <h2 id="settings-title">Libraries</h2>
+        <button class="icon-btn" data-close aria-label="Close"><svg class="i"><use href="#i-close"/></svg></button>
       </div>
 
-      <!-- Hidden standard fallback directory input -->
-      <input type="file" id="legacy-folder-input" webkitdirectory directory multiple style="display: none;" />
+      <div id="source-list" class="source-list"></div>
+      <div class="row-actions">
+        <button id="add-repo-btn" class="btn">Add a GitHub repo</button>
+        <button id="add-folder-btn" class="btn">Open a folder</button>
+        <input type="file" id="folder-input" webkitdirectory multiple hidden />
+      </div>
 
-      <!-- Global Account Credentials -->
-      <section class="global-auth-card">
-        <div class="global-auth-header">
-          <h3>GitHub Account Token</h3>
-          <span id="global-token-status" class="status-pill">Optional</span>
+      <form id="repo-form" class="repo-form" hidden>
+        <h3 id="repo-form-title">Add a GitHub repo</h3>
+        <input type="hidden" name="id" />
+        <label class="field">Repository
+          <input name="repo" placeholder="owner/repo or a github.com link" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+        </label>
+        <div class="field-pair">
+          <label class="field">Branch
+            <input name="branch" placeholder="Default branch" autocapitalize="off" spellcheck="false" />
+          </label>
+          <label class="field">Only this folder
+            <input name="root" placeholder="Whole repo" autocapitalize="off" spellcheck="false" />
+          </label>
         </div>
-        <p class="global-auth-desc">
-          Add a Classic PAT (<code>repo</code> scope) once to access public and private remote vaults seamlessly.
-        </p>
-        <input type="password" id="cfg-global-token" placeholder="ghp_... (Classic PAT)" />
-      </section>
-
-      <!-- Saved Sources List -->
-      <section class="sources-list-section">
-        <h3>Connected Libraries</h3>
-        <div id="source-list" class="source-list"></div>
-      </section>
-
-      <hr class="modal-divider" />
-
-      <!-- GitHub Vault Configuration Form -->
-      <form id="vault-form" class="vault-form" onsubmit="return false;">
-        <h3>Configure GitHub Repository</h3>
-        <input type="hidden" id="cfg-id" />
-        <label>Display Nickname
-          <input type="text" id="cfg-name" placeholder="e.g. Research Vault" />
+        <label class="field">Skip these folders
+          <input name="ignore" placeholder="templates, archive" autocapitalize="off" spellcheck="false" />
         </label>
-        <label>GitHub Owner
-          <input type="text" id="cfg-owner" placeholder="e.g. username" />
+        <label class="field">Name
+          <input name="name" placeholder="Shown in the library list" />
         </label>
-        <label>Repository Name
-          <input type="text" id="cfg-repo" placeholder="e.g. notes" />
-        </label>
-        <label>Branch
-          <input type="text" id="cfg-branch" value="main" />
-        </label>
-
-        <details class="vault-override-details">
-          <summary>Custom Token Override</summary>
-          <div class="vault-override-content">
-            <input type="password" id="cfg-token" placeholder="github_pat_... (Overrides Account Token)" />
-            <span class="vault-override-hint">Leave blank to use the account token, or leave both empty for public repositories.</span>
-          </div>
+        <details class="field">
+          <summary>Use a different token for this repo</summary>
+          <input name="token" type="password" placeholder="github_pat_…" autocomplete="off" />
         </details>
-
-        <div class="modal-btn-row">
-          <button id="save-vault-btn" class="btn-primary">Save & Connect</button>
-          <button type="button" class="btn-secondary modal-close">Close</button>
+        <div class="row-actions">
+          <button class="btn btn-primary" type="submit">Save and sync</button>
+          <button class="btn btn-quiet" type="button" data-cancel>Cancel</button>
         </div>
       </form>
-    </div>
-  </div>
 
-  <!-- Create Note Modal -->
-  <div id="create-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="create-title">
-    <div class="modal-content">
-      <h2 id="create-title">New Note</h2>
-      <label>File Path / Title
-        <input type="text" id="new-note-path" placeholder="e.g. thoughts/idea.md" />
-      </label>
-      <label>Content (Markdown)
-        <textarea id="new-note-content" class="reader-textarea" style="height: 220px; border: 1.5px solid var(--border-color); border-radius: 12px; padding: 12px;" placeholder="# Draft your thoughts..."></textarea>
-      </label>
-      <div class="modal-btn-row">
-        <button id="confirm-create-btn" class="btn-primary">Create & Commit</button>
-        <button type="button" class="btn-secondary modal-close">Cancel</button>
+      <section class="settings-group">
+        <h3>GitHub token</h3>
+        <p class="hint">Public repos work without one. A token lets Readover read private repos, sync favourites across your devices, save highlights and edit notes. Create a <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained token</a> limited to your notes repos, with <b>Contents: read and write</b>. It is stored only in this browser.</p>
+        <input id="token-input" type="password" placeholder="github_pat_…" autocomplete="off" />
+      </section>
+
+      <section class="settings-group">
+        <h3>Reading</h3>
+        <label class="field">Theme
+          <select id="theme-select">
+            <option value="system">Match device</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <label class="field">When a note has highlights
+          <select id="mix-select">
+            <option value="0.8">Usually show one highlight</option>
+            <option value="0.5">Sometimes show one highlight</option>
+            <option value="0">Always show the whole note</option>
+          </select>
+        </label>
+      </section>
+
+      <section class="settings-group">
+        <h3>Storage on this device</h3>
+        <p id="storage-info" class="hint">Checking…</p>
+        <div class="row-actions">
+          <button id="clear-books-btn" class="btn">Remove downloaded books</button>
+          <button id="reset-seen-btn" class="btn">Forget what I've seen</button>
+        </div>
+      </section>
+
+      <section class="settings-group keys">
+        <h3>Keyboard</h3>
+        <dl>
+          <dt>↓ ↑ or J K</dt><dd>Next, previous</dd>
+          <dt>Enter</dt><dd>Open</dd>
+          <dt>S</dt><dd>Favourite</dd>
+          <dt>X</dt><dd>Hide</dd>
+          <dt>R</dt><dd>Shuffle again</dd>
+          <dt>N</dt><dd>New note</dd>
+          <dt>Esc</dt><dd>Close</dd>
+        </dl>
+      </section>
+      <p class="hint version">Readover <span id="app-version"></span></p>
+    </div>
+  </dialog>
+
+  <!-- New note -->
+  <dialog id="compose-sheet" class="sheet sheet-tall" aria-labelledby="compose-title">
+    <form id="compose-form" class="sheet-inner">
+      <div class="sheet-head">
+        <h2 id="compose-title">New note</h2>
+        <button class="icon-btn" type="button" data-close aria-label="Close"><svg class="i"><use href="#i-close"/></svg></button>
       </div>
-    </div>
-  </div>
+      <div class="field-pair">
+        <label class="field">Save to
+          <select name="source" required></select>
+        </label>
+        <label class="field">Folder
+          <input name="folder" list="compose-folders" placeholder="Top level" autocapitalize="off" spellcheck="false" />
+          <datalist id="compose-folders"></datalist>
+        </label>
+      </div>
+      <label class="field">Title
+        <input name="title" required />
+      </label>
+      <label class="field grow">Note
+        <textarea name="body" rows="10" placeholder="Markdown works here"></textarea>
+      </label>
+      <button class="btn btn-primary" type="submit">Save note</button>
+    </form>
+  </dialog>
 
-  <!-- Service Worker Auto-Update Pipeline -->
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').then((reg) => {
-          reg.update();
-          reg.addEventListener('updatefound', () => {
-            const installing = reg.installing;
-            installing.addEventListener('statechange', () => {
-              if (installing.state === 'installed' && navigator.serviceWorker.controller) {
-                window.location.reload();
-              }
-            });
-          });
-        }).catch(console.warn);
-
-        let refreshing = false;
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-          if (!refreshing) {
-            refreshing = true;
-            window.location.reload();
-          }
-        });
-      });
-    }
-  </script>
-
-  <!-- ES Module Application Entry -->
   <script type="module" src="./src/app.js"></script>
 </body>
 </html>
