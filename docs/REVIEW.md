@@ -90,8 +90,25 @@ Read-first. The feed is the whole screen. Chrome is reduced to a wordmark (tap i
    - "Connected" cards;
    - an optional break card, today's count, and an app badge.
 
+## After first real use (October 2026)
+- **Editor fixed.** The edit box was two lines tall and scrolled to the last line, inside a scrolling page. It now grows to fit the note, so the page has one scroll area, and it opens at the top.
+- **Linking without knowing the title.** The picker:
+  - suggests *Similar notes* (shared distinctive words, title words counting more) and says which words they share;
+  - searches the full text, with the matching passage shown;
+  - previews a note when you tap it;
+  - marks notes already linked.
+- **Settings, shorter.**
+  - The token is now a *GitHub account* section at the top. Readover checks it and shows whose it is.
+  - Adding a repo asks only for the repo. Branch, folder, name and a per-repo token sit under *More options*.
+  - Every explanation is cut to a line, and step-by-step help is folded away.
+- **Web articles.** These are saved as Markdown notes via a bookmarklet, the Android share sheet, or pasting.
+  - Mozilla Readability and Turndown are vendored for this.
+  - Highlights work as they do in books and are saved to `Highlights/<title>.md`, with anchors back to the passage.
+  - The page is never executed. It is parsed, converted, and sanitised again when shown.
+
 ## Still open
-- **Saved web articles (`.html`)**, rendered through the same sanitiser.
+- **Saved `.html` files in a library**, read through the same article converter.
+- **Fetching an article from a link alone.** The browser can't read other sites without their permission (CORS). A GitHub Action in the notes repo could fetch links pushed to an inbox file, keeping to "GitHub only", at the cost of one more setup step.
 - **Search via a GitHub Action in the notes repo.** A workflow building `.readover/index.json` on push would make full-text search instant on a new device, without downloading every note.
 - **Updating links when a note is renamed.** Today Readover warns that old `[[links]]` need updating; it could offer to rewrite them in one commit.
 - **Learning that follows you across devices.** It's per-device by design for now.

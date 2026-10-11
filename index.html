@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="referrer" content="no-referrer" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Readover</title>
   <meta name="description" content="Your notes, highlights and books as a full-screen reading feed." />
   <meta name="theme-color" content="#e8ebe3" media="(prefers-color-scheme: light)" />
@@ -103,51 +104,72 @@
   <dialog id="settings-sheet" class="sheet sheet-tall" aria-labelledby="settings-title">
     <div class="sheet-inner">
       <div class="sheet-head">
-        <h2 id="settings-title">Libraries</h2>
+        <h2 id="settings-title">Settings</h2>
         <button class="icon-btn" data-close aria-label="Close"><svg class="i"><use href="#i-close"/></svg></button>
       </div>
 
-      <div id="source-list" class="source-list"></div>
-      <div class="row-actions">
-        <button id="add-repo-btn" class="btn">Add a GitHub repo</button>
-        <button id="add-folder-btn" class="btn">Open a folder</button>
-        <input type="file" id="folder-input" webkitdirectory multiple hidden />
-      </div>
-
-      <form id="repo-form" class="repo-form" hidden>
-        <h3 id="repo-form-title">Add a GitHub repo</h3>
-        <input type="hidden" name="id" />
-        <label class="field">Repository
-          <input name="repo" placeholder="owner/repo or a github.com link" autocomplete="off" autocapitalize="off" spellcheck="false" required />
-        </label>
-        <div class="field-pair">
-          <label class="field">Branch
-            <input name="branch" placeholder="Default branch" autocapitalize="off" spellcheck="false" />
-          </label>
-          <label class="field">Only this folder
-            <input name="root" placeholder="Whole repo" autocapitalize="off" spellcheck="false" />
-          </label>
+      <section class="settings-group settings-first" id="account-group">
+        <h3>GitHub account</h3>
+        <p class="hint">One token for all your repos. Kept only on this device.</p>
+        <div class="token-row">
+          <input id="token-input" type="password" placeholder="Paste a token (github_pat_…)" autocomplete="off" aria-label="GitHub token" />
         </div>
-        <label class="field">Skip these folders
-          <input name="ignore" placeholder="templates, archive" autocapitalize="off" spellcheck="false" />
-        </label>
-        <label class="field">Name
-          <input name="name" placeholder="Shown in the library list" />
-        </label>
-        <details class="field">
-          <summary>Use a different token for this repo</summary>
-          <input name="token" type="password" placeholder="github_pat_…" autocomplete="off" />
+        <p id="token-status" class="hint token-status"></p>
+        <details class="how">
+          <summary>How to get a token</summary>
+          <ol>
+            <li><a id="token-link" target="_blank" rel="noopener">Open GitHub's token page</a> (name and permission are filled in).</li>
+            <li>Under <b>Repository access</b>, choose <b>All repositories</b>, or just your notes and books repos.</li>
+            <li>Generate it, copy it, and paste it here.</li>
+          </ol>
         </details>
+      </section>
+
+      <section class="settings-group">
+        <h3>Libraries</h3>
+        <div id="source-list" class="source-list"></div>
         <div class="row-actions">
-          <button class="btn btn-primary" type="submit">Save and sync</button>
-          <button class="btn btn-quiet" type="button" data-cancel>Cancel</button>
+          <button id="add-repo-btn" class="btn">Add a GitHub repo</button>
+          <button id="add-folder-btn" class="btn">Open a folder</button>
+          <input type="file" id="folder-input" webkitdirectory multiple hidden />
         </div>
-      </form>
+
+        <form id="repo-form" class="repo-form" hidden>
+          <h3 id="repo-form-title">Add a GitHub repo</h3>
+          <input type="hidden" name="id" />
+          <label class="field">Repository
+            <input name="repo" placeholder="owner/repo or a github.com link" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+          </label>
+          <details class="more-options">
+            <summary>More options</summary>
+            <div class="field-pair">
+              <label class="field">Branch
+                <input name="branch" placeholder="Default" autocapitalize="off" spellcheck="false" />
+              </label>
+              <label class="field">Only this folder
+                <input name="root" placeholder="Whole repo" autocapitalize="off" spellcheck="false" />
+              </label>
+            </div>
+            <label class="field">Skip folders
+              <input name="ignore" placeholder="templates, archive" autocapitalize="off" spellcheck="false" />
+            </label>
+            <label class="field">Name
+              <input name="name" placeholder="Repo name" />
+            </label>
+            <label class="field">Token for this repo only
+              <input name="token" type="password" placeholder="Uses your account token" autocomplete="off" />
+            </label>
+          </details>
+          <div class="row-actions">
+            <button class="btn btn-primary" type="submit">Save and sync</button>
+            <button class="btn btn-quiet" type="button" data-cancel>Cancel</button>
+          </div>
+        </form>
+      </section>
 
       <section class="settings-group" id="sync-group">
-        <h3>Sync between devices</h3>
-        <p class="hint">Favourites, hidden items, where you are in each book, what you've already seen, your libraries and your preferences are kept in a <code>.readover</code> folder in one repo. Open Readover anywhere with the same token and it picks up where you left off.</p>
-        <label class="field">Keep Readover's data in
+        <h3>Sync</h3>
+        <label class="field">Keep favourites and progress in
           <select id="data-home-select"></select>
         </label>
         <p id="sync-info" class="hint"></p>
@@ -155,12 +177,6 @@
         <div class="row-actions">
           <button id="sync-now-btn" class="btn">Sync now</button>
         </div>
-      </section>
-
-      <section class="settings-group">
-        <h3>GitHub token</h3>
-        <p class="hint">Public repos work without one. A token lets Readover read private repos, sync favourites across your devices, save highlights and edit notes. Create a <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained token</a> limited to your notes repos, with <b>Contents: read and write</b>. It is stored only in this browser.</p>
-        <input id="token-input" type="password" placeholder="github_pat_…" autocomplete="off" />
       </section>
 
       <section class="settings-group">
@@ -172,8 +188,15 @@
             <option value="dark">Dark</option>
           </select>
         </label>
-        <label class="field">Save book highlights to
+        <label class="field">Save highlights and articles to
           <select id="hl-home-select"></select>
+        </label>
+        <label class="field">Notes with highlights
+          <select id="mix-select">
+            <option value="0.8">Usually show one highlight</option>
+            <option value="0.5">Sometimes show one highlight</option>
+            <option value="0">Always show the whole note</option>
+          </select>
         </label>
         <label class="field">Suggest a break
           <select id="break-select">
@@ -182,27 +205,29 @@
             <option value="40">After 40 cards</option>
           </select>
         </label>
-        <label class="field">When a note has highlights
-          <select id="mix-select">
-            <option value="0.8">Usually show one highlight</option>
-            <option value="0.5">Sometimes show one highlight</option>
-            <option value="0">Always show the whole note</option>
-          </select>
-        </label>
       </section>
 
       <section class="settings-group" id="learn-group">
-        <h3>What the feed has learned</h3>
-        <p class="hint">Readover notices what you open, favourite, stay on, skip and hide, and shows a little more of those folders and libraries (never more than twice as often). It only learns on this device and fades slowly, so your tastes can change.</p>
-        <label class="check"><input type="checkbox" id="learn-toggle" /> Learn from what I read</label>
+        <h3>Feed learning</h3>
+        <label class="check"><input type="checkbox" id="learn-toggle" /> Show more of what I read, less of what I skip</label>
         <div id="learn-summary" class="learn-summary"></div>
         <div class="row-actions">
-          <button id="learn-reset" class="btn">Forget what it learned</button>
+          <button id="learn-reset" class="btn btn-quiet">Start fresh</button>
         </div>
       </section>
 
+      <section class="settings-group" id="clip-group">
+        <h3>Save articles</h3>
+        <p class="hint">Drag this to your bookmarks bar. On an article, tap it to send the page to Readover.</p>
+        <p><a id="clip-bookmarklet" class="btn bookmarklet" href="#">Save to Readover</a></p>
+        <details class="how">
+          <summary>On a phone</summary>
+          <p class="hint" id="clip-phone-hint"></p>
+        </details>
+      </section>
+
       <section class="settings-group">
-        <h3>Storage on this device</h3>
+        <h3>This device</h3>
         <p id="storage-info" class="hint">Checking…</p>
         <div class="row-actions">
           <button id="clear-books-btn" class="btn">Remove downloaded books</button>
@@ -281,6 +306,7 @@
         <h2 id="compose-title">New note</h2>
         <button class="icon-btn" type="button" data-close aria-label="Close"><svg class="i"><use href="#i-close"/></svg></button>
       </div>
+      <p class="hint compose-alt"><button type="button" class="linklike" id="compose-article">Save a web article instead</button></p>
       <label class="field">Title
         <input name="title" required placeholder="What's it about?" />
       </label>

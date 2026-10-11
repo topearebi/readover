@@ -6,7 +6,7 @@ import { entries, search, coverage, downloadAll } from '../notes-index.js';
 import { dataHome } from '../sync.js';
 import { el, icon, toast } from './overlay.js';
 
-/** @param app { openItem(item), compose({ sourceId, folder }) } */
+/** @param app { openItem(item), compose({ sourceId, folder }), saveArticle() } */
 export function initNotes(app) {
   const root = document.getElementById('notes');
   const view = { sourceId: null, folder: '', query: '' };
@@ -15,9 +15,10 @@ export function initNotes(app) {
   const searchInput = el('input', { type: 'search', class: 'notes-search', placeholder: 'Search your notes', 'aria-label': 'Search your notes', autocomplete: 'off' });
   const coverageLine = el('p', { class: 'hint notes-coverage', hidden: true });
   const crumbs = el('nav', { class: 'notes-crumbs', 'aria-label': 'Folder' });
-  const newBtn = el('button', { class: 'btn' }, icon('pen', 'i i-sm'), 'New note here');
+  const newBtn = el('button', { class: 'btn' }, icon('pen', 'i i-sm'), 'New note');
+  const clipBtn = el('button', { class: 'btn', title: 'Save a web article' }, '+ Article');
   const list = el('div', { class: 'notes-list' });
-  root.replaceChildren(el('div', { class: 'notes-inner' }, el('div', { class: 'notes-top' }, searchInput, coverageLine), el('div', { class: 'notes-bar' }, crumbs, newBtn), list));
+  root.replaceChildren(el('div', { class: 'notes-inner' }, el('div', { class: 'notes-top' }, searchInput, coverageLine), el('div', { class: 'notes-bar' }, crumbs, el('div', { class: 'notes-bar-actions' }, clipBtn, newBtn)), list));
 
   searchInput.addEventListener('input', () => {
     clearTimeout(searchTimer);
@@ -27,6 +28,7 @@ export function initNotes(app) {
     }, 150);
   });
   newBtn.onclick = () => app.compose({ sourceId: view.sourceId, folder: view.folder });
+  clipBtn.onclick = () => app.saveArticle();
 
 
   function row(item, title, sub) {

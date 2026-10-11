@@ -167,6 +167,8 @@ export function parseNote(raw, path) {
 
   const words = main.split(/\s+/).filter(Boolean).length;
   const isPlain = /\.txt$/i.test(path);
+  // A saved web article: its quotes aren't your highlights (those go to Highlights/).
+  const article = /^https?:\/\//i.test(meta.source || '');
   return {
     title: title.replace(/[*_`]/g, ''),
     meta,
@@ -174,8 +176,9 @@ export function parseNote(raw, path) {
     html: isPlain ? `<pre class="plain">${escapeHtml(main)}</pre>` : renderMarkdown(main),
     words,
     minutes: Math.max(1, Math.round(words / 220)),
-    highlights: isPlain ? [] : extractHighlights(withAnchors),
+    highlights: isPlain || article ? [] : extractHighlights(withAnchors),
     tags: parseTags(meta.tags, main),
+    article,
   };
 }
 

@@ -2,11 +2,12 @@
 // to other notes, rename or move it, delete it). Opened from the feed and from Notes.
 import { readText, writeNote, canWrite, moveNote, deleteNote, notePath, displayName } from '../library.js';
 import { parseNote } from '../markdown.js';
-import { getSource, items as itemStore } from '../store.js';
-import { backlinks, findByLink, search, entries } from '../notes-index.js';
+import { getSource, items as itemStore, progress, saveProgress } from '../store.js';
+import { backlinks, findByLink, search, entries, related, excerptOf, resolve, downloadAll } from '../notes-index.js';
 import { pushOverlay, el, icon, toast } from './overlay.js';
 import { resolveImages } from './card.js';
 import { sheet, menu } from './sheet.js';
+import { askNote } from './highlight-note.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const linkName = (item) => item.path.split('/').pop().replace(/\.(md|markdown|txt)$/i, '');
@@ -25,7 +26,8 @@ export function addToSection(text, heading, block) {
 
 /**
  * @param item  the note
- * @param opts  { starred, onStar(bool), highlight?, onSaved(item, text), openItem(item), createNote(title) }
+ * @param opts  { starred, onStar(bool), highlight?, onSaved(item, text), openItem(item), createNote(title),
+ *                onHighlight?(h) → Promise<{ where, file }> (saved web articles only) }
  */
 export async function openNote(item, opts = {}) {
   let src = getSource(item.sourceId);
@@ -61,6 +63,7 @@ export async function openNote(item, opts = {}) {
       { class: 'reader-article' },
       el('div', { class: 'card-where' }, el('span', {}, ...[src?.name || displayName(src), ...crumbs].map((c) => el('span', { class: 'crumb' }, c)))),
       el('h1', { class: 'card-title' }, note.title),
+      note.article ? articleMeta() : null,
       prose,
       linked,
       el('p', { class: 'reader-foot' }, item.path)
@@ -68,8 +71,25 @@ export async function openNote(item, opts = {}) {
     scroll.replaceChildren(article);
     titleEl.textContent = note.title;
     showBacklinks(linked);
+    if (note.article) paintQuotes(prose, highlights);
     return prose;
   };
+
+  /** Where a saved web article came from. */
+  function articleMeta() {
+    const m = note.meta;
+    let host = m.site || '';
+    try {
+      host = host || new URL(m.source).hostname.replace(/^www\./, '');
+    } catch {}
+    const bits = [m.author, m.published].filter(Boolean).join(' · ');
+    return el(
+      'p',
+      { class: 'article-meta' },
+      bits ? el('span', {}, bits) : null,
+      el('a', { href: m.source, target: '_blank', rel: 'noopener' }, `${host || 'Original'} ↗`)
+    );
+  }
 
   async function showBacklinks(section) {
     const list = await backlinks(item);
@@ -85,6 +105,8 @@ export async function openNote(item, opts = {}) {
     );
   }
 
+  // Highlights made in a saved web article (also written to Highlights/<title>.md).
+  const highlights = note.article ? [...((await progress.get(item.key))?.highlights || [])] : [];
   let prose = renderArticle();
   document.body.append(root);
   scroll.focus();
@@ -130,7 +152,15 @@ export async function openNote(item, opts = {}) {
 
   let editing = false;
   let textarea = null;
-  const close = pushOverlay(() => root.remove());
+  let selTimer = null;
+  const onSelection = () => {
+    clearTimeout(selTimer);
+    selTimer = setTimeout(checkSelection, 250);
+  };
+  const close = pushOverlay(() => {
+    document.removeEventListener('selectionchange', onSelection);
+    root.remove();
+  });
   back.onclick = () => {
     if (editing && textarea.value !== text && !confirm('Discard your changes?')) return;
     close();
@@ -176,10 +206,15 @@ export async function openNote(item, opts = {}) {
         textarea = el('textarea', { spellcheck: 'true', 'aria-label': 'Note source' });
         textarea.value = text;
         scroll.replaceChildren(el('div', { class: 'editor' }, textarea));
+        textarea.addEventListener('input', () => fitEditor(textarea, scroll));
+        fitEditor(textarea, scroll);
         editBtn.textContent = 'Save';
         editBtn.classList.add('btn-primary');
         linkBtn.hidden = false;
-        textarea.focus();
+        // Start at the top of the note, not with the cursor (and view) at the end.
+        textarea.setSelectionRange(0, 0);
+        textarea.focus({ preventScroll: true });
+        scroll.scrollTop = 0;
         return;
       }
       editBtn.disabled = true;
@@ -200,7 +235,8 @@ export async function openNote(item, opts = {}) {
     const insert = `[[${linkName(picked)}]]`;
     const { selectionStart: s, selectionEnd: e } = textarea;
     textarea.setRangeText(insert, s, e, 'end');
-    textarea.focus();
+    fitEditor(textarea, scroll);
+    textarea.focus({ preventScroll: true });
   };
 
   moreBtn.onclick = async () => {
@@ -223,6 +259,66 @@ export async function openNote(item, opts = {}) {
     if (choice === 'github') window.open(githubUrl(), '_blank', 'noopener');
     if (choice === 'delete') remove();
   };
+
+  /* ---------- Highlighting a saved web article ---------- */
+
+  let selBar = null;
+  let selection = null;
+  const dropBar = () => {
+    selBar?.remove();
+    selBar = null;
+  };
+  function checkSelection() {
+    const sel = document.getSelection();
+    const range = sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0) : null;
+    const inside = range && !editing && prose.isConnected && prose.contains(range.commonAncestorContainer);
+    const text = inside ? sel.toString().replace(/\s+/g, ' ').trim() : '';
+    if (text.length < 3) {
+      selection = null;
+      dropBar();
+      return;
+    }
+    const heads = [...prose.querySelectorAll('h2, h3')];
+    const chapter = heads.filter((h) => h.compareDocumentPosition(range.startContainer) & Node.DOCUMENT_POSITION_FOLLOWING).pop()?.textContent.trim() || '';
+    selection = { text, chapter };
+    if (selBar) return;
+    const keep = el('button', { class: 'btn btn-mark' }, icon('marker', 'i i-sm'), 'Highlight');
+    const withNote = el('button', { class: 'btn btn-quiet' }, 'Add a note');
+    const cancel = el('button', { class: 'btn btn-quiet', 'aria-label': 'Cancel' }, '✕');
+    selBar = el('div', { class: 'selection-bar' }, keep, withNote, cancel);
+    root.append(selBar);
+    cancel.onclick = () => {
+      document.getSelection().removeAllRanges();
+      dropBar();
+    };
+    keep.onclick = () => keepHighlight(selection, '');
+    withNote.onclick = async () => {
+      const sel = selection;
+      const comment = await askNote(sel?.text || '');
+      if (comment !== null) keepHighlight(sel, comment);
+    };
+  }
+  if (note.article && opts.onHighlight) document.addEventListener('selectionchange', onSelection);
+
+  async function keepHighlight(sel, comment) {
+    if (!sel) return;
+    document.getSelection().removeAllRanges();
+    dropBar();
+    const h = { text: sel.text, chapter: sel.chapter, comment: comment.trim(), at: Date.now(), cfi: `text:${normText(sel.text).slice(0, 40)}` };
+    highlights.push(h);
+    await saveProgress(item, { highlights });
+    paintQuotes(prose, highlights);
+    try {
+      const saved = await opts.onHighlight({ text: h.text, comment: h.comment, chapter: h.chapter, title: note.title, at: `text=${h.text.slice(0, 80)}` });
+      if (saved?.file) {
+        h.file = saved.file;
+        await saveProgress(item, { highlights });
+      }
+      toast(saved?.where ? `Highlight saved to ${saved.where}` : 'Highlight saved on this device');
+    } catch (err) {
+      toast(`Kept on this device. ${err.message}`);
+    }
+  }
 
   async function addThought() {
     const input = el('textarea', { rows: '4', name: 'thought', placeholder: 'What do you think now? Has anything changed?', required: true });
@@ -289,41 +385,172 @@ export async function openNote(item, opts = {}) {
   }
 }
 
-/** Search-as-you-type picker over all notes. Resolves with an item, or null. */
-export async function pickNote(title, exclude) {
-  const input = el('input', { type: 'search', placeholder: 'Search your notes', autocomplete: 'off' });
+const normText = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * Mark each highlight's text in rendered prose. Matching ignores case and spacing, so
+ * it survives the Markdown round trip; a quote that can't be found is simply skipped.
+ */
+export function paintQuotes(root, quotes) {
+  root.querySelectorAll('mark.ro-hl').forEach((m) => m.replaceWith(...m.childNodes));
+  root.normalize();
+  for (const h of quotes) {
+    const q = normText(h.text || '');
+    if (q.length < 3) continue;
+    // Flatten the text (recomputed per quote: wrapping splits text nodes).
+    const map = [];
+    let flat = '';
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const t = n.data;
+      for (let i = 0; i < t.length; i++) {
+        if (/\s/.test(t[i])) {
+          if (flat && flat[flat.length - 1] !== ' ') {
+            flat += ' ';
+            map.push([n, i]);
+          }
+        } else {
+          flat += t[i].toLowerCase();
+          map.push([n, i]);
+        }
+      }
+    }
+    const at = flat.indexOf(q);
+    if (at < 0) continue;
+    const [startNode, startOff] = map[at];
+    const [endNode, endIdx] = map[at + q.length - 1];
+    wrapText(root, startNode, startOff, endNode, endIdx + 1, h.comment);
+  }
+}
+
+function wrapText(root, startNode, startOff, endNode, endOff, comment) {
+  const nodes = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  walker.currentNode = startNode;
+  for (let n = startNode; n; n = walker.nextNode()) {
+    nodes.push(n);
+    if (n === endNode) break;
+  }
+  for (const node of nodes) {
+    const s = node === startNode ? startOff : 0;
+    const e = node === endNode ? Math.min(endOff, node.length) : node.length;
+    if (s >= e || !node.data.slice(s, e).trim()) continue;
+    if (e < node.length) node.splitText(e);
+    const target = s > 0 ? node.splitText(s) : node;
+    const mark = el('mark', { class: 'ro-hl', title: comment || '' });
+    target.replaceWith(mark);
+    mark.append(target);
+  }
+}
+
+/** Grow the textarea to fit its text, keeping the page where it was. */
+function fitEditor(textarea, scroll) {
+  const keep = scroll.scrollTop;
+  textarea.style.height = 'auto';
+  textarea.style.height = `${textarea.scrollHeight}px`;
+  scroll.scrollTop = keep;
+}
+
+/**
+ * Pick a note to link to. With no search it suggests notes about similar things to
+ * `from`; search covers the full text. Tap a note to preview it before linking.
+ * Resolves with an item, or null.
+ */
+export async function pickNote(title, from) {
+  const input = el('input', { type: 'search', placeholder: 'Search titles and text', autocomplete: 'off', 'aria-label': 'Search notes' });
+  const cover = el('p', { class: 'hint pick-cover', hidden: true });
   const results = el('div', { class: 'pick-list' });
   let picked = null;
   let dialogRef = null;
-  const show = async () => {
-    const q = input.value.trim();
-    const list = q
-      ? (await search(q, { limit: 30 })).map((r) => r.item)
-      : (await entries()).sort((a, b) => a.title.localeCompare(b.title)).slice(0, 30).map((e) => e.item);
-    const all = await entries();
-    results.replaceChildren(
-      ...list
-        .filter((i) => i.key !== exclude?.key)
-        .map((i) => {
-          const e = all.find((x) => x.item.key === i.key);
-          const b = el('button', { type: 'button', class: 'pick-item' }, el('b', {}, e?.title || linkName(i)), el('span', {}, i.folder || getSource(i.sourceId)?.name || ''));
-          b.onclick = () => {
-            picked = i;
-            dialogRef?.close();
-          };
-          return b;
-        })
-    );
-    if (!results.children.length) results.append(el('p', { class: 'hint' }, 'No notes match.'));
+  let all = [];
+  let linked = new Set();
+  let generation = 0;
+
+  const row = (item, title, sub, snippet) => {
+    const isLinked = linked.has(item.key);
+    const main = el('button', { type: 'button', class: 'pick-item', 'aria-expanded': 'false' }, el('b', {}, title), snippet ? el('span', { class: 'pick-snippet' }, snippet) : null, el('small', {}, sub));
+    const link = el('button', { type: 'button', class: `btn ${isLinked ? 'btn-quiet' : ''} pick-link`, disabled: isLinked }, isLinked ? 'Linked' : 'Link');
+    const preview = el('div', { class: 'pick-preview', hidden: true });
+    const wrap = el('div', { class: 'pick-row' }, el('div', { class: 'pick-line' }, main, link), preview);
+    link.onclick = () => {
+      picked = item;
+      dialogRef?.close();
+    };
+    main.onclick = async () => {
+      const open = preview.hidden;
+      results.querySelectorAll('.pick-preview').forEach((p) => (p.hidden = true));
+      results.querySelectorAll('.pick-item').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+      if (!open) return;
+      preview.hidden = false;
+      main.setAttribute('aria-expanded', 'true');
+      preview.replaceChildren(el('p', { class: 'hint' }, 'Loading…'));
+      try {
+        const note = parseNote(await readText(item), item.path);
+        const prose = el('div', { class: 'prose' });
+        prose.innerHTML = note.html;
+        prose.querySelectorAll('img').forEach((i) => i.remove());
+        preview.replaceChildren(prose);
+      } catch (err) {
+        preview.replaceChildren(el('p', { class: 'hint' }, `Couldn't load this note: ${err.message}`));
+      }
+    };
+    return wrap;
   };
-  input.addEventListener('input', show);
+  const where = (item) => [getSource(item.sourceId)?.name, item.folder].filter(Boolean).join(' / ');
+  const heading = (text) => el('h3', { class: 'pick-heading' }, text);
+
+  const show = async () => {
+    const mine = ++generation;
+    const q = input.value.trim();
+    const nodes = [];
+    if (q) {
+      const found = (await search(q, { limit: 40 })).filter((r) => r.item.key !== from?.key);
+      nodes.push(...found.map((r) => row(r.item, r.title, where(r.item), r.snippet || excerptOf(all.find((e) => e.item.key === r.item.key)?.text, 140))));
+      if (!found.length) nodes.push(el('p', { class: 'hint' }, 'No notes match.'));
+    } else {
+      const suggested = from ? await related(from, { limit: 8 }) : [];
+      if (suggested.length) {
+        nodes.push(heading('Similar notes'));
+        nodes.push(...suggested.map((r) => row(r.item, r.title, `${where(r.item)} · shares “${r.shared.join('”, “')}”`, excerptOf(all.find((e) => e.item.key === r.item.key)?.text, 140))));
+      }
+      nodes.push(heading('All notes'));
+      const rest = all.filter((e) => e.item.key !== from?.key).sort((a, b) => a.title.localeCompare(b.title));
+      nodes.push(...rest.slice(0, 60).map((e) => row(e.item, e.title, where(e.item), excerptOf(e.text, 140))));
+      if (rest.length > 60) nodes.push(el('p', { class: 'hint' }, `${rest.length - 60} more: search to find them.`));
+    }
+    if (mine === generation) results.replaceChildren(...nodes);
+  };
+
+  const refresh = async () => {
+    all = await entries();
+    const self = all.find((e) => e.item.key === from?.key);
+    linked = new Set(self ? self.links.map((l) => resolve(l, self, all)?.item.key).filter(Boolean) : []);
+    const missing = all.filter((e) => !e.hasText).length;
+    cover.hidden = !missing;
+    if (missing) {
+      const get = el('button', { type: 'button', class: 'linklike' }, 'Download them');
+      get.onclick = async () => {
+        get.disabled = true;
+        await downloadAll((n) => (get.textContent = `Downloading… ${n} of ${missing}`));
+        await refresh();
+      };
+      cover.replaceChildren(`${missing} of ${all.length} notes aren't on this device yet, so only their titles are searched. `, get);
+    }
+    await show();
+  };
+
+  let timer = null;
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(show, 120);
+  });
   await sheet({
     title,
     tall: true,
-    fields: [input, results],
+    fields: [input, cover, results],
     onOpen: (_form, dialog) => {
       dialogRef = dialog;
-      show();
+      refresh();
       setTimeout(() => input.focus(), 50);
     },
   });

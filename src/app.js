@@ -19,6 +19,7 @@ import * as learn from './learn.js';
 import { markHighlightSeen } from './feed.js';
 import { linkedPairs } from './notes-index.js';
 import { createConnectionCard } from './ui/card.js';
+import { initClip } from './ui/clip.js';
 
 const $ = (id) => document.getElementById(id);
 const feedEl = $('feed');
@@ -429,6 +430,8 @@ const actions = {
       toast("That book isn't in your libraries on this device, so here's the note instead");
       return actions.open(card);
     }
+    // A highlight from a saved web article: open the article at the passage.
+    if (item.kind === 'note') return openNoteItem(item, { highlight: card._highlight || { text: String(at.at).replace(/^text=/, '') } });
     await openBookItem(item, null, at.at);
   },
 };
@@ -455,6 +458,8 @@ async function openNoteItem(item, { card = null, highlight = null, section = '' 
       },
       openItem: (other) => openNoteItem(other),
       createNote: (title) => compose.open({ sourceId: item.sourceId, folder: item.folder, title }),
+      // Saved web articles: highlights go to Highlights/<title>.md, like a book's.
+      onHighlight: (h) => saveBookHighlight(item, h.title, h),
     });
   } catch (err) {
     toast(err.message);
@@ -509,7 +514,9 @@ async function saveBookHighlight(item, bookTitle, { text, comment, chapter, page
   const dest = highlightHome(store.getSource(item.sourceId));
   const safe = bookTitle.replace(/[\\/:*?"<>|#^[\]]+/g, '').trim().slice(0, 90) || 'Book';
   const path = `Highlights/${safe}.md`;
-  const header = `---\ntitle: ${safe}\nsource: ${item.path}\n---\n\n# ${safe}`;
+  // A saved article is a note too, so its highlights file gets a title of its own.
+  const title = item.kind === 'note' ? `${safe} (highlights)` : safe;
+  const header = `---\ntitle: ${title}\nsource: ${item.path}\n---\n\n# ${title}`;
   const where = [chapter, page ? `p. ${page}` : ''].filter(Boolean).join(', ') || new Date().toISOString().slice(0, 10);
   const anchor = JSON.stringify({ book: `${store.sourceKey(store.getSource(item.sourceId))}|${item.path}`, at });
   const quote = text.split(/\n+/).map((l) => `> ${l}`).join('\n');
@@ -746,6 +753,15 @@ const settings = initSettings({
   openSetup: () => setup.open(),
 });
 const compose = initCompose({ showFirst });
+const clip = initClip({
+  home: () => highlightHome(null),
+  openItem: (item) => openNoteItem(item),
+  showFirst,
+});
+$('compose-article').onclick = async () => {
+  await closeTop();
+  clip.open();
+};
 const setup = initSetup({
   afterConnect: async (src) => {
     await syncSource(src, { userGesture: true, quiet: true });
@@ -772,6 +788,7 @@ const shelf = initShelf({
 const notesView = initNotes({
   openItem: (item) => openNoteItem(item),
   compose: (presets) => compose.open(presets),
+  saveArticle: () => clip.open(),
 });
 
 /** Three views: Feed (reading), Shelf (books), Notes (working on notes). */
@@ -820,6 +837,9 @@ async function boot() {
   showPermissionBanner();
   navigator.storage?.persist?.().catch(() => {});
 }
+// Opened by the bookmarklet or the share sheet to save an article. Runs alongside
+// boot() so the page sent by the bookmarklet isn't kept waiting.
+clip.receive();
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   // updateViaCache 'none': always check sw.js itself against the server.

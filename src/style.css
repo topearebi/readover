@@ -679,7 +679,8 @@ a {
 .field input,
 .field select,
 .field textarea,
-.settings-group > input {
+.settings-group > input,
+.token-row input {
   width: 100%;
   border: 1px solid var(--line);
   background: var(--paper);
@@ -744,7 +745,7 @@ details.field[open] summary {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 8px 20px calc(24px + var(--bottom));
+  padding: 0 20px calc(24px + var(--bottom));
   height: 100%;
   overflow-y: auto;
 }
@@ -756,8 +757,9 @@ details.field[open] summary {
   top: 0;
   z-index: 1;
   background: var(--card);
-  padding-top: 8px;
-  margin-right: -10px;
+  /* Sticky at the very top, so nothing shows above it while scrolling. */
+  padding: 16px 0 8px;
+  margin: 0 -10px -8px 0;
 }
 .sheet h2 {
   font-family: var(--serif);
@@ -994,18 +996,20 @@ details.field[open] summary {
   }
 }
 .editor {
-  flex: 1;
-  display: flex;
   max-width: 44rem;
-  width: 100%;
   margin: 0 auto;
-  padding: 16px 16px var(--bottom);
+  padding: 16px 16px calc(120px + var(--bottom));
 }
+/* The textarea grows to fit the note, so the page has a single scroll area
+   (a short box scrolling inside a scrolling page is unusable on phones). */
 .editor textarea {
-  flex: 1;
+  display: block;
+  width: 100%;
+  min-height: 60vh;
   border: 0;
   outline: none;
   resize: none;
+  overflow: hidden;
   background: none;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.95rem;
@@ -1779,6 +1783,61 @@ details.field[open] summary {
   overflow-y: auto;
   min-height: 0;
 }
+.pick-row {
+  border-bottom: 1px solid var(--line);
+}
+.pick-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pick-line .pick-item {
+  flex: 1;
+  min-width: 0;
+  border-bottom: 0;
+}
+.pick-item small {
+  color: var(--faint);
+  font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pick-item[aria-expanded='true'] b {
+  color: var(--action);
+}
+.pick-link {
+  flex: none;
+  padding: 6px 14px;
+}
+.pick-link:not(:disabled) {
+  color: var(--action);
+  border-color: color-mix(in srgb, var(--action) 45%, transparent);
+}
+.pick-preview {
+  margin: 0 4px 14px;
+  padding: 12px 14px;
+  max-height: 46vh;
+  overflow-y: auto;
+  border-radius: 10px;
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+.pick-preview .prose {
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+.pick-heading {
+  margin: 16px 4px 2px;
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+}
+.pick-cover {
+  margin: 8px 2px 0;
+}
 .sheet-inner > input[type='search'] {
   width: 100%;
   border: 1px solid var(--line);
@@ -1945,4 +2004,127 @@ details.field[open] summary {
   margin: 8px 0 0;
   font-size: 0.8125rem;
   color: var(--muted);
+}
+
+/* ---------- Settings details ---------- */
+.settings-first {
+  border-top: 0;
+  padding-top: 4px;
+}
+.token-status {
+  margin: 8px 0 6px;
+}
+.token-status .ok {
+  color: var(--action);
+  font-weight: 600;
+}
+.token-status .err {
+  color: var(--danger, #b4472e);
+}
+details.how {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+details.how summary {
+  cursor: pointer;
+  color: var(--action);
+  font-weight: 600;
+  padding: 4px 0;
+}
+details.how ol {
+  margin: 6px 0 4px;
+  padding-left: 1.3em;
+  line-height: 1.55;
+}
+details.how li + li {
+  margin-top: 4px;
+}
+.more-options summary {
+  cursor: pointer;
+  color: var(--action);
+  font-weight: 600;
+  font-size: 0.875rem;
+  padding: 2px 0;
+}
+.more-options[open] > summary {
+  margin-bottom: 12px;
+}
+.more-options > .field,
+.more-options > .field-pair {
+  margin-bottom: 12px;
+}
+.bookmarklet {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  cursor: grab;
+}
+
+/* ---------- Saved articles ---------- */
+.article-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: -14px 0 26px;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+.article-meta a {
+  color: var(--action);
+  text-decoration: none;
+  font-weight: 600;
+}
+.prose mark.ro-hl {
+  cursor: default;
+}
+.clip-info {
+  margin: 4px 0 0;
+}
+.clip-note {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--marker) 22%, transparent);
+  color: var(--ink);
+}
+.clip-preview {
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+.clip-preview .prose {
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+.clip-paste {
+  min-height: 150px;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 12px 14px;
+  border: 1px dashed var(--faint);
+  border-radius: 10px;
+  background: var(--paper);
+  font-family: var(--serif);
+  line-height: 1.55;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.clip-paste:empty::before {
+  content: attr(data-placeholder);
+  color: var(--faint);
+}
+.clip-paste:focus {
+  outline: 2px solid var(--action);
+  outline-offset: 1px;
+}
+.notes-bar-actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.compose-alt {
+  margin: -6px 0 4px;
 }

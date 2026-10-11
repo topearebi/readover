@@ -1,4 +1,4 @@
-// Settings sheet: libraries, token, appearance, storage.
+// Settings sheet: GitHub account, libraries, sync, reading, saving articles, storage.
 import * as store from '../store.js';
 import { displayName, deviceNotesZip, canWrite as canWriteSrc } from '../library.js';
 import * as github from '../sources/github.js';
@@ -7,6 +7,8 @@ import { openSheet, el, toast } from './overlay.js';
 import * as dataSync from '../sync.js';
 import * as outbox from '../outbox.js';
 import * as learn from '../learn.js';
+import { bookmarkletCode } from './clip.js';
+import { TOKEN_URL } from './setup.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -34,7 +36,7 @@ export function initSettings(app) {
     for (const it of await store.items.all()) counts.set(it.sourceId, (counts.get(it.sourceId) || 0) + 1);
 
     if (!sources.length) {
-      list.replaceChildren(el('p', { class: 'empty-sources' }, 'Nothing connected yet. Add a GitHub repo of notes, or open a folder on this device. You can also just start writing: notes are kept in this browser until you connect somewhere.'));
+      list.replaceChildren(el('p', { class: 'empty-sources' }, 'Nothing yet. Add a repo or a folder, or just start writing.'));
       return;
     }
     const rows = await Promise.all(
@@ -43,19 +45,17 @@ export function initSettings(app) {
         if (src.type === 'device') return deviceRow(src, n);
         const bits = [];
         if (src.type === 'github') {
-          bits.push(`${src.owner}/${src.repo}${src.root ? `/${src.root}` : ''} on ${src.branch || 'main'}`);
+          bits.push(`${src.owner}/${src.repo}${src.root ? `/${src.root}` : ''}${src.branch && src.branch !== 'main' ? ` (${src.branch})` : ''}`);
         } else {
-          bits.push(src.mode === 'handle' ? 'Folder on this device' : 'Imported copy of a folder');
+          bits.push(src.mode === 'handle' ? 'Folder' : 'Imported folder');
         }
         bits.push(`${n} ${n === 1 ? 'item' : 'items'}`);
-        bits.push(lastSyncText(src.id));
-        const detail = el('div', { class: 'source-detail' }, bits.join(', '));
-        if (src.type === 'github' && !github.canWrite(src)) {
-          detail.append(el('br'), 'Read only. Add a token to edit notes or keep Readover data here.');
-        }
+        bits.push(lastSyncText(src.id).replace(/^Synced /, ''));
+        const detail = el('div', { class: 'source-detail' }, bits.join(' · '));
+        if (src.type === 'github' && !github.canWrite(src)) detail.append(el('br'), 'Read-only (no token)');
         if (src.type === 'local' && src.mode === 'handle') {
           const perm = await local.permissionState(src).catch(() => 'missing');
-          if (perm !== 'granted') detail.append(el('br'), el('span', { class: 'warn' }, 'Needs your permission to read again.'));
+          if (perm !== 'granted') detail.append(el('br'), el('span', { class: 'warn' }, 'Tap Refresh to allow access again'));
         }
         const actions = el('div', { class: 'source-actions' });
         const add = (label, fn, cls) => {
@@ -67,7 +67,7 @@ export function initSettings(app) {
         else add('Refresh', () => app.syncSource(src, { userGesture: true }).then(renderSources));
         if (src.type === 'github') add('Edit', () => showForm(src));
         add('Remove', async () => {
-          if (!confirm(`Remove "${displayName(src)}" from Readover? Your files are not touched; favourites synced to the repo are kept there.`)) return;
+          if (!confirm(`Remove "${displayName(src)}" from Readover? Your files aren't touched.`)) return;
           await store.removeSource(src.id);
           app.sourcesChanged();
           renderSources();
@@ -80,7 +80,7 @@ export function initSettings(app) {
 
   /** Notes written before connecting anything. */
   function deviceRow(src, n) {
-    const detail = el('div', { class: 'source-detail' }, `${n} ${n === 1 ? 'note' : 'notes'}, kept only in this browser.`);
+    const detail = el('div', { class: 'source-detail' }, `${n} ${n === 1 ? 'note' : 'notes'} · only in this browser`);
     const actions = el('div', { class: 'source-actions' });
     const move = el('button', {}, 'Move to GitHub');
     move.onclick = () => app.openSetup();
@@ -94,7 +94,7 @@ export function initSettings(app) {
     };
     const del = el('button', { class: 'remove' }, 'Delete');
     del.onclick = async () => {
-      if (!confirm(`Delete ${n} ${n === 1 ? 'note' : 'notes'} stored only in this browser? This can't be undone. Download them first if you want to keep them.`)) return;
+      if (!confirm(`Delete ${n} ${n === 1 ? 'note' : 'notes'} kept only in this browser? This can't be undone.`)) return;
       await store.removeSource(src.id);
       app.sourcesChanged();
       renderSources();
@@ -117,6 +117,8 @@ export function initSettings(app) {
       form.elements.name.value = src.name || '';
       form.elements.token.value = src.token || '';
     }
+    // Show the extra options when editing a repo that uses any of them.
+    form.querySelector('.more-options').open = Boolean(src && (src.root || src.ignore || src.token || (src.branch && src.branch !== 'main')));
     form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     form.elements.repo.focus();
   }
@@ -170,9 +172,32 @@ export function initSettings(app) {
     store.setToken(tokenInput.value);
     toast(tokenInput.value.trim() ? 'Token saved on this device' : 'Token removed');
     if (dataSync.ensureDataHome()) dataSync.syncNow();
+    renderToken();
     renderSources();
     renderSync();
   };
+  $('token-link').href = TOKEN_URL;
+
+  /** Say whose token this is, so a typo or an expired token shows up here. */
+  let tokenCheck = 0;
+  async function renderToken() {
+    const box = $('token-status');
+    const token = store.getToken();
+    const mine = ++tokenCheck;
+    if (!token) {
+      box.replaceChildren('No token: public repos only, read-only.');
+      return;
+    }
+    box.replaceChildren('Checking…');
+    let text;
+    try {
+      const login = await github.whoami(token);
+      text = login ? [el('span', { class: 'ok' }, `✓ Signed in as ${login}`)] : [el('span', { class: 'err' }, 'GitHub rejected this token. It may have expired.')];
+    } catch {
+      text = ['Saved. Will be checked when online.'];
+    }
+    if (mine === tokenCheck) box.replaceChildren(...text);
+  }
 
   /* ---- Sync between devices ---- */
 
@@ -189,10 +214,10 @@ export function initSettings(app) {
 
     const info = $('sync-info');
     const last = dataSync.lastSync();
-    if (!writable.length) info.textContent = 'Add a GitHub repo and a token to sync between devices. Until then, everything stays on this device.';
-    else if (!home) info.textContent = 'Not syncing. Favourites, progress and preferences stay on this device.';
-    else if (!last.at) info.textContent = `Kept in .readover/ in ${home.owner}/${home.repo}.`;
-    else if (last.ok) info.textContent = `Kept in .readover/ in ${home.owner}/${home.repo}. Last synced ${new Date(last.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
+    if (!writable.length) info.textContent = 'Needs a repo and a token.';
+    else if (!home) info.textContent = 'Not syncing.';
+    else if (!last.at) info.textContent = `In ${home.repo}/.readover`;
+    else if (last.ok) info.textContent = `In ${home.repo}/.readover · synced ${new Date(last.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     else info.textContent = `Couldn't sync: ${last.message}`;
     $('sync-now-btn').hidden = !home;
 
@@ -211,7 +236,7 @@ export function initSettings(app) {
         return el(
           'div',
           { class: 'outbox-item' },
-          el('p', {}, el('b', {}, name), ' ', e.error ? el('span', { class: 'err' }, `couldn't be saved: ${e.error}`) : 'is waiting to be saved to GitHub.'),
+          el('p', {}, el('b', {}, name), ' ', e.error ? el('span', { class: 'err' }, `not saved: ${e.error}`) : 'waiting to save'),
           e.error ? retry : null,
           e.error ? discard : null
         );
@@ -255,16 +280,16 @@ export function initSettings(app) {
     const { more, less } = learn.describe();
     const box = $('learn-summary');
     if (!learn.enabled()) {
-      box.replaceChildren(el('p', { class: 'hint' }, 'Off: the feed is a plain weighted shuffle.'));
+      box.replaceChildren(el('p', { class: 'hint' }, 'Off: a plain shuffle.'));
       return;
     }
     if (!more.length && !less.length) {
-      box.replaceChildren(el('p', { class: 'hint' }, "Nothing yet. It needs a few days of reading before it changes anything."));
+      box.replaceChildren(el('p', { class: 'hint' }, 'Nothing learned yet. On this device only.'));
       return;
     }
     const list = (label, rows) =>
       rows.length ? el('div', {}, el('p', { class: 'learn-label' }, label), el('ul', {}, ...rows.map((r) => el('li', {}, r.label)))) : null;
-    box.replaceChildren(...[list('Showing a little more of', more), list('Showing a little less of', less)].filter(Boolean));
+    box.replaceChildren(...[list('More of', more), list('Less of', less)].filter(Boolean));
   }
   $('learn-toggle').onchange = (e) => {
     store.setPrefs({ learn: e.target.checked });
@@ -282,7 +307,7 @@ export function initSettings(app) {
     const writable = store.getSources().filter((s) => s.type !== 'device' && canWriteSrc(s));
     const home = dataSync.dataHome();
     sel.replaceChildren(
-      el('option', { value: '' }, home ? `Same repo as your synced data (${home.repo})` : writable.length ? `${displayName(writable[0])}` : 'This device'),
+      el('option', { value: '' }, home ? `${home.repo} (with synced data)` : writable.length ? `${displayName(writable[0])}` : 'This device'),
       ...writable.filter((s) => s.id !== home?.id).map((s) => el('option', { value: s.id }, displayName(s)))
     );
     sel.value = writable.some((s) => s.id === store.getPrefs().highlightHome) ? store.getPrefs().highlightHome : '';
@@ -292,11 +317,11 @@ export function initSettings(app) {
     const githubIds = new Set(store.getSources().filter((s) => s.type === 'github').map((s) => s.id));
     const all = await store.blobs.all();
     await store.blobs.bulkDelete(all.filter((b) => githubIds.has(b.sourceId)).map((b) => b.key));
-    toast('Downloaded books removed. They download again when opened.');
+    toast('Removed. Books download again when opened.');
     showStorage();
   };
   $('reset-seen-btn').onclick = async () => {
-    if (!confirm('Forget which items you have seen? Favourites and hidden items are kept.')) return;
+    if (!confirm('Forget what you have seen? Favourites and hidden items stay.')) return;
     const rows = await store.state.all();
     await store.state.bulkPut(rows.map((r) => ({ ...r, lastSeen: 0, seen: 0 })));
     toast('Reading history cleared');
@@ -305,21 +330,42 @@ export function initSettings(app) {
   async function showStorage() {
     const info = $('storage-info');
     if (!navigator.storage?.estimate) {
-      info.textContent = 'Storage details are not available in this browser.';
+      info.textContent = '';
       return;
     }
     const { usage = 0, quota = 0 } = await navigator.storage.estimate();
     const persisted = (await navigator.storage.persisted?.()) || false;
     const mb = (b) => (b / 1048576 < 1024 ? `${(b / 1048576).toFixed(1)} MB` : `${(b / 1073741824).toFixed(1)} GB`);
-    info.textContent = `Using ${mb(usage)} of ${mb(quota)} available. ${
-      persisted ? 'The browser will keep this data.' : 'The browser may clear this data if space runs low.'
-    }`;
+    info.textContent = `${mb(usage)} used${persisted ? '' : ' · the browser may clear it if space runs low'}`;
   }
+
+  /* ---- Save articles ---- */
+  const clipLink = $('clip-bookmarklet');
+  clipLink.href = bookmarkletCode();
+  clipLink.onclick = (e) => {
+    e.preventDefault();
+    toast('Drag it to your bookmarks bar, then use it on an article');
+  };
+  const phone = $('clip-phone-hint');
+  const copy = el('button', { class: 'linklike', type: 'button' }, 'Copy the bookmarklet');
+  copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(decodeURIComponent(clipLink.href));
+      toast('Copied');
+    } catch {
+      toast("Couldn't copy here");
+    }
+  };
+  phone.replaceChildren(
+    'iPhone: bookmark any page, edit the bookmark, and replace its address with the copied code. Android: add Readover to your home screen and share links to it, or paste the article in Notes → Save an article. ',
+    copy
+  );
 
   return {
     async open() {
       const prefs = store.getPrefs();
       tokenInput.value = store.getToken();
+      renderToken();
       $('theme-select').value = prefs.theme;
       $('mix-select').value = String(prefs.highlightMix >= 0.7 ? 0.8 : prefs.highlightMix > 0 ? 0.5 : 0);
       form.hidden = true;

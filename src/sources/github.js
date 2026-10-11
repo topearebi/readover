@@ -160,6 +160,19 @@ function decodeBase64Utf8(b64) {
 }
 
 /** Repo metadata (default branch, privacy). */
+/** Who a token belongs to: resolves with a login, or null if GitHub rejects the token. */
+export async function whoami(token) {
+  let res;
+  try {
+    res = await fetch(`${API}/user`, { headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}` }, cache: 'no-store' });
+  } catch {
+    throw new Error('offline');
+  }
+  if (res.status === 401) return null;
+  if (!res.ok) throw new Error(`GitHub error ${res.status}`);
+  return (await res.json()).login;
+}
+
 export async function repoInfo(src) {
   const res = await gh(src, repoUrl(src));
   const data = await res.json();

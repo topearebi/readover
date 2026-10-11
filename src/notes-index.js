@@ -136,14 +136,100 @@ export async function search(query, { limit = 60 } = {}) {
     }
     if (!ok) continue;
     let snippet = '';
-    const at = e.lower.indexOf(terms[0]);
+    // Show the words around the first match in the body (not the title line).
+    const body = e.text.replace(/^\s*#\s.*$/m, '');
+    const at = body.toLowerCase().indexOf(terms[0]);
     if (at >= 0) {
-      const from = Math.max(0, e.text.lastIndexOf(' ', Math.max(0, at - 60)));
-      snippet = `${from > 0 ? '…' : ''}${e.text.slice(from, at + 140).replace(/\s+/g, ' ').trim()}…`;
+      const from = Math.max(0, body.lastIndexOf(' ', Math.max(0, at - 60)));
+      const raw = excerptOf(body.slice(from, at + 160), 220);
+      snippet = `${from > 0 ? '…' : ''}${raw}…`;
+    } else {
+      snippet = excerptOf(body, 140);
     }
     results.push({ item: e.item, title: e.title, snippet, score });
   }
   return results.sort((a, b) => b.score - a.score || a.title.localeCompare(b.title)).slice(0, limit);
+}
+
+/* ---------- Related notes ---------- */
+
+const STOP = new Set(
+  'about above after again against also among because been before being below between both could does doing down during each from further have having here herself himself into itself just like more most myself only other ought ours over same should some such than that their them themselves then there these they this those through under until very were what when where which while whom will with would your yours really thing things into make made much many even still well every never always something someone'.split(' ')
+);
+const words = (text) =>
+  text
+    .toLowerCase()
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/\]\([^)]*\)/g, ' ')
+    .match(/[\p{L}][\p{L}'-]{3,}/gu)
+    ?.filter((w) => !STOP.has(w)) || [];
+const vectors = new Map(); // key -> { sha, tf: Map, norm }
+
+function vectorOf(e, idf) {
+  let v = vectors.get(e.item.key);
+  if (!v || v.sha !== e.item.sha) {
+    const tf = new Map();
+    // Titles say the most about a note, so their words count three times.
+    for (const w of [...words(e.title), ...words(e.title), ...words(e.title), ...words(e.text)]) tf.set(w, (tf.get(w) || 0) + 1);
+    v = { sha: e.item.sha, tf };
+    vectors.set(e.item.key, v);
+  }
+  const weighted = new Map();
+  let norm = 0;
+  for (const [w, n] of v.tf) {
+    const x = (1 + Math.log(n)) * (idf.get(w) || 0);
+    weighted.set(w, x);
+    norm += x * x;
+  }
+  return { weighted, norm: Math.sqrt(norm) || 1 };
+}
+
+/**
+ * Notes about similar things to this one, by the words they share (rarer words count
+ * more). Works on notes downloaded to this device. Returns [{ item, title, score, shared }].
+ */
+export async function related(item, { limit = 12 } = {}) {
+  const all = (await entries()).filter((e) => e.hasText);
+  const self = all.find((e) => e.item.key === item.key);
+  if (!self || all.length < 2) return [];
+  const df = new Map();
+  for (const e of all) {
+    for (const w of new Set([...words(e.title), ...words(e.text)])) df.set(w, (df.get(w) || 0) + 1);
+  }
+  const idf = new Map();
+  for (const [w, n] of df) if (n < all.length) idf.set(w, Math.log(all.length / n));
+  const me = vectorOf(self, idf);
+  const out = [];
+  for (const e of all) {
+    if (e.item.key === item.key) continue;
+    const v = vectorOf(e, idf);
+    let dot = 0;
+    const shared = [];
+    for (const [w, x] of me.weighted) {
+      const y = v.weighted.get(w);
+      if (y) {
+        dot += x * y;
+        shared.push([w, x * y]);
+      }
+    }
+    const score = dot / (me.norm * v.norm);
+    if (score > 0.04) out.push({ item: e.item, title: e.title, score, shared: shared.sort((a, b) => b[1] - a[1]).slice(0, 3).map(([w]) => w) });
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, limit);
+}
+
+/** The first lines of a note's text, without headings or markup, for previews. */
+export function excerptOf(text, length = 220) {
+  return (text || '')
+    .replace(/^---[\s\S]*?\n---\n/, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/^#.*$/gm, '')
+    .replace(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (_m, t, a) => a || t)
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[#>*_`=]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, length);
 }
 
 /** Pairs of notes where one links to the other (for "Connected" cards). */

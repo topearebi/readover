@@ -9,7 +9,7 @@ import { openSheet, closeTop, toast, el } from './overlay.js';
 
 const REPO_LINK =
   'https://github.com/new?name=notes&visibility=private&description=My+notes,+read+with+Readover';
-const TOKEN_LINK =
+export const TOKEN_URL =
   'https://github.com/settings/personal-access-tokens/new?name=Readover&description=Lets+Readover+read+and+save+your+notes&expires_in=366&contents=write';
 
 /** @param app { afterConnect(src): Promise } */
@@ -17,7 +17,7 @@ export function initSetup(app) {
   const sheet = document.getElementById('setup-sheet');
   const form = document.getElementById('setup-form');
   document.getElementById('setup-repo-link').href = REPO_LINK;
-  document.getElementById('setup-token-link').href = TOKEN_LINK;
+  document.getElementById('setup-token-link').href = TOKEN_URL;
 
   const writableRepos = () => store.getSources().filter((s) => s.type === 'github' && github.canWrite(s));
 

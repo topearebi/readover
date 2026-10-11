@@ -336,7 +336,14 @@ function renderError(card, item, err) {
 export function resolveImages(container, item) {
   container.querySelectorAll('img').forEach(async (img) => {
     const src = img.getAttribute('src') || '';
-    if (!src || /^(https?:|data:|blob:|\/\/)/i.test(src)) return;
+    if (/^(https?:|\/\/)/i.test(src)) {
+      // Web images (saved articles): drop any that fail rather than show a broken icon.
+      // index.html sets no-referrer, which many sites need before they'll serve them.
+      if (img.complete && !img.naturalWidth) img.remove();
+      else img.addEventListener('error', () => img.remove(), { once: true });
+      return;
+    }
+    if (!src || /^(data:|blob:)/i.test(src)) return;
     img.removeAttribute('src');
     try {
       const blob = await readRelative(item, src.split('#')[0].split('?')[0]);

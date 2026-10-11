@@ -9,7 +9,7 @@ Everything runs on GitHub: the app is a static site on GitHub Pages, your notes 
 ## What it does
 
 - **Random feed.** Each time you open the app it shuffles. Items you haven't seen for a long time, or have never seen, come up more often. Favourites get a small boost.
-- **A feed that learns, on this device only.** What you open, favourite and stay on, and what you skip or hide, shift which folders and libraries come up, never more than twice as often and never less than half. Settings → *What the feed has learned* shows it in plain words, and you can turn it off or reset it.
+- **A feed that learns, on this device only.** What you open, favourite and stay on, and what you skip or hide, shift which folders and libraries come up, never more than twice as often and never less than half. Settings → *Feed learning* shows it in plain words, and you can turn it off or reset it.
 - **Memories.** Notes with a date (frontmatter `date:`/`created:`, a date in the file name, or a year folder such as `Journal/2019`) come back as *On this day in 2023* or *From 5 years ago*. GitHub notes without one use when they last changed.
 - **Long notes as sections.** A long note with `##` sections becomes a carousel you swipe through sideways (or press ← →). It starts on a different section each time.
 - **Your highlights come back.** A passage you highlight in a book returns the next day, then after 3 and 7 days. Now and then a *Connected* card shows two notes that link to each other.
@@ -33,7 +33,20 @@ Everything runs on GitHub: the app is a static site on GitHub Pages, your notes 
   - **delete** it.
 
   `[[Links]]` and links to other `.md` files open the linked note, and every note lists the notes that link to it. Saving is instant, even offline; changes are committed in the background, and a note that was changed elsewhere is never overwritten or deleted.
+- **Save web articles.** Send an article to Readover and it's saved as a Markdown note in `Articles/` (in the repo chosen under Settings → Reading → *Save highlights and articles to*), with its title, link, site, author and date in the frontmatter. It then reads, searches, links and resurfaces like any note. Select text to **Highlight** it or **Add a note**: highlights are marked in the article and added to `Highlights/<Article title>.md`, and their feed cards open the article at the passage. See [Saving articles](#saving-articles).
 - **Works offline.** The app and everything you've already seen are cached on the device.
+
+## Saving articles
+
+There's no server, so the page has to be handed to Readover from your browser:
+
+- **Bookmarklet (computer, and iPhone).** Settings → *Save articles* has a **Save to Readover** button. Drag it to your bookmarks bar. On an article, click the bookmark: Readover opens with a clean preview (navigation, ads and footers removed), and **Save and read** saves it.
+  - iPhone/iPad: tap **Copy the bookmarklet** under *On a phone*, bookmark any page, edit that bookmark and paste the code as its address.
+  - A few sites block this. Readover then opens with the link filled in and asks you to paste the article instead.
+- **Share (Android).** With Readover added to your home screen, share a link to it. Sharing only passes the link, so copy the article on the page and paste it in, or save just the link.
+- **Paste (anywhere).** Notes → **+ Article**, or **Save a web article instead** in the new-note sheet. Copy the article on the page and paste it into the box: headings, lists, links and emphasis are kept.
+
+Article images stay on the original site and load from there.
 
 ## Start without any setup
 
@@ -50,11 +63,11 @@ Once the notes start to matter (10 notes, or a few kept for 3 days), one card in
 
 1. **Put the app on GitHub Pages.** Fork or push this repo, then go to **Settings → Pages → Build and deployment**, choose **Deploy from a branch**, and pick `main` and `/ (root)`. Every push to `main` is live the next time anyone opens the app. There's nothing to build and no version number to bump.
 2. **Open the site** (`https://<you>.github.io/readover/`) and choose **Add a GitHub repo**. You can type `owner/repo` or paste a GitHub link, including a link to a folder.
-3. **Add a token** if your notes repo is private, or if you want favourites, highlights and edits to sync. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new):
-   - Repository access: *Only select repositories* → your notes repos
+3. **Add a token** if your repos are private, or if you want favourites, highlights and edits to sync. It's one token for your account, used for every repo you add (a repo can have its own under *More options* if you need that). Settings → *GitHub account* → **How to get a token** links to GitHub's form with the name and permission filled in:
+   - Repository access: **All repositories**, or only your notes and books repos
    - Permissions: **Contents: Read and write** (Metadata: read-only is added automatically)
 
-   Paste it under **GitHub token** in Settings. It is stored only in that browser.
+   Paste it under **GitHub account**. Readover checks it and shows whose it is. It is stored only in that browser.
 4. **Install it.** On a phone, use *Add to Home Screen* so it opens full screen.
 
 Public repos work without a token. Readover reads their files from `raw.githubusercontent.com`, which isn't subject to GitHub's 60-requests-an-hour limit for anonymous use.
@@ -70,7 +83,7 @@ Public repos work without a token. Readover reads their files from `raw.githubus
 
 ## Sync between devices
 
-With a token, Readover keeps its own data in a `.readover/` folder in one repo, chosen under **Settings → Sync between devices**. It picks the first repo you connect with a token; you can switch to any other, including a small private repo kept just for this.
+With a token, Readover keeps its own data in a `.readover/` folder in one repo, chosen under **Settings → Sync**. It picks the first repo you connect with a token; you can switch to any other, including a small private repo kept just for this.
 
 | File | Holds |
 | --- | --- |
@@ -160,7 +173,8 @@ Then open http://localhost:8000. Service workers and the folder picker both work
 
 - Your token sits in this browser's `localStorage`, as with any static site that talks to GitHub directly. Keep it fine-grained and limited to your notes repos.
 - Note content is sanitised (DOMPurify) before it's shown, so a note can't run script on the page that holds your token.
-- The app makes no network requests except to GitHub.
+- The app talks only to GitHub, except for images inside saved articles, which load from the site they came from (sent without a referrer).
+- A page sent by the bookmarklet is only parsed, never run: Readover reads its text with `DOMParser`, converts it to Markdown, and sanitises it again when it's shown. It only accepts the page from the tab that opened it, and nothing is saved until you press **Save and read**.
 
 ## Licence of bundled libraries
 

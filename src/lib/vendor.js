@@ -5,6 +5,9 @@
 const base = new URL('../../vendor/', import.meta.url);
 const PDFJS = 'pdfjs-4.10.38/';
 const FOLIATE = 'foliate-js-78914ae/';
+const READABILITY = 'readability-0.6.0/';
+const TURNDOWN = 'turndown-7.2.4/';
+const GFM = 'turndown-plugin-gfm-1.0.2/';
 
 let pdfjs;
 export async function loadPdfJs() {
@@ -27,4 +30,17 @@ export async function loadFoliate() {
     ]).then(([view, overlayer]) => ({ makeBook: view.makeBook, Overlayer: overlayer.Overlayer }));
   }
   return foliate;
+}
+
+/** Readability (finds the article in a web page) and Turndown (HTML → Markdown). */
+let article;
+export async function loadArticleTools() {
+  if (!article) {
+    article = Promise.all([
+      import(new URL(`${READABILITY}readability.mjs`, base).href),
+      import(new URL(`${TURNDOWN}turndown.mjs`, base).href),
+      import(new URL(`${GFM}gfm.mjs`, base).href),
+    ]).then(([r, t, g]) => ({ Readability: r.Readability, TurndownService: t.default, gfm: g.gfm }));
+  }
+  return article;
 }
