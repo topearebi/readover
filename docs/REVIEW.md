@@ -101,14 +101,84 @@ Read-first. The feed is the whole screen. Chrome is reduced to a wordmark (tap i
   - The token is now a *GitHub account* section at the top. Readover checks it and shows whose it is.
   - Adding a repo asks only for the repo. Branch, folder, name and a per-repo token sit under *More options*.
   - Every explanation is cut to a line, and step-by-step help is folded away.
-- **Web articles.** These are saved as Markdown notes via a bookmarklet, the Android share sheet, or pasting.
-  - Mozilla Readability and Turndown are vendored for this.
-  - Highlights work as they do in books and are saved to `Highlights/<title>.md`, with anchors back to the passage.
-  - The page is never executed. It is parsed, converted, and sanitised again when shown.
+- **Web articles** were tried (a whole-page bookmarklet, Readability and Turndown) and then removed. In real use they captured only fragments of pages, and saving whole articles works against the point of the app. They are replaced by clips (a quote, its source, and your thought) in the garden plan.
+
+## The garden plan (agreed October 2026)
+The full spec is in the project's design notes. In short: every note is an atomic insight that carries your own writing. Selecting text anywhere creates one. Notes grow from seed to sprout, sapling and tree through thoughts and connections; growing types show health (healthy, thirsty, wilting) on an honest clock; pruned notes move to `Archive/`.
+
+Built so far:
+1. **Groundwork.**
+   - A real frontmatter parser (`src/notefile.js`).
+   - New notes named `YYYY-MM-DD-title-words.md`, with `title`, `date`, `type` and `tags` frontmatter.
+   - Titles resolved from frontmatter, then the first heading, then the file name.
+   - Types, inferred when missing.
+   - Links written as `[[file-name|Title]]`.
+   - Whole-article saving removed.
+2. **Insights from any selection.**
+   - Selecting text in a book, a PDF or any note creates one insight note (`src/insights.js`): the quote, the source, a hidden anchor, and your thought.
+   - One shared sheet for saving them, with an editable title.
+   - KOReader/Kindle exports and the older grouped `Highlights/<Book>.md` files are an inbox. Their highlights show as seed cards with **Water**, a highlight counts as taken in once any note quotes it, and an export with nothing left leaves the feed.
+   - Settings → *New notes go to* (a library and a folder) is used by new notes and insights. (Stage 7 splits this: a library for new notes, and a highlights folder.)
+   - The separate 1/3/7-day return for book highlights is retired; insights follow the new-note review schedule.
+3. **Capture.**
+   - Clips arrive at `#clip?text&url&title` (bookmarklet, iOS Shortcut) or `?title&text&url` (the Android share target).
+   - `src/clip.js` tidies them (it separates a quote from the link Android appends), builds text-fragment links to the passage, and writes the selection-only bookmarklet.
+   - The capture sheet (`src/ui/capture.js`) takes the quote, source, link, thought, title and **Link to a note**. It flags quotes already saved.
+   - **Paste a quote** in the new-note sheet.
+   - Settings → *Clip from anywhere*, with a guide for each device.
+4. **The growth engine** (nothing visible yet; it is shown in stage 5).
+   - `src/garden.js` works out each note's stage and health:
+     - **Stages:** seed, sprout, sapling, tree, plus pruned, pending and inbox.
+     - **Health:** healthy, thirsty or wilting for growing types; none for finished types.
+     - **Thoughts:** own words outside `## Thoughts`/`## Related`, plus dated entries.
+     - **Connections:** distinct links in and out, leaving out quote source lines and pruned notes.
+     - **Thresholds:** one `THRESHOLDS` block.
+   - `src/clock.js` is the honest clock: when each note last changed.
+     - **GitHub:** GraphQL in batches of 50, falling back to one REST request per note (up to 1,000 per app open).
+     - **Local folders and this device:** from the file version.
+     - Results are cached per version. A commit made by Readover records its own time.
+   - "Download them" now also refreshes notes whose cached copy is out of date.
+5. **Growth in the app.**
+   - **Tags on every card and in the reader:** stage icon, time since tended and health colour; a second line (type · status) for essays, poems and stories; resting notes show when they were last read.
+   - **Water:** a one-line field on cards adds a dated thought.
+   - **The tag sheet:** stage ladder, thoughts, links, time since tended, Water, Graft, Prune, plus status and published link for writing.
+   - **Prune and Replant:** Prune moves the note to `Archive/` with `pruned:` and `pruned_from:` in one commit (moves can now carry a frontmatter change). Replant moves it back.
+   - **Writing:** a status for essays, poetry and fiction (idea, draft, revising, done, submitted, published), set in the new-note sheet or tag sheet, plus `canonical_url:` for the published version. Done, submitted and published pieces, and journal entries, rest instead of wilting.
+   - **The feed:** weighted by thirst (×1 to ×2) and leaves out pruned notes. The 1/3/7/21-day review schedule, its "You wrote this…" lines and the app badge are retired.
+6. **Filters and sorting.**
+   - `src/filters.js` defines growth filters (Seeds, Needs water, Wilting, Trees, Resting, Pruned) and type filters (each type plus Unfinished writing), shared by the feed and Notes, with counts.
+   - **What to show:** adds Growth and Type, and the chip names what's active.
+   - **Notes:** a Sort menu (Folders, Newest, Oldest, Recently tended, Least tended) and a Filter sheet; sorted or filtered views are one flat list.
+   - **Rows:** each shows a small growth tag and the note's date.
+   - **Welcome card:** no longer promises a review schedule.
+7. **Folders as types, one status, simpler notes** (stage 7a, v3.8).
+   - **Types are top-level folders** (`typeOf` in `src/notefile.js`); subfolders inherit them, the top level is Unsorted, `Archive/` and dot-folders aren't types. `type:` is no longer written or read for this, and nothing is guessed. A pruned note keeps the type of the folder it came from.
+   - **Status:** `status: done` rests; no status is in progress. Old `submitted`/`published` count as done. Writing lifecycles, folder behaviours, Fragment/Note/Auto and the Unfinished writing filter are gone. Any note can have a published link.
+   - **New notes:** optional title (the first words name the file otherwise); a type picker of the library's folders plus Unsorted and **New type…** (hidden, with a quiet link instead, when there are no folders); In progress/Done, remembered per folder on the device; Tags. A note started inside a subfolder stays there.
+   - **Insights and clips:** a Tags field; saved to Settings → *Your notes* → *Highlights go to* (`Highlights/` by default, empty = top level). Insights no longer write `type:`; the inbox test uses `date:` instead.
+   - **Filters:** a checklist of folders (plus Unsorted) with counts in What to show and Notes, combinable; growth filter *Done* replaces Resting. Notes not yet downloaded pass a type filter.
+   - **Settings:** a *Your notes* section with two folded guides, *Organising your notes* and *How the garden works*.
+   - **Moves keep the clock:** a note moved or renamed elsewhere with the same content (same blob sha) keeps its last-change date and cached copy; a plain move in Readover keeps it too, while queued and after.
+   - Fixed: the Note field in the new-note sheet had picked up the growth tag's pill styles (`.grow` class clash).
+8. **Rename or move, with links** (stage 7b, v3.9).
+   - **The sheet** (a note's ⋯ menu): Title, File name (follows the title and keeps a date prefix; plain names stay plain), Type (every folder, Unsorted, New type…). Title only, same file name: just a retitle, where the title came from (frontmatter, or the first heading).
+   - **`src/relink.js`:** `planRename(item, {newPath, newTitle})` downloads nothing itself; the sheet fetches the library's missing notes first ("Checking links…"), then shows "Updates N links in M notes", the list, and links from other libraries that won't change. Only links that resolve to this exact note are rewritten. Title links change only if the title does and keep their words (`[[new-name|Old words]]`); a label equal to the old title becomes the new one; alias links stay.
+   - **One commit:** `outbox.queueRename` carries the move plus each linking note as exact string substitutions. If a note changed elsewhere first, the substitutions are applied to the newer text. Linking notes keep their clock; the renamed note does too unless retitled. Edits made after a queued rename wait for it (`after`), instead of becoming conflict copies.
+   - **Local folders and this device:** the same changes, file by file.
+
+## Quality check before release (October 2026, v3.9)
+An audit of every screen and sheet at 320, 390, 768 and 1280 px, light and dark, with axe-core (WCAG 2.2 AA plus best practice), a keyboard walkthrough, and a new journeys suite (`journey-test.mjs`). Fixed:
+- **Contrast:** the faint and muted text colours (tab labels, dates, file paths, hints) were below 4.5:1 in both themes; now they pass. The wilting tag text too.
+- **Overflow:** long unbroken titles, paths and names ran past the screen in cards, the reader and Notes; they wrap now. Tables keep readable columns and scroll sideways. On 320 px phones the top bar pushed Settings off-screen, and paired fields cramped; the chip shrinks and fields stack.
+- **New-note sheet:** with type, status and tags it had grown past the screen, hiding Save; the note box now gives way so everything fits, and Save stays in reach. Ctrl/⌘+Enter saves.
+- **Keyboard:** Enter on a focused button opened the current card instead of pressing the button. Tab escaped an open note into the page behind; readers now keep focus inside and give it back to what opened them. Wide code blocks and tables can be reached and scrolled by keyboard.
+- **Touch targets:** the sync dot, checkbox and disclosure rows meet 24 px.
+- **Notes rows:** previews showed raw `[[links]]` and image markup.
+- **Rename:** a clash with an existing note is shown before Save, not after; notes that couldn't be downloaded to check (offline) are named, instead of the preview quietly saying there's nothing to update.
+- **Libraries that are one folder of a repo:** insights and notes moved from this device landed outside the library (at the repo's top); they go inside it now.
+- **Moving device notes to GitHub** reset every note's clock; they keep it now.
 
 ## Still open
-- **Saved `.html` files in a library**, read through the same article converter.
-- **Fetching an article from a link alone.** The browser can't read other sites without their permission (CORS). A GitHub Action in the notes repo could fetch links pushed to an inbox file, keeping to "GitHub only", at the cost of one more setup step.
 - **Search via a GitHub Action in the notes repo.** A workflow building `.readover/index.json` on push would make full-text search instant on a new device, without downloading every note.
-- **Updating links when a note is renamed.** Today Readover warns that old `[[links]]` need updating; it could offer to rewrite them in one commit.
+- **A broken-links check** in Notes, for links left behind by renames made outside Readover (agreed for later).
 - **Learning that follows you across devices.** It's per-device by design for now.

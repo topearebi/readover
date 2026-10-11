@@ -6,6 +6,14 @@ window.addEventListener('popstate', () => {
   const top = stack.pop();
   if (!top) return;
   top.close();
+  // Give back the rest of the page, and focus to whatever opened this overlay.
+  for (const el of top.inerted || []) el.inert = false;
+  setTimeout(() => {
+    let back = top.opener;
+    // A list redrawn meanwhile: find the same row again by its key.
+    if (back && !back.isConnected && back.dataset?.key) back = document.querySelector(`[data-key="${CSS.escape(back.dataset.key)}"]`);
+    if (back?.isConnected && !back.closest('[inert]')) back.focus({ preventScroll: true });
+  }, 0);
   top.settled?.(); // anything waiting for this overlay to be fully gone can continue
 });
 
@@ -20,12 +28,18 @@ function requestClose(entry) {
 }
 
 /**
- * Register an open overlay. `close` tears it down. Returns a function that closes
+ * Register an open overlay. `close` tears it down; `element`, for a full-screen
+ * overlay, is kept interactive while the rest of the page is made inert. Returns a function that closes
  * it; that function's promise resolves once the browser has stepped back, so the
  * next overlay can safely be opened (otherwise the pending "back" would close it).
  */
-export function pushOverlay(close) {
-  const entry = { close };
+export function pushOverlay(close, { element = null, opener = document.activeElement } = {}) {
+  const entry = { close, opener };
+  // A full-screen overlay (a reader) keeps keyboard focus inside it, like a dialog.
+  if (element) {
+    entry.inerted = [...document.body.children].filter((el) => el !== element && !el.inert && el.tagName !== 'DIALOG' && el.id !== 'toast' && el.tagName !== 'SCRIPT');
+    for (const el of entry.inerted) el.inert = true;
+  }
   stack.push(entry);
   history.pushState({ readover: stack.length }, '');
   return () => requestClose(entry);

@@ -50,8 +50,16 @@ const SHELL = [
   './src/dates.js',
   './src/ui/highlight-note.js',
   './src/lib/zip.js',
-  './src/articles.js',
-  './src/ui/clip.js',
+  './src/notefile.js',
+  './src/insights.js',
+  './src/clip.js',
+  './src/clock.js',
+  './src/garden.js',
+  './src/ui/growth.js',
+  './src/ui/types.js',
+  './src/relink.js',
+  './src/filters.js',
+  './src/ui/capture.js',
 ];
 const VENDOR = [
   './vendor/marked-15.0.12/marked.esm.js',

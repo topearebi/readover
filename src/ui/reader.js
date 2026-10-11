@@ -1,16 +1,24 @@
 // Full-screen note reader: read, edit, and work on a note (add a thought, link it
 // to other notes, rename or move it, delete it). Opened from the feed and from Notes.
-import { readText, writeNote, canWrite, moveNote, deleteNote, notePath, displayName } from '../library.js';
+import { readText, writeNote, canWrite, renameNote, deleteNote, notePath, displayName } from '../library.js';
 import { parseNote } from '../markdown.js';
-import { getSource, items as itemStore, progress, saveProgress } from '../store.js';
+import { getSource, items as itemStore } from '../store.js';
 import { backlinks, findByLink, search, entries, related, excerptOf, resolve, downloadAll } from '../notes-index.js';
 import { pushOverlay, el, icon, toast } from './overlay.js';
 import { resolveImages } from './card.js';
 import { sheet, menu } from './sheet.js';
+import { wikiLink, updateFrontmatter } from '../notefile.js';
+import { growthOf, isArchived } from '../garden.js';
+import { growthTag, openGrowthSheet } from './growth.js';
 import { askNote } from './highlight-note.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const linkName = (item) => item.path.split('/').pop().replace(/\.(md|markdown|txt)$/i, '');
+/** [[file-name|Title]] for a note, using the title Readover shows for it. */
+async function linkFor(item) {
+  const e = (await entries()).find((x) => x.item.key === item.key);
+  return wikiLink(item.path, e?.title);
+}
 
 /** Add `block` to the end of a "## <heading>" section, creating the section if needed. */
 export function addToSection(text, heading, block) {
@@ -27,9 +35,11 @@ export function addToSection(text, heading, block) {
 /**
  * @param item  the note
  * @param opts  { starred, onStar(bool), highlight?, onSaved(item, text), openItem(item), createNote(title),
- *                onHighlight?(h) → Promise<{ where, file }> (saved web articles only) }
+ *                makeInsight?(note, { text, thought, title, h }) → Promise,
+ *                prune?(title) → Promise<item|null>, replant?() → Promise }
  */
 export async function openNote(item, opts = {}) {
+  const opener = document.activeElement; // focus goes back here on close
   let src = getSource(item.sourceId);
   let text = await readText(item);
   let note = parseNote(text, item.path);
@@ -54,6 +64,14 @@ export async function openNote(item, opts = {}) {
 
   const renderArticle = () => {
     const prose = el('div', { class: 'prose' });
+    // Where the note stands in the garden; tap for Water / Graft / Prune.
+    const growthSlot = el('div', { class: 'reader-grow' });
+    growthOf(item)
+      .then((g) => {
+        const tag = growthTag(g, () => openGrowth(g));
+        if (tag) growthSlot.replaceChildren(tag);
+      })
+      .catch(() => {});
     prose.innerHTML = note.html;
     resolveImages(prose, item);
     const crumbs = item.folder ? item.folder.split('/') : [];
@@ -63,7 +81,7 @@ export async function openNote(item, opts = {}) {
       { class: 'reader-article' },
       el('div', { class: 'card-where' }, el('span', {}, ...[src?.name || displayName(src), ...crumbs].map((c) => el('span', { class: 'crumb' }, c)))),
       el('h1', { class: 'card-title' }, note.title),
-      note.article ? articleMeta() : null,
+      growthSlot,
       prose,
       linked,
       el('p', { class: 'reader-foot' }, item.path)
@@ -71,25 +89,8 @@ export async function openNote(item, opts = {}) {
     scroll.replaceChildren(article);
     titleEl.textContent = note.title;
     showBacklinks(linked);
-    if (note.article) paintQuotes(prose, highlights);
     return prose;
   };
-
-  /** Where a saved web article came from. */
-  function articleMeta() {
-    const m = note.meta;
-    let host = m.site || '';
-    try {
-      host = host || new URL(m.source).hostname.replace(/^www\./, '');
-    } catch {}
-    const bits = [m.author, m.published].filter(Boolean).join(' · ');
-    return el(
-      'p',
-      { class: 'article-meta' },
-      bits ? el('span', {}, bits) : null,
-      el('a', { href: m.source, target: '_blank', rel: 'noopener' }, `${host || 'Original'} ↗`)
-    );
-  }
 
   async function showBacklinks(section) {
     const list = await backlinks(item);
@@ -105,8 +106,6 @@ export async function openNote(item, opts = {}) {
     );
   }
 
-  // Highlights made in a saved web article (also written to Highlights/<title>.md).
-  const highlights = note.article ? [...((await progress.get(item.key))?.highlights || [])] : [];
   let prose = renderArticle();
   document.body.append(root);
   scroll.focus();
@@ -160,7 +159,7 @@ export async function openNote(item, opts = {}) {
   const close = pushOverlay(() => {
     document.removeEventListener('selectionchange', onSelection);
     root.remove();
-  });
+  }, { element: root, opener });
   back.onclick = () => {
     if (editing && textarea.value !== text && !confirm('Discard your changes?')) return;
     close();
@@ -232,7 +231,7 @@ export async function openNote(item, opts = {}) {
   linkBtn.onclick = async () => {
     const picked = await pickNote('Link to a note', item);
     if (!picked || !textarea) return;
-    const insert = `[[${linkName(picked)}]]`;
+    const insert = await linkFor(picked);
     const { selectionStart: s, selectionEnd: e } = textarea;
     textarea.setRangeText(insert, s, e, 'end');
     fitEditor(textarea, scroll);
@@ -242,9 +241,12 @@ export async function openNote(item, opts = {}) {
   moreBtn.onclick = async () => {
     const actions = [];
     if (writable && !editing && !note.imported) {
-      actions.push({ id: 'thought', label: 'Add a thought', icon: 'pen' });
-      actions.push({ id: 'link', label: 'Link to another note', icon: 'open' });
+      actions.push({ id: 'thought', label: 'Water: add a thought', icon: 'pen' });
+      actions.push({ id: 'link', label: 'Graft: link to another note', icon: 'open' });
     }
+    const archived = isArchived(item.path);
+    if (writable && !editing && opts.prune && !archived) actions.push({ id: 'prune', label: 'Prune: move to Archive', icon: 'hide' });
+    if (writable && !editing && opts.replant && archived) actions.push({ id: 'replant', label: 'Replant', icon: 'feed' });
     if (writable && !editing) actions.push({ id: 'move', label: 'Rename or move', icon: 'feed' });
     if (githubUrl()) actions.push({ id: 'github', label: 'View on GitHub', icon: 'share' });
     if (writable && !editing) actions.push({ id: 'delete', label: 'Delete', icon: 'close', danger: true });
@@ -256,11 +258,13 @@ export async function openNote(item, opts = {}) {
     if (choice === 'thought') addThought();
     if (choice === 'link') linkTo();
     if (choice === 'move') renameOrMove();
+    if (choice === 'prune') prune();
+    if (choice === 'replant') replant();
     if (choice === 'github') window.open(githubUrl(), '_blank', 'noopener');
     if (choice === 'delete') remove();
   };
 
-  /* ---------- Highlighting a saved web article ---------- */
+  /* ---------- Select text → a new insight ---------- */
 
   let selBar = null;
   let selection = null;
@@ -272,15 +276,16 @@ export async function openNote(item, opts = {}) {
     const sel = document.getSelection();
     const range = sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0) : null;
     const inside = range && !editing && prose.isConnected && prose.contains(range.commonAncestorContainer);
-    const text = inside ? sel.toString().replace(/\s+/g, ' ').trim() : '';
+    const text = inside ? sel.toString().replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim() : '';
     if (text.length < 3) {
       selection = null;
       dropBar();
       return;
     }
-    const heads = [...prose.querySelectorAll('h2, h3')];
-    const chapter = heads.filter((h) => h.compareDocumentPosition(range.startContainer) & Node.DOCUMENT_POSITION_FOLLOWING).pop()?.textContent.trim() || '';
-    selection = { text, chapter };
+    // In an export, which highlight is this from? (Its book and place go with it.)
+    const flat = (x) => x.replace(/[*_`=>[\]]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+    const h = note.highlights.find((x) => flat(x.text).includes(flat(text)) || flat(text).includes(flat(x.text))) || null;
+    selection = { text, h: note.imported || h?.at?.book ? h : null };
     if (selBar) return;
     const keep = el('button', { class: 'btn btn-mark' }, icon('marker', 'i i-sm'), 'Highlight');
     const withNote = el('button', { class: 'btn btn-quiet' }, 'Add a note');
@@ -291,32 +296,49 @@ export async function openNote(item, opts = {}) {
       document.getSelection().removeAllRanges();
       dropBar();
     };
-    keep.onclick = () => keepHighlight(selection, '');
+    keep.onclick = () => makeInsight(selection, {});
     withNote.onclick = async () => {
       const sel = selection;
-      const comment = await askNote(sel?.text || '');
-      if (comment !== null) keepHighlight(sel, comment);
+      const asked = await askNote(sel?.text || '');
+      if (asked) makeInsight(sel, asked);
     };
   }
-  if (note.article && opts.onHighlight) document.addEventListener('selectionchange', onSelection);
+  if (opts.makeInsight) document.addEventListener('selectionchange', onSelection);
 
-  async function keepHighlight(sel, comment) {
+  async function makeInsight(sel, { thought = '', title = '', tags = '' }) {
     if (!sel) return;
     document.getSelection().removeAllRanges();
     dropBar();
-    const h = { text: sel.text, chapter: sel.chapter, comment: comment.trim(), at: Date.now(), cfi: `text:${normText(sel.text).slice(0, 40)}` };
-    highlights.push(h);
-    await saveProgress(item, { highlights });
-    paintQuotes(prose, highlights);
     try {
-      const saved = await opts.onHighlight({ text: h.text, comment: h.comment, chapter: h.chapter, title: note.title, at: `text=${h.text.slice(0, 80)}` });
-      if (saved?.file) {
-        h.file = saved.file;
-        await saveProgress(item, { highlights });
-      }
-      toast(saved?.where ? `Highlight saved to ${saved.where}` : 'Highlight saved on this device');
+      await opts.makeInsight(note, { text: sel.text, thought, title, tags, h: sel.h });
     } catch (err) {
-      toast(`Kept on this device. ${err.message}`);
+      toast(err.message);
+    }
+  }
+
+  function openGrowth(g) {
+    return openGrowthSheet(note.title, g, {
+      water: writable ? addThought : null,
+      graft: writable ? linkTo : null,
+      prune: writable && opts.prune ? prune : null,
+      replant: writable && opts.replant ? replant : null,
+      status: writable ? (v) => save(updateFrontmatter(text, { status: v || null }), v ? 'Marked done: it rests now' : 'Back in progress', `Readover: mark ${item.path} ${v ? 'done' : 'in progress'}`) : null,
+      canonical: writable ? (url) => save(updateFrontmatter(text, { canonical_url: url || null }), url ? 'Published link saved' : 'Published link removed', `Readover: published link for ${item.path}`) : null,
+    });
+  }
+  async function prune() {
+    try {
+      if (await opts.prune(note.title)) close();
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+  async function replant() {
+    try {
+      await opts.replant();
+      close();
+    } catch (err) {
+      toast(err.message);
     }
   }
 
@@ -339,35 +361,122 @@ export async function openNote(item, opts = {}) {
   async function linkTo() {
     const picked = await pickNote(`Link “${note.title}” to…`, item);
     if (!picked) return;
-    await save(addToSection(text, 'Related', `- [[${linkName(picked)}]]`), 'Linked', `Readover: link ${item.path} to ${picked.path}`);
+    await save(addToSection(text, 'Related', `- ${await linkFor(picked)}`), 'Linked', `Readover: link ${item.path} to ${picked.path}`);
   }
 
+  /**
+   * Rename or move: title, file name (following the title) and folder. Links to the
+   * note across the library are found first and updated in the same commit.
+   */
   async function renameOrMove() {
-    const folders = new Set((await itemStore.byIndex('sourceId', src.id)).filter((i) => i.folder).map((i) => i.folder));
-    const name = el('input', { name: 'name', required: true, value: linkName(item), autocapitalize: 'off' });
-    const folder = el('input', { name: 'folder', list: 'move-folders', value: item.folder, placeholder: 'Top level', autocapitalize: 'off', spellcheck: 'false' });
-    const list = el('datalist', { id: 'move-folders' }, ...[...folders].sort().map((f) => el('option', { value: f })));
+    const { renamedStem } = await import('../notefile.js');
+    const { planRename } = await import('../relink.js');
+    const root = String(src.root || '').replace(/^\/+|\/+$/g, '');
+    const ext = /\.(md|markdown|txt)$/i.exec(item.path)?.[0] || '.md';
+    const stem = linkName(item);
+    const folders = [...new Set((await itemStore.byIndex('sourceId', src.id)).filter((i) => i.kind === 'note' && i.folder && !/(^|\/)\./.test(i.folder)).map((i) => i.folder))].filter((f) => !root || f === root || f.startsWith(`${root}/`)).sort();
+    const NEW = '\u0000new';
+    const title = el('input', { name: 'title', required: true, value: note.title, autocomplete: 'off' });
+    const name = el('input', { name: 'name', required: true, value: stem, autocapitalize: 'off', spellcheck: 'false' });
+    const label = (f) => (f === root ? 'Unsorted' : f.slice(root ? root.length + 1 : 0).split('/').join(' / '));
+    const folder = el('select', { name: 'folder' }, ...[root, ...folders.filter((f) => f !== root)].map((f) => el('option', { value: f }, label(f))), el('option', { value: NEW }, 'New type…'));
+    folder.value = item.folder;
+    const newType = el('input', { name: 'newType', placeholder: 'A folder name, e.g. Essays', autocapitalize: 'words', spellcheck: 'false' });
+    const newField = el('label', { class: 'field', hidden: true }, 'New type', newType);
+    const links = el('div', { class: 'relink', 'aria-live': 'polite' }, el('p', { class: 'hint' }, 'Checking links…'));
+    let nameTouched = false;
+    let plan = null;
+    let ready = false;
+    let timer = null;
+    let submitBtn = null;
+
+    const target = () => {
+      const dir = folder.value === NEW ? [root, newType.value.trim().replace(/^\/+|\/+$/g, '')].filter(Boolean).join('/') : folder.value;
+      return notePath(dir, `${name.value.trim().replace(/\.(md|markdown|txt)$/i, '')}${ext}`);
+    };
+    const showPlan = async () => {
+      if (!ready) return;
+      const to = target();
+      // Never over another note: say so before Save, not after.
+      if (to !== item.path && (await itemStore.get(`${src.id}|${to}`))) {
+        plan = null;
+        links.replaceChildren(el('p', { class: 'hint relink-taken' }, `There’s already a note called “${to.split('/').pop()}” there. Choose another name or type.`));
+        if (submitBtn) submitBtn.disabled = true;
+        return;
+      }
+      try {
+        plan = await planRename(item, { newPath: to, newTitle: title.value.trim() });
+      } catch (err) {
+        links.replaceChildren(el('p', { class: 'hint' }, err.message));
+        return;
+      }
+      const rows = [];
+      if (plan.count) {
+        const list = el('ul', {}, ...plan.edits.map((e) => el('li', {}, e.title, e.count > 1 ? el('small', {}, ` · ${e.count} links`) : null)));
+        rows.push(el('details', { class: 'how relink-list' }, el('summary', {}, `Updates ${plan.count} ${plan.count === 1 ? 'link' : 'links'} in ${plan.notes} ${plan.notes === 1 ? 'note' : 'notes'}`), list));
+      } else rows.push(el('p', { class: 'hint' }, 'No links to update.'));
+      if (plan.unchecked) rows.push(el('p', { class: 'hint relink-taken' }, `${plan.unchecked} ${plan.unchecked === 1 ? 'note' : 'notes'} couldn’t be downloaded to check, so links in ${plan.unchecked === 1 ? 'it' : 'them'} won’t be updated. Try again when you’re online.`));
+      if (plan.elsewhere) rows.push(el('p', { class: 'hint' }, `${plan.elsewhere} ${plan.elsewhere === 1 ? 'link' : 'links'} from other libraries won’t be updated.`));
+      links.replaceChildren(...rows);
+      if (submitBtn) submitBtn.disabled = false;
+    };
+    const refresh = () => {
+      clearTimeout(timer);
+      timer = setTimeout(showPlan, 250);
+    };
+    title.addEventListener('input', () => {
+      if (!nameTouched) name.value = renamedStem(item.path, title.value) || stem;
+      refresh();
+    });
+    name.addEventListener('input', () => {
+      nameTouched = true;
+      refresh();
+    });
+    folder.addEventListener('change', () => {
+      newField.hidden = folder.value !== NEW;
+      if (!newField.hidden) newType.focus();
+      refresh();
+    });
+    newType.addEventListener('input', refresh);
+
     const { value } = await sheet({
       title: 'Rename or move',
-      fields: [
-        el('label', { class: 'field' }, 'Name', name),
-        el('label', { class: 'field' }, 'Folder', folder, list),
-        el('p', { class: 'hint' }, 'Links to this note that use its old name will need updating.'),
-      ],
+      fields: [el('label', { class: 'field' }, 'Title', title), el('label', { class: 'field' }, 'File name', name), el('label', { class: 'field' }, 'Type', folder), newField, links],
       submit: 'Save',
+      onOpen: (form) => {
+        submitBtn = form.querySelector('button[value=ok]');
+        submitBtn.disabled = true;
+        // Every note in the library has to be on the device to find links to this one.
+        downloadAll(() => {}, { sourceId: item.sourceId })
+          .catch(() => {})
+          .then(() => {
+            ready = true;
+            showPlan();
+          });
+      },
     });
-    if (value !== 'ok') return;
-    const to = notePath(folder.value, name.value);
-    if (to === item.path) return;
+    clearTimeout(timer);
+    if (value !== 'ok' || !plan) return;
+    if (folder.value === NEW && !newType.value.trim()) return toast('Name the new type, or pick one');
+    const to = target();
+    plan = await planRename(item, { newPath: to, newTitle: title.value.trim() });
+    if (to === item.path && !plan.self.fmPatch && !plan.self.subs.length && !plan.edits.length) return;
+    const wasMoved = to !== item.path;
+    status.textContent = 'Saving…';
     try {
-      const moved = await moveNote(item, to);
+      const moved = await renameNote(item, to, plan);
       Object.assign(item, moved);
       src = getSource(item.sourceId);
+      text = await readText(item);
+      note = parseNote(text, item.path);
+      titleEl.textContent = note.title;
       prose = renderArticle();
-      toast(`Moved to ${to}`);
+      toast(plan.count ? `Saved, and ${plan.count} ${plan.count === 1 ? 'link' : 'links'} updated` : wasMoved ? `Moved to ${to}` : 'Saved');
       opts.onSaved?.(item, text);
     } catch (err) {
       toast(err.message);
+    } finally {
+      status.textContent = '';
     }
   }
 
@@ -382,64 +491,6 @@ export async function openNote(item, opts = {}) {
     } catch (err) {
       toast(err.message);
     }
-  }
-}
-
-const normText = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
-
-/**
- * Mark each highlight's text in rendered prose. Matching ignores case and spacing, so
- * it survives the Markdown round trip; a quote that can't be found is simply skipped.
- */
-export function paintQuotes(root, quotes) {
-  root.querySelectorAll('mark.ro-hl').forEach((m) => m.replaceWith(...m.childNodes));
-  root.normalize();
-  for (const h of quotes) {
-    const q = normText(h.text || '');
-    if (q.length < 3) continue;
-    // Flatten the text (recomputed per quote: wrapping splits text nodes).
-    const map = [];
-    let flat = '';
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-      const t = n.data;
-      for (let i = 0; i < t.length; i++) {
-        if (/\s/.test(t[i])) {
-          if (flat && flat[flat.length - 1] !== ' ') {
-            flat += ' ';
-            map.push([n, i]);
-          }
-        } else {
-          flat += t[i].toLowerCase();
-          map.push([n, i]);
-        }
-      }
-    }
-    const at = flat.indexOf(q);
-    if (at < 0) continue;
-    const [startNode, startOff] = map[at];
-    const [endNode, endIdx] = map[at + q.length - 1];
-    wrapText(root, startNode, startOff, endNode, endIdx + 1, h.comment);
-  }
-}
-
-function wrapText(root, startNode, startOff, endNode, endOff, comment) {
-  const nodes = [];
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  walker.currentNode = startNode;
-  for (let n = startNode; n; n = walker.nextNode()) {
-    nodes.push(n);
-    if (n === endNode) break;
-  }
-  for (const node of nodes) {
-    const s = node === startNode ? startOff : 0;
-    const e = node === endNode ? Math.min(endOff, node.length) : node.length;
-    if (s >= e || !node.data.slice(s, e).trim()) continue;
-    if (e < node.length) node.splitText(e);
-    const target = s > 0 ? node.splitText(s) : node;
-    const mark = el('mark', { class: 'ro-hl', title: comment || '' });
-    target.replaceWith(mark);
-    mark.append(target);
   }
 }
 

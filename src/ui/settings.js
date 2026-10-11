@@ -1,4 +1,4 @@
-// Settings sheet: GitHub account, libraries, sync, reading, saving articles, storage.
+// Settings sheet: GitHub account, libraries, sync, reading, storage.
 import * as store from '../store.js';
 import { displayName, deviceNotesZip, canWrite as canWriteSrc } from '../library.js';
 import * as github from '../sources/github.js';
@@ -7,7 +7,9 @@ import { openSheet, el, toast } from './overlay.js';
 import * as dataSync from '../sync.js';
 import * as outbox from '../outbox.js';
 import * as learn from '../learn.js';
-import { bookmarkletCode } from './clip.js';
+import { newNotesHome, highlightsFolder } from '../insights.js';
+import { libraryTypes } from './types.js';
+import { bookmarkletCode } from '../clip.js';
 import { TOKEN_URL } from './setup.js';
 
 const $ = (id) => document.getElementById(id);
@@ -272,7 +274,9 @@ export function initSettings(app) {
     app.applyTheme();
   };
   $('mix-select').onchange = (e) => store.setPrefs({ highlightMix: Number(e.target.value) });
-  $('hl-home-select').onchange = (e) => store.setPrefs({ highlightHome: e.target.value });
+  $('hl-home-select').onchange = (e) => store.setPrefs({ newNotesHome: e.target.value });
+  // Empty means the top level of the library.
+  $('hl-folder-input').onchange = (e) => store.setPrefs({ highlightsFolder: e.target.value.trim().replace(/^\/+|\/+$/g, '') });
   $('break-select').onchange = (e) => store.setPrefs({ breakAfter: Number(e.target.value) });
 
   function renderLearning() {
@@ -302,15 +306,21 @@ export function initSettings(app) {
     toast('The feed starts fresh');
   };
 
+  /** Where new notes are saved (a library), and the folder in it for highlights. */
   function renderHighlightHome() {
     const sel = $('hl-home-select');
     const writable = store.getSources().filter((s) => s.type !== 'device' && canWriteSrc(s));
-    const home = dataSync.dataHome();
+    const home = newNotesHome();
     sel.replaceChildren(
-      el('option', { value: '' }, home ? `${home.repo} (with synced data)` : writable.length ? `${displayName(writable[0])}` : 'This device'),
-      ...writable.filter((s) => s.id !== home?.id).map((s) => el('option', { value: s.id }, displayName(s)))
+      ...writable.map((s) => el('option', { value: s.id }, displayName(s))),
+      el('option', { value: 'device' }, 'This device')
     );
-    sel.value = writable.some((s) => s.id === store.getPrefs().highlightHome) ? store.getPrefs().highlightHome : '';
+    sel.value = home.id;
+    $('hl-folder-input').value = highlightsFolder();
+    store.items
+      .all()
+      .then((all) => $('hl-folder-list').replaceChildren(...libraryTypes(all, home).map((t) => el('option', { value: t }))))
+      .catch(() => {});
   }
 
   $('clear-books-btn').onclick = async () => {
@@ -339,27 +349,14 @@ export function initSettings(app) {
     info.textContent = `${mb(usage)} used${persisted ? '' : ' · the browser may clear it if space runs low'}`;
   }
 
-  /* ---- Save articles ---- */
+  /* ---- Clip from anywhere ---- */
   const clipLink = $('clip-bookmarklet');
   clipLink.href = bookmarkletCode();
   clipLink.onclick = (e) => {
     e.preventDefault();
-    toast('Drag it to your bookmarks bar, then use it on an article');
+    toast('Drag it to your bookmarks bar, then use it on a page');
   };
-  const phone = $('clip-phone-hint');
-  const copy = el('button', { class: 'linklike', type: 'button' }, 'Copy the bookmarklet');
-  copy.onclick = async () => {
-    try {
-      await navigator.clipboard.writeText(decodeURIComponent(clipLink.href));
-      toast('Copied');
-    } catch {
-      toast("Couldn't copy here");
-    }
-  };
-  phone.replaceChildren(
-    'iPhone: bookmark any page, edit the bookmark, and replace its address with the copied code. Android: add Readover to your home screen and share links to it, or paste the article in Notes → Save an article. ',
-    copy
-  );
+  $('clip-shortcut-url').textContent = `${new URL('./', location.href).href}#clip?text=…&url=…`;
 
   return {
     async open() {

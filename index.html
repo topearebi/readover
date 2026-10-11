@@ -83,7 +83,7 @@
         <button class="icon-btn" value="close" aria-label="Close"><svg class="i"><use href="#i-close"/></svg></button>
       </div>
       <fieldset class="seg" id="filter-seg">
-        <legend class="sr">Type</legend>
+        <legend class="sr">Show</legend>
         <label><input type="radio" name="filter" value="all" /><span>All</span></label>
         <label><input type="radio" name="filter" value="notes" /><span>Notes</span></label>
         <label><input type="radio" name="filter" value="books" /><span>Books</span></label>
@@ -96,6 +96,13 @@
       <label class="field">Folder
         <select id="scope-folder"></select>
       </label>
+      <label class="field">Growth
+        <select id="scope-growth"></select>
+      </label>
+      <fieldset class="type-checks" id="scope-types" hidden>
+        <legend>Types <span class="hint">none ticked = all</span></legend>
+        <div class="type-list"></div>
+      </fieldset>
       <button class="btn btn-primary" value="apply">Show these</button>
     </form>
   </dialog>
@@ -179,6 +186,40 @@
         </div>
       </section>
 
+      <section class="settings-group" id="notes-group">
+        <h3>Your notes</h3>
+        <div class="field-pair">
+          <label class="field">New notes go to
+            <select id="hl-home-select"></select>
+          </label>
+          <label class="field">Highlights go to
+            <input id="hl-folder-input" list="hl-folder-list" placeholder="Top level" autocapitalize="off" spellcheck="false" />
+            <datalist id="hl-folder-list"></datalist>
+          </label>
+        </div>
+        <details class="how organise">
+          <summary>Organising your notes</summary>
+          <ul>
+            <li><b>Types are folders.</b> Each top-level folder is a type (Journal, Essays, Highlights…), and its subfolders belong to it. Notes at the top level are Unsorted. No folders at all works too.</li>
+            <li><b>New notes</b> are named by date and title, e.g. <code>2026-10-11-on-habits.md</code>, or the first words when there's no title. Readover adds a little frontmatter (title, date, tags) that any Markdown app can read.</li>
+            <li><b>Status:</b> a note is in progress until you mark it done (<code>status: done</code>). Done notes rest: they don't wilt.</li>
+            <li><b>Highlights</b> you save from books, notes and clips go to the folder above.</li>
+            <li><b>Archive</b> holds pruned notes. It isn't a type.</li>
+            <li><b>Renaming:</b> rename or move notes in Readover (a note's ⋯ menu) to keep links working: links to it are updated in the same commit. Renamed elsewhere, links by the old file name stop working.</li>
+          </ul>
+        </details>
+        <details class="how organise">
+          <summary>How the garden works</summary>
+          <ul>
+            <li><b>Stages:</b> Seed (no thoughts or links yet), Sprout (a thought or a link), Sapling (2+ thoughts and 2+ links), Tree (5+ links).</li>
+            <li><b>A thought</b> is your own words in a note, plus each dated entry under <code>## Thoughts</code>. Links count both ways.</li>
+            <li><b>Health</b> comes from when the note last changed: healthy, then thirsty, then wilting. Seeds wilt after a month, sprouts after 3 months, saplings after a year, trees after 2 years.</li>
+            <li>The thirstier a note, the more often it comes up. <b>Water</b> adds a thought, <b>Graft</b> adds a link, <b>Prune</b> moves it to Archive (and <b>Replant</b> brings it back).</li>
+            <li>Moving or renaming notes outside Readover can restart their clock.</li>
+          </ul>
+        </details>
+      </section>
+
       <section class="settings-group">
         <h3>Reading</h3>
         <label class="field">Theme
@@ -187,9 +228,6 @@
             <option value="light">Light</option>
             <option value="dark">Dark</option>
           </select>
-        </label>
-        <label class="field">Save highlights and articles to
-          <select id="hl-home-select"></select>
         </label>
         <label class="field">Notes with highlights
           <select id="mix-select">
@@ -216,14 +254,32 @@
         </div>
       </section>
 
+
       <section class="settings-group" id="clip-group">
-        <h3>Save articles</h3>
-        <p class="hint">Drag this to your bookmarks bar. On an article, tap it to send the page to Readover.</p>
-        <p><a id="clip-bookmarklet" class="btn bookmarklet" href="#">Save to Readover</a></p>
+        <h3>Clip from anywhere</h3>
+        <p class="hint">A clip is a quote, where it’s from, and your thought. It’s saved like any new note.</p>
         <details class="how">
-          <summary>On a phone</summary>
-          <p class="hint" id="clip-phone-hint"></p>
+          <summary>On a computer</summary>
+          <p class="hint">Drag this to your bookmarks bar. Select text on a page, then click it.</p>
+          <p><a id="clip-bookmarklet" class="btn" href="#">Clip to Readover</a></p>
         </details>
+        <details class="how">
+          <summary>On Android</summary>
+          <p class="hint">Add Readover to your home screen. Then select text in any app and choose <b>Share → Readover</b>.</p>
+        </details>
+        <details class="how">
+          <summary>On iPhone or iPad</summary>
+          <p class="hint">Make a Shortcut once, in the Shortcuts app:</p>
+          <ol>
+            <li>New shortcut. In its settings (ⓘ), turn on <b>Show in Share Sheet</b> and accept <b>URLs</b> and <b>Safari web pages</b>.</li>
+            <li>Add <b>Get Clipboard</b>, then <b>URL Encode</b> it.</li>
+            <li>Add <b>URL Encode</b> on the <b>Shortcut Input</b> (the page).</li>
+            <li>Add <b>Open URLs</b> with: <code id="clip-shortcut-url"></code>, putting the encoded clipboard after <code>text=</code> and the encoded page after <code>url=</code>.</li>
+            <li>Name it <b>Readover</b>.</li>
+          </ol>
+          <p class="hint">To clip: select text, tap <b>Copy</b>, then <b>Share → Readover</b>.</p>
+        </details>
+        <p class="hint">Anywhere: copy a passage, then tap the pen and <b>Paste a quote</b>.</p>
       </section>
 
       <section class="settings-group">
@@ -244,6 +300,7 @@
           <dt>X</dt><dd>Hide</dd>
           <dt>R</dt><dd>Shuffle again</dd>
           <dt>N</dt><dd>New note</dd>
+          <dt>Ctrl Enter</dt><dd>Save the new note</dd>
           <dt>/</dt><dd>Search notes</dd>
           <dt>Esc</dt><dd>Close</dd>
         </dl>
@@ -294,6 +351,7 @@
       <label class="field">Put them in this folder
         <input name="folder" placeholder="Top level" autocapitalize="off" spellcheck="false" />
       </label>
+      <p class="hint">Leave it empty to keep your types (folders) as they are.</p>
       <button class="btn btn-primary" type="submit" id="setup-submit">Connect and move my notes</button>
       <p class="hint">Your token stays in this browser. Readover only talks to GitHub.</p>
     </form>
@@ -306,22 +364,33 @@
         <h2 id="compose-title">New note</h2>
         <button class="icon-btn" type="button" data-close aria-label="Close"><svg class="i"><use href="#i-close"/></svg></button>
       </div>
-      <p class="hint compose-alt"><button type="button" class="linklike" id="compose-article">Save a web article instead</button></p>
-      <label class="field">Title
-        <input name="title" required placeholder="What's it about?" />
+      <button type="button" id="compose-paste" class="btn compose-paste">“ Paste a quote</button>
+      <label class="field"><span>Title <span class="field-opt">optional</span></span>
+        <input name="title" placeholder="Left empty, the first words are used" />
       </label>
-      <label class="field grow">Note
+      <label class="field field-fill">Note
         <textarea name="body" rows="10" placeholder="Write it the way you'd want to read it again. Markdown works, and a line starting with > becomes a highlight."></textarea>
       </label>
       <div class="field-pair">
         <label class="field">Save to
           <select name="source" required></select>
         </label>
-        <label class="field">Folder
-          <input name="folder" list="compose-folders" placeholder="Top level" autocapitalize="off" spellcheck="false" />
-          <datalist id="compose-folders"></datalist>
+        <label class="field" id="compose-type-field">Type
+          <select name="folder"></select>
         </label>
       </div>
+      <button type="button" class="linklike compose-add-type" id="compose-add-type" hidden>Put it in a new type (folder)…</button>
+      <label class="field" id="compose-new-type" hidden>New type
+        <input name="newType" placeholder="A folder name, e.g. Essays" autocapitalize="words" spellcheck="false" />
+      </label>
+      <fieldset class="seg compose-status">
+        <legend class="sr">Status</legend>
+        <label><input type="radio" name="status" value="" checked /><span>In progress</span></label>
+        <label><input type="radio" name="status" value="done" /><span>Done</span></label>
+      </fieldset>
+      <label class="field"><span>Tags <span class="field-opt">optional</span></span>
+        <input name="tags" placeholder="e.g. habits, writing" autocapitalize="off" spellcheck="false" />
+      </label>
       <button class="btn btn-primary" type="submit">Save note</button>
     </form>
   </dialog>

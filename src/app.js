@@ -4,7 +4,14 @@ import * as library from './library.js';
 import * as local from './sources/local.js';
 import { buildQueue, foldersFor } from './feed.js';
 import { createCard, hydrateCard } from './ui/card.js';
-import { openNote } from './ui/reader.js';
+import { openNote, addToSection, pickNote } from './ui/reader.js';
+import { growthOf, isArchived, garden } from './garden.js';
+import { GROWTH_FILTERS, counts as filterCounts, filterLabel, passes, typeList } from './filters.js';
+import { renderTypeChecks, readTypeChecks } from './ui/types.js';
+import { openGrowthSheet } from './ui/growth.js';
+import { isoDay, updateFrontmatter, parseFrontmatter } from './notefile.js';
+import { entries as noteEntries } from './notes-index.js';
+import { sheet as buildSheet } from './ui/sheet.js';
 import { initSettings } from './ui/settings.js';
 import { initCompose } from './ui/compose.js';
 import { openSheet, toast, haptic, el, hasOverlay, closeTop } from './ui/overlay.js';
@@ -16,10 +23,14 @@ import { initSetup, shouldNudge, snoozeNudge } from './ui/setup.js';
 import { initShelf } from './ui/shelf.js';
 import { initNotes } from './ui/notes.js';
 import * as learn from './learn.js';
-import { markHighlightSeen } from './feed.js';
+import * as insights from './insights.js';
+import { askNote } from './ui/highlight-note.js';
+import { wikiLink } from './notefile.js';
+import { openCapture } from './ui/capture.js';
+import { clipFromLocation } from './clip.js';
+import * as clock from './clock.js';
 import { linkedPairs } from './notes-index.js';
 import { createConnectionCard } from './ui/card.js';
-import { initClip } from './ui/clip.js';
 
 const $ = (id) => document.getElementById(id);
 const feedEl = $('feed');
@@ -59,14 +70,15 @@ function scopeSourceIds() {
 }
 
 function updateScopeLabel() {
-  const { scope, folder, filter } = store.getPrefs();
+  const { scope, folder, filter, feedGrowth, feedTypes } = store.getPrefs();
   const src = store.getSource(scope);
   const parts = [];
-  const f = { notes: 'Notes', books: 'Books', starred: 'Favourites', hidden: 'Hidden' }[filter];
+  const f = filterLabel(feedGrowth, typeList(feedTypes)) || { notes: 'Notes', books: 'Books', starred: 'Favourites', hidden: 'Hidden' }[filter];
   if (f) parts.push(f);
   if (folder) parts.push(folder.split('/').pop());
   else if (src) parts.push(library.displayName(src));
   $('scope-label').textContent = parts.join(' in ') || 'Everything';
+  $('scope-btn').setAttribute('aria-label', `What to show: ${$('scope-label').textContent}`);
 }
 
 async function openScope() {
@@ -91,8 +103,36 @@ async function openScope() {
     folderSel.value = folders.includes(keep) ? keep : '';
   };
   fillFolders(prefs.folder);
-  srcSel.onchange = () => fillFolders('');
   sheet.querySelector(`input[name=filter][value="${prefs.filter}"]`).checked = true;
+
+  // Growth and type, each option with how many notes it would show here.
+  const growthSel = $('scope-growth');
+  const typeBox = $('scope-types');
+  let chosenTypes = typeList(prefs.feedTypes);
+  const map = await garden().catch(() => new Map());
+  const byKey = new Map(allItems.map((i) => [i.key, i]));
+  const fillFilters = (g = growthSel.value || prefs.feedGrowth || 'any') => {
+    const ids = new Set(srcSel.value === 'all' ? sources.map((s) => s.id) : [srcSel.value]);
+    const folder = folderSel.value;
+    const here = [...map].filter(([k]) => {
+      const it = byKey.get(k);
+      return it && ids.has(it.sourceId) && (!folder || it.folder === folder || it.folder.startsWith(`${folder}/`));
+    }).map(([, v]) => v);
+    const c = filterCounts(here, g, chosenTypes);
+    growthSel.replaceChildren(...GROWTH_FILTERS.map((f) => el('option', { value: f.id }, f.id === 'any' ? 'Any' : `${f.label} (${c.growth[f.id]})`)));
+    growthSel.value = GROWTH_FILTERS.some((f) => f.id === g) ? g : g === 'resting' ? 'done' : 'any';
+    renderTypeChecks(typeBox, c.types, chosenTypes, () => {
+      chosenTypes = readTypeChecks(typeBox);
+      fillFilters();
+    });
+  };
+  fillFilters(prefs.feedGrowth || 'any');
+  srcSel.onchange = () => {
+    fillFolders('');
+    fillFilters();
+  };
+  folderSel.onchange = () => fillFilters();
+  growthSel.onchange = () => fillFilters();
 
   const result = await openSheet(sheet);
   if (result !== 'apply') return;
@@ -100,6 +140,8 @@ async function openScope() {
     scope: srcSel.value,
     folder: folderSel.value,
     filter: sheet.querySelector('input[name=filter]:checked').value,
+    feedGrowth: growthSel.value,
+    feedTypes: readTypeChecks(typeBox),
   });
   reload();
 }
@@ -135,7 +177,6 @@ const viewObserver = new IntersectionObserver(
       if (card._item) {
         dwell = setTimeout(() => {
           store.markSeen(card._item).then((s) => app.states.set(card._item.key, s));
-          if (card._forcedCfi) markHighlightSeen(card._forcedCfi);
           countToday();
           maybeSuggestBreak(card);
         }, 1500);
@@ -181,16 +222,8 @@ function maybeSuggestBreak(card) {
   card.after(brk);
 }
 
-/** The number on the home-screen icon: notes and highlights due for review today. */
-function updateBadge(count) {
-  try {
-    if (count > 0) navigator.setAppBadge?.(count);
-    else navigator.clearAppBadge?.();
-  } catch {}
-}
-
 function cardContext() {
-  return { states: app.states, reasons: app.reasons, forced: app.forced, mix: store.getPrefs().highlightMix, actions };
+  return { states: app.states, reasons: app.reasons, forced: app.forced, growth: app.growth, mix: store.getPrefs().highlightMix, actions };
 }
 
 const CONNECTION_EVERY = 9;
@@ -263,12 +296,12 @@ function nudgeCard() {
 
 async function emptyCard() {
   const sources = store.getSources().filter((s) => s.type !== 'device');
-  const { filter, folder, scope } = store.getPrefs();
+  const { filter, folder, scope, feedGrowth, feedTypes } = store.getPrefs();
   const deviceNotes = library.deviceSource() ? (await store.items.byIndex('sourceId', library.DEVICE_ID)).length : 0;
   if (!sources.length && !deviceNotes) {
     return messageCard(
       'Your notes, one at a time.',
-      "Write down something you want to remember. Readover brings it back tomorrow, in a few days, then in a week, so it sticks. Already keep notes in GitHub or a folder? Connect them instead.",
+      "Write down something you want to remember. Readover keeps bringing it back, and shows each note growing as you add thoughts and link it to others. Already keep notes in GitHub or a folder? Connect them instead.",
       [
         button('Write your first note', () => compose.open(), true),
         button('Connect GitHub', () => settings.open()),
@@ -283,11 +316,13 @@ async function emptyCard() {
     ]);
   }
   const reset = button('Show everything', () => {
-    store.setPrefs({ filter: 'all', folder: '', scope: 'all' });
+    store.setPrefs({ filter: 'all', folder: '', scope: 'all', feedGrowth: 'any', feedTypes: [] });
     reload();
   });
   if (filter === 'starred') return messageCard('No favourites here yet.', 'Tap the star on anything worth coming back to.', [reset]);
   if (filter === 'hidden') return messageCard('Nothing hidden.', 'Items you hide from the feed are listed here so you can bring them back.', [reset]);
+  const label = filterLabel(feedGrowth, typeList(feedTypes));
+  if (label) return messageCard(`Nothing here: ${label}.`, feedGrowth === 'wilting' || feedGrowth === 'water' ? 'Everything in view is watered. Nice.' : 'No notes match these filters right now.', [reset]);
   if (folder || scope !== 'all' || filter !== 'all') return messageCard('Nothing matches this view.', 'Try a different folder or type.', [reset]);
   return messageCard('No readable files found.', 'Readover reads .md, .txt, .pdf and .epub files.', [reset]);
 }
@@ -296,9 +331,9 @@ let generation = 0;
 async function reload() {
   const gen = ++generation;
   updateScopeLabel();
-  const { folder, filter } = store.getPrefs();
-  const [{ queue, states, reasons, forced, dueCount }, pairs] = await Promise.all([
-    buildQueue({ sourceIds: scopeSourceIds(), folder, filter }),
+  const { folder, filter, feedGrowth, feedTypes } = store.getPrefs();
+  const [{ queue, states, reasons, forced, growth }, pairs] = await Promise.all([
+    buildQueue({ sourceIds: scopeSourceIds(), folder, filter, growth: feedGrowth, types: typeList(feedTypes) }),
     linkedPairs().catch(() => []),
   ]);
   if (gen !== generation) return; // a newer reload started meanwhile
@@ -306,11 +341,14 @@ async function reload() {
   app.states = states;
   app.reasons = reasons;
   app.forced = forced;
+  app.growth = growth;
   const scope = new Set(scopeSourceIds());
   app.pairs = pairs
     .filter((p) => scope.has(p.a.item.sourceId) && !states.get(p.a.item.key)?.hidden && !states.get(p.b.item.key)?.hidden)
     .sort(() => Math.random() - 0.5);
-  updateBadge(dueCount);
+  try {
+    navigator.clearAppBadge?.(); // badges were for notes "due"; nothing is due any more
+  } catch {}
   app.cursor = 0;
   clearTimeout(dwell);
   hydrateObserver.disconnect();
@@ -365,7 +403,146 @@ function scrollBy(dir) {
 
 /* ---------------- Card actions ---------------- */
 
+/* ---------------- The garden: Water, Graft, Prune, Replant ---------------- */
+
+const basename = (path) => path.split('/').pop();
+/** The note as it is now (an earlier action may have saved a newer version). */
+const latest = async (item) => (await store.items.get(item.key)) || item;
+async function freePath(src, folder, name) {
+  const dir = String(folder || '').replace(/^\/+|\/+$/g, '');
+  const at = (n) => (dir ? `${dir}/${n}` : n);
+  let path = at(name);
+  for (let i = 2; await store.items.get(store.keyOf(src.id, path)); i++) path = at(name.replace(/(\.[^.]+)$/, `-${i}$1`));
+  return path;
+}
+
+/** Water: a dated thought under ## Thoughts. */
+async function waterItem(item, thought) {
+  item = await latest(item);
+  const lines = String(thought).trim().split('\n');
+  const block = `- ${isoDay()}: ${lines[0]}${lines.slice(1).map((l) => `\n  ${l}`).join('')}`;
+  const text = await library.readText(item);
+  return library.writeNote(store.getSource(item.sourceId), item.path, addToSection(text, 'Thoughts', block), { message: `Readover: water ${item.path}` });
+}
+
+/** Graft: link to another note, under ## Related. */
+async function graftItem(item) {
+  item = await latest(item);
+  const picked = await pickNote('Graft onto…', item);
+  if (!picked) return null;
+  const e = (await noteEntries()).find((x) => x.item.key === picked.key);
+  const { wikiLink } = await import('./notefile.js');
+  const text = await library.readText(item);
+  return library.writeNote(store.getSource(item.sourceId), item.path, addToSection(text, 'Related', `- ${wikiLink(picked.path, e?.title)}`), {
+    message: `Readover: graft ${item.path} onto ${picked.path}`,
+  });
+}
+
+/** Prune: into Archive/ (in the same library), with pruned: and pruned_from: — one commit. */
+async function pruneItem(item, title) {
+  const { value } = await buildSheet({
+    title: `Prune “${title}”?`,
+    fields: [el('p', { class: 'hint' }, 'It moves to Archive and leaves the feed. Its links stop counting. You can replant it any time.')],
+    submit: 'Prune',
+    danger: true,
+  });
+  if (value !== 'ok') return null;
+  item = await latest(item);
+  const src = store.getSource(item.sourceId);
+  const root = (src.root || '').replace(/^\/+|\/+$/g, '');
+  const to = await freePath(src, root ? `${root}/Archive` : 'Archive', basename(item.path));
+  const moved = await library.moveNote(item, to, {
+    frontmatter: { pruned: isoDay(), pruned_from: item.folder || '/' },
+    message: `Readover: prune ${item.path}`,
+  });
+  toast('Pruned: moved to Archive', { label: 'Undo', run: () => replantItem(moved) });
+  return moved;
+}
+
+/** Replant: back to where it was pruned from. */
+async function replantItem(item) {
+  item = await latest(item);
+  const src = store.getSource(item.sourceId);
+  const { meta } = parseFrontmatter(await library.readText(item));
+  const from = String(meta.pruned_from || '');
+  // Where it came from; if that isn't recorded, the top level of the library (Unsorted).
+  const folder = from && from !== '/' ? from.replace(/^\/+|\/+$/g, '') : (src.root || '').replace(/^\/+|\/+$/g, '');
+  const to = await freePath(src, folder, basename(item.path));
+  const moved = await library.moveNote(item, to, { frontmatter: { pruned: null, pruned_from: null }, message: `Readover: replant ${item.path}` });
+  toast(`Replanted in ${folder || 'the top level'}`);
+  reload();
+  return moved;
+}
+
+/** Change frontmatter keys of a note (status, canonical_url). */
+async function setMeta(item, patch, message) {
+  item = await latest(item);
+  const text = await library.readText(item);
+  return library.writeNote(store.getSource(item.sourceId), item.path, updateFrontmatter(text, patch), { message });
+}
+
+/** Re-draw a card after its note changed. */
+function refreshCard(card, item) {
+  card._item = { ...card._item, ...item };
+  card.dataset.key = card._item.key;
+  card._ctx = { ...card._ctx, growth: null };
+  card._hydrated = false;
+  card.className = 'card';
+  hydrateCard(card);
+}
+
 const actions = {
+  /** Water from the card's own field. Resolves true when saved. */
+  async waterNote(card, thought) {
+    try {
+      const item = await waterItem(card._item, thought);
+      learn.signal(card._item, 'open');
+      toast('Watered');
+      setTimeout(() => refreshCard(card, item), 900);
+      return true;
+    } catch (err) {
+      toast(err.message);
+      return false;
+    }
+  },
+
+  /** The growth tag: where the note stands, and Water / Graft / Prune. */
+  async growth(card) {
+    const item = card._item;
+    const g = (await growthOf(item)) || card._growth;
+    if (!g) return;
+    const title = card._note?.title || item.name;
+    const run = (fn) => async (...a) => {
+      try {
+        return await fn(...a);
+      } catch (err) {
+        toast(err.message);
+      }
+    };
+    await openGrowthSheet(title, g, {
+      water: async () => card.querySelector('.water-open')?.click(),
+      graft: run(async () => {
+        const updated = await graftItem(item);
+        if (updated) {
+          toast('Grafted');
+          refreshCard(card, updated);
+        }
+      }),
+      prune: run(async () => {
+        if (await pruneItem(item, title)) card.remove();
+      }),
+      replant: run(() => replantItem(item)),
+      status: run(async (v) => {
+        refreshCard(card, await setMeta(item, { status: v || null }, `Readover: mark ${item.path} ${v ? 'done' : 'in progress'}`));
+        toast(v ? 'Marked done: it rests now' : 'Back in progress');
+      }),
+      canonical: run(async (url) => {
+        refreshCard(card, await setMeta(item, { canonical_url: url || null }, `Readover: published link for ${item.path}`));
+        toast(url ? 'Published link saved' : 'Published link removed');
+      }),
+    });
+  },
+
   async star(card) {
     const item = card._item;
     const on = !app.states.get(item.key)?.starred;
@@ -414,6 +591,21 @@ const actions = {
     } catch {}
   },
 
+  /** A seed from an export: write a thought and it becomes an insight. */
+  async water(card) {
+    const h = card._highlight;
+    if (!h) return;
+    const asked = await askNote(h.text.replace(/^…|…$/g, ''), { heading: 'Water this seed' });
+    if (!asked) return;
+    try {
+      await insightFromNote(card._item, card._note, { text: h.text.replace(/^…|…$/g, ''), thought: asked.thought, title: asked.title, tags: asked.tags, h });
+      learn.signal(card._item, 'open');
+      card.querySelector('.seed-actions')?.replaceChildren(el('span', { class: 'seed-done' }, 'Saved as an insight'));
+    } catch (err) {
+      toast(err.message);
+    }
+  },
+
   async open(card, extra) {
     const item = card._item;
     haptic(6);
@@ -430,8 +622,6 @@ const actions = {
       toast("That book isn't in your libraries on this device, so here's the note instead");
       return actions.open(card);
     }
-    // A highlight from a saved web article: open the article at the passage.
-    if (item.kind === 'note') return openNoteItem(item, { highlight: card._highlight || { text: String(at.at).replace(/^text=/, '') } });
     await openBookItem(item, null, at.at);
   },
 };
@@ -458,8 +648,9 @@ async function openNoteItem(item, { card = null, highlight = null, section = '' 
       },
       openItem: (other) => openNoteItem(other),
       createNote: (title) => compose.open({ sourceId: item.sourceId, folder: item.folder, title }),
-      // Saved web articles: highlights go to Highlights/<title>.md, like a book's.
-      onHighlight: (h) => saveBookHighlight(item, h.title, h),
+      makeInsight: (note, sel) => insightFromNote(item, note, sel),
+      prune: (title) => pruneItem(item, title),
+      replant: () => replantItem(item),
     });
   } catch (err) {
     toast(err.message);
@@ -492,38 +683,33 @@ async function openBookItem(item, knownTitle, at) {
   }
 }
 
-/**
- * Book highlights become Markdown: Highlights/<Book>.md in your highlights home
- * (Settings → Reading; by default the data-home repo, so they sit with your notes
- * rather than in a books repo). Without GitHub they go to the on-device notebook.
- */
-function highlightHome(book) {
-  const { highlightHome: chosen } = store.getPrefs();
-  const sources = store.getSources();
-  const pick = (id) => sources.find((s) => s.id === id && library.canWrite(s));
-  return (
-    pick(chosen) ||
-    dataSync.dataHome() ||
-    sources.find((s) => s.type === 'github' && library.canWrite(s)) ||
-    (library.canWrite(book) && book) ||
-    library.deviceSource(true)
-  );
+/** A passage selected in a book or PDF becomes an insight note (see insights.js). */
+async function saveBookHighlight(item, bookTitle, { text, comment, chapter, page, at, title, tags = '' }) {
+  const where = [chapter, page ? `p. ${page}` : ''].filter(Boolean).join(', ');
+  return insights.createInsight({
+    quote: text,
+    title,
+    tags,
+    sourceTitle: bookTitle,
+    attribution: [bookTitle, where].filter(Boolean).join(', '),
+    anchor: { book: `${store.sourceKey(store.getSource(item.sourceId))}|${item.path}`, at },
+    thought: comment,
+  });
 }
 
-async function saveBookHighlight(item, bookTitle, { text, comment, chapter, page, at }) {
-  const dest = highlightHome(store.getSource(item.sourceId));
-  const safe = bookTitle.replace(/[\\/:*?"<>|#^[\]]+/g, '').trim().slice(0, 90) || 'Book';
-  const path = `Highlights/${safe}.md`;
-  // A saved article is a note too, so its highlights file gets a title of its own.
-  const title = item.kind === 'note' ? `${safe} (highlights)` : safe;
-  const header = `---\ntitle: ${title}\nsource: ${item.path}\n---\n\n# ${title}`;
-  const where = [chapter, page ? `p. ${page}` : ''].filter(Boolean).join(', ') || new Date().toISOString().slice(0, 10);
-  const anchor = JSON.stringify({ book: `${store.sourceKey(store.getSource(item.sourceId))}|${item.path}`, at });
-  const quote = text.split(/\n+/).map((l) => `> ${l}`).join('\n');
-  const block = `${quote}\n>\n> — ${where}\n<!-- readover ${anchor} -->${comment ? `\n\n${comment}` : ''}`;
-  await library.appendToFile(dest, path, header, block, `Readover: highlight from ${safe}`);
-  // `file` lets the feed bring this highlight back in a day or so (feed.js).
-  return { where: dest.type === 'device' ? '' : library.displayName(dest), file: `${store.sourceKey(dest)}|${path}` };
+/**
+ * Text selected in a note (or one highlight of an export) becomes an insight.
+ * `h` is the export highlight it came from, if any.
+ */
+async function insightFromNote(item, note, { text, thought = '', title = '', tags = '', h = null }) {
+  const src = store.getSource(item.sourceId);
+  const sourceTitle = (h?.source || note.title || '').replace(/[*_`]/g, '');
+  // From an export: name the book; from one of your notes: link back to it.
+  const attribution = h ? [sourceTitle, h.note].filter(Boolean).join(', ') : wikiLink(item.path, note.title);
+  const anchor = h?.at?.book ? h.at : { from: `${store.sourceKey(src)}|${item.path}` };
+  const saved = await insights.createInsight({ quote: text, title, thought, tags, sourceTitle, attribution, anchor });
+  toast(saved.where ? `Insight saved to ${saved.where}` : 'Insight saved on this device');
+  return saved;
 }
 
 /* ---------------- Sources & sync ---------------- */
@@ -650,6 +836,8 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (hasOverlay()) return;
+  // Enter and Space belong to a focused button or link, not to the feed.
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.closest?.('button, a[href], summary, [role=button]')) return;
   if (e.key === '/') {
     e.preventDefault();
     showView('notes');
@@ -753,15 +941,7 @@ const settings = initSettings({
   openSetup: () => setup.open(),
 });
 const compose = initCompose({ showFirst });
-const clip = initClip({
-  home: () => highlightHome(null),
-  openItem: (item) => openNoteItem(item),
-  showFirst,
-});
-$('compose-article').onclick = async () => {
-  await closeTop();
-  clip.open();
-};
+
 const setup = initSetup({
   afterConnect: async (src) => {
     await syncSource(src, { userGesture: true, quiet: true });
@@ -777,6 +957,13 @@ $('brand').onclick = () => {
 $('scope-btn').onclick = openScope;
 $('settings-btn').onclick = () => settings.open();
 $('write-btn').onclick = () => compose.open();
+// "Paste a quote": read the clipboard while the tap still counts as a tap (iPhone asks
+// first), then switch from the new-note sheet to the capture sheet.
+$('compose-paste').onclick = async () => {
+  const reading = navigator.clipboard?.readText ? navigator.clipboard.readText().catch(() => '') : Promise.resolve('');
+  await closeTop();
+  openCapture({ text: await reading }, captureApp);
+};
 
 /* ---------------- Views: Feed and Shelf ---------------- */
 
@@ -788,7 +975,6 @@ const shelf = initShelf({
 const notesView = initNotes({
   openItem: (item) => openNoteItem(item),
   compose: (presets) => compose.open(presets),
-  saveArticle: () => clip.open(),
 });
 
 /** Three views: Feed (reading), Shelf (books), Notes (working on notes). */
@@ -823,11 +1009,18 @@ window.addEventListener('readover:progress', () => {
 });
 $('app-version').textContent = VERSION;
 
+const captureApp = { openItem: (item) => openNoteItem(item), showFirst };
+
 async function boot() {
   applyTheme();
   await store.migrateLegacy();
   initStatus({ openSettings: () => settings.open() });
+  // Opened to save a clip (share sheet, bookmarklet, Shortcut)? Tidy the address and
+  // open the capture sheet once the feed is up.
+  const incoming = clipFromLocation();
+  if (incoming) history.replaceState(null, '', location.pathname);
   await reload();
+  if (incoming) openCapture(incoming, captureApp);
   dataSync.ensureDataHome();
   dataSync.startAutoSync();
   dataSync.syncNow({ includeSeen: false });
@@ -835,11 +1028,11 @@ async function boot() {
   const hasItems = (await store.items.all()).length > 0;
   await syncAll({ force: !hasItems && store.getSources().length > 0 });
   showPermissionBanner();
+  // The garden's clock: when each note last changed (in the background, cached).
+  clock.fill().catch(() => {});
   navigator.storage?.persist?.().catch(() => {});
 }
-// Opened by the bookmarklet or the share sheet to save an article. Runs alongside
-// boot() so the page sent by the bookmarklet isn't kept waiting.
-clip.receive();
+
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   // updateViaCache 'none': always check sw.js itself against the server.

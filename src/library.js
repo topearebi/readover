@@ -115,10 +115,28 @@ export async function applyFileList(src, files, onProgress = () => {}) {
   // Files that appear after the first listing are new: they get a review schedule.
   const listedBefore = existing.size > 0 || Boolean(localStorage.getItem(`readover.lastSync.${src.id}`));
   const now = Date.now();
+  // A note moved or renamed elsewhere shows up as removed + added with the same
+  // content (same sha): it keeps its last-change date, review schedule and copy.
+  const gone = new Map();
+  for (const k of removed) {
+    const old = existing.get(k);
+    if (old?.sha && !gone.has(old.sha)) gone.set(old.sha, old);
+  }
+  const carried = [];
   for (const i of changed) {
     const prev = existing.get(i.key);
-    if (prev?.addedAt) Object.assign(i, { addedAt: prev.addedAt, written: prev.written });
+    const was = !prev ? gone.get(i.sha) : null;
+    if (was) {
+      gone.delete(i.sha);
+      if (was.changedSha === i.sha) Object.assign(i, { changedAt: was.changedAt, changedSha: was.changedSha });
+      Object.assign(i, { addedAt: was.addedAt, written: was.written });
+      carried.push([was.key, i.key]);
+    } else if (prev?.addedAt) Object.assign(i, { addedAt: prev.addedAt, written: prev.written });
     else if (!prev && listedBefore) i.addedAt = now;
+  }
+  for (const [from, to] of carried) {
+    const c = await content.get(from);
+    if (c) await content.put({ ...c, key: to });
   }
 
   if (changed.length) await items.bulkPut(changed);
@@ -249,7 +267,8 @@ export async function moveDeviceNotes(dest, folder = '', onProgress = () => {}) 
   const notes = await items.byIndex('sourceId', dev.id);
   if (!notes.length) return 0;
 
-  const prefix = folder.replace(/^\/|\/$/g, '');
+  // Inside the library's own folder, when it is one folder of a repo.
+  const prefix = [String(dest.root || '').replace(/^\/+|\/+$/g, ''), folder.replace(/^\/+|\/+$/g, '')].filter(Boolean).join('/');
   const taken = new Set((await items.byIndex('sourceId', dest.id)).map((i) => i.path));
   const plan = [];
   for (const n of notes) {
@@ -285,6 +304,9 @@ export async function moveDeviceNotes(dest, folder = '', onProgress = () => {}) 
   for (const p of plan) {
     const sha = await gitBlobSha(p.text);
     const item = { ...toItem(dest, { path: p.path, sha }), addedAt: p.from.addedAt, written: p.from.written };
+    // Moving isn't tending: keep when each note last changed on the device.
+    const was = /^dev:(\d+)$/.exec(p.from.sha || '');
+    if (was) Object.assign(item, { changedAt: Number(was[1]), changedSha: sha });
     await items.put(item);
     await content.put({ key: item.key, sourceId: dest.id, sha, text: p.text });
     const st = await state.get(p.from.key);
@@ -316,6 +338,57 @@ async function forget(key) {
   if (st) await state.delete(key);
 }
 
+/**
+ * Rename and/or move a note, retitle it, and update the links to it (relink.js
+ * plans the changes). GitHub: one commit through the save queue. Local folders and
+ * this device: file by file. Favourites and history move with it.
+ */
+export async function renameNote(item, newPath, plan, { message = '' } = {}) {
+  const src = store.getSource(item.sourceId);
+  if (!canWrite(src)) throw new Error(`"${displayName(src)}" is read-only.`);
+  const { updateFrontmatter, applySubs } = await import('./notefile.js');
+  const moving = newPath !== item.path;
+  if (moving && (await items.get(keyOf(src.id, newPath)))) throw new Error(`There's already a note at ${newPath}.`);
+  let text = await readText(item);
+  if (plan.self.fmPatch) text = updateFrontmatter(text, plan.self.fmPatch);
+  text = applySubs(text, plan.self.subs);
+  const edits = [];
+  for (const e of plan.edits) {
+    const cur = await readText(e.item);
+    edits.push({ item: e.item, path: e.item.path, subs: e.subs, text: applySubs(cur, e.subs) });
+  }
+  const retitled = Boolean(plan.self.fmPatch) || plan.self.subs.some(([a]) => /^#\s/.test(a));
+  const n = plan.notes;
+  const msg = message || `Readover: ${moving ? `rename ${item.path} to ${newPath}` : `retitle ${item.path}`}${n ? ` (links in ${n} ${n === 1 ? 'note' : 'notes'})` : ''}`;
+
+  let moved;
+  if (src.type === 'github') {
+    moved = await outbox.queueRename(src, { from: item.path, to: newPath, text, fmPatch: plan.self.fmPatch, subs: plan.self.subs, edits, message: msg, keepClock: !retitled });
+  } else if (src.type === 'local') {
+    for (const e of edits) await upsertText(src, e.path, e.text, await local.writeText(src, e.path, e.text));
+    const sha = await local.writeText(src, newPath, text);
+    if (moving) await local.removeFile(src, item.path);
+    moved = await upsertText(src, newPath, text, sha);
+  } else {
+    // On this device the version holds the time: link updates keep theirs.
+    for (const e of edits) await upsertText(src, e.path, e.text, /^dev:/.test(e.item.sha || '') ? e.item.sha : `dev:${Date.now()}`);
+    moved = await upsertText(src, newPath, text, !retitled && /^dev:/.test(item.sha || '') ? item.sha : `dev:${Date.now()}`);
+  }
+  if (moving) {
+    moved = { ...moved, addedAt: item.addedAt, written: item.written };
+    await items.put(moved);
+    const st = await state.get(item.key);
+    if (st) {
+      const flagged = st.starred || st.hidden;
+      await state.put({ ...st, key: moved.key, path: newPath, flagsAt: flagged ? Date.now() : st.flagsAt });
+      if (flagged) store.markDirty('important');
+    }
+    await forget(item.key);
+  }
+  notesChanged();
+  return moved;
+}
+
 /** Delete a note. GitHub: queued (and refused if it changed elsewhere meanwhile). */
 export async function deleteNote(item) {
   const src = store.getSource(item.sourceId);
@@ -335,21 +408,25 @@ export function notePath(folder, name) {
 }
 
 /** Rename and/or move a note within its library. Favourites and history move with it. */
-export async function moveNote(item, newPath) {
+export async function moveNote(item, newPath, { frontmatter = null, message = '' } = {}) {
   const src = store.getSource(item.sourceId);
   if (!canWrite(src)) throw new Error(`"${displayName(src)}" is read-only.`);
   if (newPath === item.path) return item;
   const newKey = keyOf(src.id, newPath);
   if (await items.get(newKey)) throw new Error(`There's already a note at ${newPath}.`);
-  const text = await readText(item);
+  let text = await readText(item);
+  if (frontmatter) {
+    const { updateFrontmatter } = await import('./notefile.js');
+    text = updateFrontmatter(text, frontmatter);
+  }
 
   let moved;
-  if (src.type === 'github') moved = await outbox.queueMove(src, item.path, newPath, text);
+  if (src.type === 'github') moved = await outbox.queueMove(src, item.path, newPath, text, frontmatter, message);
   else if (src.type === 'local') {
     const sha = await local.writeText(src, newPath, text);
     await local.removeFile(src, item.path);
     moved = await upsertText(src, newPath, text, sha);
-  } else moved = await upsertText(src, newPath, text, `dev:${Date.now()}`);
+  } else moved = await upsertText(src, newPath, text, !frontmatter && /^dev:/.test(item.sha || '') ? item.sha : `dev:${Date.now()}`); // a plain move keeps its date
 
   // Keep its place in the review schedule and its favourite/hidden state.
   moved = { ...moved, addedAt: item.addedAt, written: item.written };

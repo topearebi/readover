@@ -7,6 +7,7 @@
 import * as store from './store.js';
 import * as github from './sources/github.js';
 import { kindOf } from './library.js';
+import { applySubs } from './notefile.js';
 
 const { outbox, items, content, keyOf } = store;
 
@@ -32,6 +33,7 @@ export async function pendingKeys() {
   for (const e of await outbox.all()) {
     keys.add(e.key);
     if (e.fromKey) keys.add(e.fromKey); // a move's old path, still on GitHub for now
+    for (const x of e.edits || []) keys.add(x.key); // notes whose links a rename updates
   }
   return keys;
 }
@@ -69,8 +71,9 @@ export async function queueWrite(src, path, text, message) {
     entry = { id: newId(), key, sourceId: src.id, path, op: 'put', text, baseSha, message: message || `Readover: edit ${path}`, createdAt: Date.now() };
     if (baseSha === undefined) {
       // Edited again while an earlier edit is still sending: start from that edit.
+      // (or from a move or rename that wrote this note and hasn't been sent yet).
       const inFlight = (await outbox.byIndex('key', key)).find((e) => e.op === 'put');
-      entry.after = inFlight?.id;
+      entry.after = inFlight?.id || String(current.sha).slice(6);
       entry.baseSha = null;
     }
   }
@@ -108,17 +111,63 @@ export async function queueDelete(src, path) {
 }
 
 /** Rename or move a note, as one commit that git sees as a rename. */
-export async function queueMove(src, from, to, text) {
+export async function queueMove(src, from, to, text, fmPatch = null, message = '') {
   const fromKey = keyOf(src.id, from);
   const current = await items.get(fromKey);
   const baseSha = current?.committedSha ?? (String(current?.sha).startsWith('local:') ? null : current?.sha ?? null);
-  const entry = { id: newId(), key: keyOf(src.id, to), fromKey, sourceId: src.id, from, path: to, op: 'move', text, baseSha, message: `Readover: move ${from} to ${to}`, createdAt: Date.now() };
+  // A plain move (the text unchanged) keeps the note's last-change date: moving isn't tending.
+  const keepChangedAt = !fmPatch && current && current.changedSha === current.sha ? current.changedAt || 0 : null;
+  const entry = { id: newId(), key: keyOf(src.id, to), fromKey, sourceId: src.id, from, path: to, op: 'move', text, fmPatch, baseSha, keepChangedAt, message: message || `Readover: move ${from} to ${to}`, createdAt: Date.now() };
   await outbox.put(entry);
   // Queued edits of the old path follow the note to its new path.
   for (const e of await outbox.byIndex('key', fromKey)) {
     if (e.op === 'put' && !e.sending && e.id > entry.id) await outbox.put({ ...e, key: entry.key, path: to });
   }
-  const item = await showLocally(src, to, text, `local:${entry.id}`);
+  let item = await showLocally(src, to, text, `local:${entry.id}`);
+  if (keepChangedAt != null) {
+    item = { ...item, keepChangedAt };
+    await items.put(item);
+  }
+  kick();
+  return item;
+}
+
+/**
+ * Rename or move a note and update the links to it, as one commit. `subs` are exact
+ * substitutions for the note itself (its title, its own links); `edits` are the
+ * other notes: [{ path, text, subs }], `text` being the new text as on this device.
+ * If a note changed elsewhere before this is sent, its substitutions are applied to
+ * the newer text instead. Link updates aren't tending: those notes keep their clock,
+ * and so does the renamed note unless `keepClock` is false.
+ */
+export async function queueRename(src, { from, to, text, fmPatch = null, subs = [], edits = [], message = '', keepClock = true }) {
+  const fromKey = keyOf(src.id, from);
+  const current = await items.get(fromKey);
+  const baseOf = (it) => it?.committedSha ?? (String(it?.sha).startsWith('local:') ? null : it?.sha ?? null);
+  const clockOf = (it) => (it && it.changedSha === it.sha ? it.changedAt || 0 : it?.keepChangedAt ?? null);
+  const id = newId();
+  const list = [];
+  for (const x of edits) {
+    const key = keyOf(src.id, x.path);
+    const it = await items.get(key);
+    list.push({ key, path: x.path, text: x.text, subs: x.subs, baseSha: baseOf(it), keepChangedAt: clockOf(it) });
+  }
+  const keepChangedAt = keepClock ? clockOf(current) : null;
+  const entry = { id, key: keyOf(src.id, to), fromKey: from === to ? undefined : fromKey, sourceId: src.id, from, path: to, op: 'move', text, fmPatch, subs, edits: list, baseSha: baseOf(current), keepChangedAt, message: message || `Readover: rename ${from} to ${to}`, createdAt: Date.now() };
+  await outbox.put(entry);
+  if (from !== to) {
+    for (const e of await outbox.byIndex('key', fromKey)) {
+      if (e.op === 'put' && !e.sending && e.id > entry.id) await outbox.put({ ...e, key: entry.key, path: to });
+    }
+  }
+  const mark = async (it, keep) => {
+    if (keep == null) return it;
+    const next = { ...it, keepChangedAt: keep };
+    await items.put(next);
+    return next;
+  };
+  for (const x of list) await mark(await showLocally(src, x.path, x.text, `local:${id}`), x.keepChangedAt);
+  const item = await mark(await showLocally(src, to, text, `local:${id}`), keepChangedAt);
   kick();
   return item;
 }
@@ -235,12 +284,34 @@ async function sendMove(src, entry) {
   for (let attempt = 0; attempt < 3; attempt++) {
     const head = await github.headSha(src);
     const remote = await github.getFile(src, entry.from);
-    // Move whatever the note says now (an edit made elsewhere moves with it).
-    const text = remote ? (remote.sha === entry.baseSha ? entry.text : remote.text) : entry.text;
+    // Move whatever the note says now (an edit made elsewhere moves with it), with any
+    // frontmatter change the move carries (pruning adds `pruned:`) applied to that text.
+    let text = remote ? (remote.sha === entry.baseSha ? entry.text : remote.text) : entry.text;
+    if (remote && remote.sha !== entry.baseSha) {
+      if (entry.fmPatch) {
+        const { updateFrontmatter } = await import('./notefile.js');
+        text = updateFrontmatter(text, entry.fmPatch);
+      }
+      if (entry.subs?.length) text = applySubs(text, entry.subs);
+    }
+    const same = entry.from === entry.path;
     let to = entry.path;
-    if (await github.getFile(src, to)) to = conflictPath(to); // never overwrite another note
+    if (!same && (await github.getFile(src, to))) to = conflictPath(to); // never overwrite another note
     const files = { [to]: text };
-    if (remote) files[entry.from] = null;
+    if (remote && !same) files[entry.from] = null;
+    // Notes whose links change, from whatever they say now.
+    const edited = [];
+    const untouched = [];
+    for (const x of entry.edits || []) {
+      const r = await github.getFile(src, x.path);
+      const t = r ? (r.sha === x.baseSha ? x.text : applySubs(r.text, x.subs)) : null;
+      if (!r || t === r.text) {
+        untouched.push({ x, r }); // deleted, or nothing left to change
+        continue;
+      }
+      files[x.path] = t;
+      edited.push({ ...x, text: t });
+    }
     try {
       await github.commitFiles(src, head, files, entry.message);
     } catch (err) {
@@ -251,14 +322,25 @@ async function sendMove(src, entry) {
       await items.delete(entry.key);
       await content.delete(entry.key);
     }
-    await settle(src, { ...entry, path: to, key: keyOf(src.id, to) }, text, await gitBlobSha(text));
+    const sha = await gitBlobSha(text);
+    // Same text as before the move: keep its last-change date.
+    const keep = entry.keepChangedAt != null && remote && remote.sha === sha ? entry.keepChangedAt : null;
+    await settle(src, { ...entry, path: to, key: keyOf(src.id, to) }, text, sha, keep ?? (entry.edits ? entry.keepChangedAt : null));
+    for (const x of edited) await settle(src, { ...entry, path: x.path, key: x.key }, x.text, await gitBlobSha(x.text), x.keepChangedAt);
+    for (const { x, r } of untouched) {
+      if (r) await settle(src, { ...entry, path: x.path, key: x.key }, r.text, r.sha, x.keepChangedAt);
+      else {
+        await items.delete(x.key);
+        await content.delete(x.key);
+      }
+    }
     return;
   }
   throw new Error('The repository kept changing; will try the move again.');
 }
 
 /** Point the local copy at the committed version, unless a newer edit is already queued. */
-async function settle(src, entry, text, sha) {
+async function settle(src, entry, text, sha, keepChangedAt = null) {
   const newer = (await outbox.byIndex('key', entry.key)).some((e) => e.id !== entry.id && e.id > entry.id);
   if (newer) {
     const item = await items.get(entry.key);
@@ -266,6 +348,12 @@ async function settle(src, entry, text, sha) {
     return;
   }
   await showLocally(src, entry.path, text, sha);
+  // Just committed: that's when it last changed (the garden's clock), no need to ask.
+  const item = await items.get(entry.key);
+  if (item && item.sha === sha) {
+    const { keepChangedAt: _drop, ...rest } = item;
+    await items.put({ ...rest, changedAt: keepChangedAt ?? Date.now(), changedSha: sha });
+  }
 }
 
 function conflictPath(path) {

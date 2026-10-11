@@ -40,7 +40,7 @@ export async function openPdf(item, blob, title, opts = {}) {
     document.removeEventListener('selectionchange', onSelection);
     doc?.destroy();
     root.remove();
-  });
+  }, { element: root });
   back.onclick = close;
 
   let lib;
@@ -208,16 +208,16 @@ export async function openPdf(item, blob, title, opts = {}) {
     keep.onclick = () => save('');
     withNote.onclick = async () => {
       const sel = selection;
-      const comment = await askNote(sel?.text || '');
-      if (comment !== null) {
+      const asked = await askNote(sel?.text || '');
+      if (asked) {
         selection = sel;
-        save(comment);
+        save(asked.thought, asked.title, asked.tags);
       }
     };
   }
   document.addEventListener('selectionchange', onSelection);
 
-  async function save(comment) {
+  async function save(comment, title = '', tags = '') {
     const sel = selection;
     if (!sel) return;
     document.getSelection().removeAllRanges();
@@ -228,12 +228,12 @@ export async function openPdf(item, blob, title, opts = {}) {
     const slot = slots[sel.page - 1];
     if (rendered.has(sel.page)) paintHighlights(slot);
     try {
-      const saved = await opts.onHighlight({ text: h.text, comment: h.comment, chapter: '', page: String(sel.page), at: `page=${sel.page}` });
+      const saved = await opts.onHighlight({ text: h.text, comment: h.comment, chapter: '', page: String(sel.page), at: `page=${sel.page}`, title, tags });
       if (saved?.file) {
         h.file = saved.file;
         await saveProgress(item, { highlights });
       }
-      toast(saved?.where ? `Highlight saved to ${saved.where}` : 'Highlight saved on this device');
+      toast(saved?.where ? `Insight saved to ${saved.where}` : 'Insight saved on this device');
     } catch (err) {
       toast(`Kept in the PDF on this device. ${err.message}`);
     }

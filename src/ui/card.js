@@ -6,6 +6,9 @@ import { getCover } from '../covers.js';
 import { learnDate, memoryLine } from '../dates.js';
 import { progress, getSource } from '../store.js';
 import { el, icon } from './overlay.js';
+import { isInbox, seedsOf } from '../insights.js';
+import { growthOf } from '../garden.js';
+import { growthTag, glyph } from './growth.js';
 
 /** @param ctx { states: Map, mix: number, actions: { star, hide, share, openNote, openBook } } */
 export function createCard(item, ctx) {
@@ -21,8 +24,10 @@ export async function hydrateCard(card) {
   card._hydrated = true;
   const item = card._item;
   try {
-    if (item.kind === 'note') await renderNote(card, item);
-    else await renderBook(card, item);
+    if (item.kind === 'note') {
+      await renderNote(card, item);
+      await addGrowth(card, item);
+    } else await renderBook(card, item);
     const reason = card._ctx.reasons?.get(item.key);
     if (reason) setReason(card, reason);
     else if (item.kind === 'note' && card._note) {
@@ -80,8 +85,64 @@ function rail(card, item) {
 }
 
 function setReason(card, text) {
-  card.querySelector('.card-body')?.prepend(el('p', { class: 'card-reason' }, text));
+  const body = card.querySelector('.card-body');
+  if (!body) return;
+  const p = el('p', { class: 'card-reason' }, text);
+  const tag = body.querySelector(':scope > .grow, :scope > .grow-row');
+  if (tag) tag.after(p);
+  else body.prepend(p);
 }
+
+/**
+ * The garden on a card: the growth tag at the top, and a one-line "Water" field at the
+ * bottom for adding a thought without leaving the feed.
+ */
+async function addGrowth(card, item) {
+  if (card.classList.contains('card-seed')) return; // inbox seeds have their own Water
+  const g = card._ctx.growth?.get(item.key) || (await growthOf(item).catch(() => null));
+  card._growth = g;
+  const body = card.querySelector('.card-body');
+  if (!body || !g) return;
+  const tag = growthTag(g, () => card._ctx.actions.growth?.(card));
+  if (tag) body.prepend(tag);
+  if (g.stage === 'pruned' || !card._ctx.actions.waterNote) return;
+  body.append(waterField(card));
+}
+
+function waterField(card) {
+  const box = el('div', { class: 'water-field' });
+  const closed = () => {
+    const b = el('button', { type: 'button', class: 'water-open' }, glyph('drop'), el('span', {}, 'Water: add a thought…'));
+    b.onclick = (e) => {
+      e.stopPropagation();
+      open();
+    };
+    box.replaceChildren(b);
+  };
+  const open = () => {
+    const input = el('textarea', { rows: '3', 'aria-label': 'Your thought', placeholder: 'What do you make of it now?' });
+    const save = el('button', { type: 'button', class: 'btn btn-primary' }, 'Save thought');
+    const cancel = el('button', { type: 'button', class: 'btn btn-quiet' }, 'Cancel');
+    for (const x of [input, save, cancel]) x.addEventListener('click', (e) => e.stopPropagation());
+    input.addEventListener('keydown', (e) => e.stopPropagation()); // typing isn't a feed shortcut
+    cancel.onclick = closed;
+    save.onclick = async () => {
+      if (!input.value.trim()) return closed();
+      save.disabled = true;
+      const ok = await card._ctx.actions.waterNote(card, input.value);
+      if (ok) {
+        box.replaceChildren(el('p', { class: 'water-done' }, glyph('drop'), 'Watered'));
+      } else save.disabled = false;
+    };
+    box.replaceChildren(input, el('div', { class: 'water-row' }, cancel, save));
+    input.focus();
+  };
+  closed();
+  return box;
+}
+
+/** "[Title](url)" and "[[file|Title]]" read as just "Title" on a card. */
+const plainLinks = (s) => String(s).replace(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (_m, t, a) => a || t).replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
 
 const normText = (s) => (s || '').replace(/[*_`=>]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -92,16 +153,20 @@ async function renderNote(card, item) {
   const { mix } = card._ctx;
   const forced = card._ctx.forced?.get(item.key); // a highlight the feed is bringing back
 
-  // Exports from other readers are always shown one highlight at a time.
-  const useHighlight = note.highlights.length > 0 && (forced || note.imported || Math.random() < mix);
+  // Inboxes (exports, old grouped highlight files) show one seed at a time: a
+  // highlight not yet turned into an insight.
+  const inbox = isInbox(text, item.path);
+  const seeds = inbox ? (await seedsOf(item)) || note.highlights : null;
+  const pool = seeds?.length ? seeds : note.highlights;
+  const useHighlight = pool.length > 0 && (forced || inbox || note.imported || Math.random() < mix);
   card.replaceChildren();
 
   if (useHighlight) {
-    const wanted = forced && note.highlights.find((x) => normText(x.text) === normText(forced.text));
-    const h = wanted || note.highlights[Math.floor(Math.random() * note.highlights.length)];
-    if (wanted) card._forcedCfi = forced.cfi;
+    const wanted = forced && pool.find((x) => normText(x.text) === normText(forced.text));
+    const h = wanted || pool[Math.floor(Math.random() * pool.length)];
     card._highlight = h;
     card.classList.add('card-highlight');
+    if (inbox) card.classList.add('card-seed');
     const html = renderMarkdown(h.text);
     const quote = el('blockquote', { class: `hl-quote${h.text.length > 320 ? ' long' : ''}` });
     quote.innerHTML = html;
@@ -116,23 +181,26 @@ async function renderNote(card, item) {
       span.append(...quote.childNodes);
       quote.append(span);
     }
-    // Highlights saved from a book open the book at that passage; others open the note.
+    // Highlights saved from a book open the book at that passage; clips open the page
+    // there; others open the note.
     const inBook = Boolean(h.at?.book);
+    const onWeb = !inBook && /^https?:/i.test(h.at?.url || '');
     const from = el(
       'button',
-      { class: 'hl-from', title: inBook ? 'Open the book at this passage' : 'Open the note' },
-      el('b', {}, h.source || note.title),
-      inBook ? 'Open at this passage' : item.folder ? item.folder.replace(/\//g, ' / ') : getSource(item.sourceId)?.name || ''
+      { class: 'hl-from', title: inBook ? 'Open the book at this passage' : onWeb ? 'Open the page at this passage' : 'Open the note' },
+      el('b', {}, h.source || note.meta?.source || note.title),
+      inBook || onWeb ? 'Open at this passage' : item.folder ? item.folder.replace(/\//g, ' / ') : getSource(item.sourceId)?.name || ''
     );
-    from.onclick = () => (inBook ? card._ctx.actions.openAt(card, h.at) : card._ctx.actions.open(card));
+    from.onclick = () => (inBook ? card._ctx.actions.openAt(card, h.at) : onWeb ? window.open(h.at.url, '_blank', 'noopener') : card._ctx.actions.open(card));
     card.append(
       el(
         'div',
         { class: 'card-body' },
         quote,
-        h.note ? el('p', { class: 'hl-note' }, h.note) : null,
+        h.note ? el('p', { class: 'hl-note' }, plainLinks(h.note)) : null,
         h.comment ? el('p', { class: 'hl-comment' }, h.comment) : null,
-        from
+        from,
+        inbox ? seedActions(card, seeds?.length || 0) : null
       ),
       rail(card, item)
     );
@@ -160,6 +228,21 @@ async function renderNote(card, item) {
     });
     title.addEventListener('click', () => card._ctx.actions.open(card));
   }
+}
+
+/** On a seed: what it is, and Water (write a thought and it becomes an insight). */
+function seedActions(card, left) {
+  const water = el('button', { class: 'btn btn-mark water-btn' }, 'Water');
+  water.onclick = (e) => {
+    e.stopPropagation();
+    card._ctx.actions.water(card);
+  };
+  return el(
+    'div',
+    { class: 'seed-actions' },
+    el('span', { class: 'seed-label' }, `Seed${left > 1 ? ` · ${left} waiting here` : ''}`),
+    water
+  );
 }
 
 /* ---------- Long notes: one section per slide ---------- */
@@ -337,7 +420,7 @@ export function resolveImages(container, item) {
   container.querySelectorAll('img').forEach(async (img) => {
     const src = img.getAttribute('src') || '';
     if (/^(https?:|\/\/)/i.test(src)) {
-      // Web images (saved articles): drop any that fail rather than show a broken icon.
+      // Web images: drop any that fail rather than show a broken icon.
       // index.html sets no-referrer, which many sites need before they'll serve them.
       if (img.complete && !img.naturalWidth) img.remove();
       else img.addEventListener('error', () => img.remove(), { once: true });

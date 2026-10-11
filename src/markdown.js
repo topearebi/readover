@@ -1,6 +1,7 @@
 // Markdown → card model. Rendering is sanitised: notes can come from any repo,
 // and the GitHub token lives in this origin's storage.
 import { Marked } from '../vendor/marked-15.0.12/marked.esm.js';
+import { parseFrontmatter, resolveTitle, ownWords } from './notefile.js';
 import DOMPurify from '../vendor/dompurify-3.2.6/purify.es.mjs';
 import { parseImport } from './imports.js';
 
@@ -45,27 +46,13 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
 });
 
 export function renderMarkdown(md) {
-  return DOMPurify.sanitize(marked.parse(md || ''), { FORBID_TAGS: ['style', 'form', 'input'] });
+  // Code blocks and tables scroll sideways when wide, so keyboards need to reach them.
+  return DOMPurify.sanitize(marked.parse(md || ''), { FORBID_TAGS: ['style', 'form', 'input'] }).replace(/<(pre|table)>/g, '<$1 tabindex="0">');
 }
 
-export function splitFrontmatter(raw) {
-  const text = (raw || '').replace(/^﻿/, '');
-  const m = /^(---|\+\+\+)[ \t]*\r?\n([\s\S]*?)\r?\n\1[ \t]*(?:\r?\n|$)/.exec(text);
-  if (!m) return { meta: {}, body: text.trim() };
-  const meta = {};
-  for (const line of m[2].split(/\r?\n/)) {
-    const i = line.search(/[:=]/);
-    if (i > 0 && !/^\s/.test(line)) {
-      meta[line.slice(0, i).trim().toLowerCase()] = line
-        .slice(i + 1)
-        .trim()
-        .replace(/^['"]|['"]$/g, '');
-    }
-  }
-  return { meta, body: text.slice(m[0].length).trim() };
-}
+/** Frontmatter and body (see notefile.js). Kept here for older imports. */
+export const splitFrontmatter = parseFrontmatter;
 
-const stripExt = (name) => name.replace(/\.(md|markdown|txt)$/i, '');
 
 /**
  * Highlights are what get surfaced on their own, Readwise-style:
@@ -154,21 +141,20 @@ export function parseNote(raw, path) {
       minutes: Math.max(1, Math.round(imported.markdown.split(/\s+/).length / 220)),
       highlights: imported.highlights,
       tags: [],
+      ownWords: 0,
       imported: true,
     };
   }
-  const { meta, body: withAnchors } = splitFrontmatter(raw);
+  const { meta, body: withAnchors } = parseFrontmatter(raw);
   const body = withAnchors.split(/\r?\n/).filter((l) => !ANCHOR_RE.test(l)).join('\n');
-  const filename = stripExt(path.split('/').pop());
+  const title = resolveTitle(meta, body, path);
+  // The note's own first heading is shown as its title, so don't repeat it in the body.
   const h1 = /^#\s+(.+?)\s*#*\s*$/m.exec(body);
-  const title = meta.title || (h1 ? h1[1] : filename);
   let main = body;
   if (h1 && body.trimStart().startsWith(h1[0])) main = body.trimStart().slice(h1[0].length).trim();
 
   const words = main.split(/\s+/).filter(Boolean).length;
   const isPlain = /\.txt$/i.test(path);
-  // A saved web article: its quotes aren't your highlights (those go to Highlights/).
-  const article = /^https?:\/\//i.test(meta.source || '');
   return {
     title: title.replace(/[*_`]/g, ''),
     meta,
@@ -176,15 +162,16 @@ export function parseNote(raw, path) {
     html: isPlain ? `<pre class="plain">${escapeHtml(main)}</pre>` : renderMarkdown(main),
     words,
     minutes: Math.max(1, Math.round(words / 220)),
-    highlights: isPlain || article ? [] : extractHighlights(withAnchors),
+    highlights: isPlain ? [] : extractHighlights(withAnchors),
     tags: parseTags(meta.tags, main),
-    article,
+    ownWords: ownWords(main),
   };
 }
 
 function parseTags(metaTags, body) {
   const tags = new Set();
-  if (metaTags) metaTags.replace(/[\[\]]/g, '').split(/[,\s]+/).filter(Boolean).forEach((t) => tags.add(t.replace(/^#/, '')));
+  const list = Array.isArray(metaTags) ? metaTags : String(metaTags || '').replace(/[[\]]/g, '').split(/[,\s]+/);
+  list.map(String).filter(Boolean).forEach((t) => tags.add(t.replace(/^#/, '')));
   for (const m of body.matchAll(/(?:^|\s)#([A-Za-z][\w/-]{1,40})/g)) tags.add(m[1]);
   return [...tags].slice(0, 6);
 }

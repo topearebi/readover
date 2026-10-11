@@ -30,7 +30,7 @@ function bookCSS(size) {
 /**
  * @param opts {
  *   at?: string                  open at this CFI (e.g. from a highlight card)
- *   onHighlight?(h) → Promise<string|void>   h = { text, comment, chapter, page, at }
+ *   onHighlight?(h) → Promise<{ where, file }>   h = { text, comment, chapter, page, at, title }  (saved as an insight)
  * }
  */
 export async function openBook(item, blob, title, opts = {}) {
@@ -64,7 +64,7 @@ export async function openBook(item, blob, title, opts = {}) {
       view?.close();
     } catch {}
     root.remove();
-  });
+  }, { element: root });
   back.onclick = close;
 
   const saved = (await progress.get(item.key)) || { pct: 0, loc: '', highlights: [] };
@@ -162,15 +162,15 @@ export async function openBook(item, blob, title, opts = {}) {
     keep.onclick = () => save('');
     withNote.onclick = async () => {
       const sel = selection;
-      const comment = await askNote(sel?.text || '');
-      if (comment !== null) {
+      const asked = await askNote(sel?.text || '');
+      if (asked) {
         selection = sel;
-        save(comment);
+        save(asked.thought, asked.title, asked.tags);
       }
     };
   }
 
-  async function save(comment) {
+  async function save(comment, title = '', tags = '') {
     const sel = selection;
     if (!sel) return;
     sel.doc.getSelection().removeAllRanges();
@@ -189,12 +189,12 @@ export async function openBook(item, blob, title, opts = {}) {
     view.addAnnotation({ value: cfi }).catch(() => {});
     await saveProgress(item, { highlights });
     try {
-      const saved = await opts.onHighlight({ text: h.text, comment: h.comment, chapter: h.chapter, page: h.page, at: cfi });
+      const saved = await opts.onHighlight({ text: h.text, comment: h.comment, chapter: h.chapter, page: h.page, at: cfi, title, tags });
       if (saved?.file) {
         h.file = saved.file;
         await saveProgress(item, { highlights });
       }
-      toast(saved?.where ? `Highlight saved to ${saved.where}` : 'Highlight saved on this device');
+      toast(saved?.where ? `Insight saved to ${saved.where}` : 'Insight saved on this device');
     } catch (err) {
       toast(`Kept in the book on this device. ${err.message}`);
     }

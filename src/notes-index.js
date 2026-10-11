@@ -3,7 +3,7 @@
 // been downloaded yet are still found by title; "Download all" fills in the rest.
 import * as store from './store.js';
 import { readText } from './library.js';
-import { splitFrontmatter } from './markdown.js';
+import { parseFrontmatter, resolveTitle, titleFromPath } from './notefile.js';
 
 const cache = new Map(); // key -> { sha, entry }
 window.addEventListener('readover:notes-changed', () => cache.clear());
@@ -12,16 +12,19 @@ const base = (path) => path.split('/').pop().replace(/\.(md|markdown|txt|json)$/
 const low = (s) => s.toLowerCase().trim();
 
 function parseEntry(item, text) {
-  const { meta, body } = splitFrontmatter(text || '');
-  const h1 = /^#\s+(.+?)\s*#*\s*$/m.exec(body);
-  const title = (meta.title || (h1 ? h1[1] : '') || base(item.path)).replace(/[*_`]/g, '');
-  const aliases = (meta.aliases || meta.alias || '').replace(/[[\]]/g, '').split(',').map((a) => a.trim()).filter(Boolean);
+  const { meta, body } = parseFrontmatter(text || '');
+  // Without the text, the file name is the best title there is.
+  const title = (text == null ? titleFromPath(item.path) : resolveTitle(meta, body, item.path)).replace(/[*_`]/g, '');
+  const rawAliases = meta.aliases || meta.alias || '';
+  const aliases = (Array.isArray(rawAliases) ? rawAliases : String(rawAliases).replace(/[[\]]/g, '').split(','))
+    .map((a) => String(a).replace(/[[\]]/g, '').trim())
+    .filter(Boolean);
   const links = [];
   for (const m of body.matchAll(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]+)?\]\]/g)) links.push({ wiki: m[1].trim(), at: m.index });
   for (const m of body.matchAll(/\[[^\]]*\]\(<?([^)\s>]+\.(?:md|markdown))(?:#[^)]*)?>?\)/gi)) {
     if (!/^[a-z]+:/i.test(m[1])) links.push({ href: decodeURI(m[1]), at: m.index });
   }
-  return { item, title, aliases, text: body, lower: body.toLowerCase(), links, hasText: text != null };
+  return { item, title, aliases, meta, text: body, lower: body.toLowerCase(), links, hasText: text != null };
 }
 
 /** All notes (not books), with whatever text is on the device. */
@@ -35,7 +38,9 @@ export async function entries() {
       continue;
     }
     const c = await store.content.get(item.key);
+    // An older copy is still searchable, but it's marked stale so it gets refreshed.
     const entry = parseEntry(item, c && c.sha === item.sha ? c.text : c?.text ?? null);
+    entry.stale = Boolean(c && c.sha !== item.sha);
     if (c) cache.set(item.key, { sha: item.sha, entry });
     out.push(entry);
   }
@@ -48,9 +53,9 @@ export async function coverage() {
   return { total: all.length, withText: all.filter((e) => e.hasText).length };
 }
 
-/** Download every note not yet on the device, a few at a time. */
-export async function downloadAll(onProgress = () => {}) {
-  const missing = (await entries()).filter((e) => !e.hasText).map((e) => e.item);
+/** Download every note not yet on the device (in one library, if given), a few at a time. */
+export async function downloadAll(onProgress = () => {}, { sourceId = null } = {}) {
+  const missing = (await entries()).filter((e) => (!e.hasText || e.stale) && (!sourceId || e.item.sourceId === sourceId)).map((e) => e.item);
   let done = 0;
   const worker = async () => {
     while (missing.length) {
