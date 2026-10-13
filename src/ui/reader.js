@@ -3,8 +3,8 @@
 import { readText, writeNote, canWrite, renameNote, deleteNote, notePath, displayName } from '../library.js';
 import { parseNote } from '../markdown.js';
 import { getSource, items as itemStore } from '../store.js';
-import { backlinks, findByLink, search, entries, related, excerptOf, resolve, downloadAll } from '../notes-index.js';
-import { pushOverlay, el, icon, toast } from './overlay.js';
+import { connections, backlinks, findByLink, search, entries, related, excerptOf, resolve, downloadAll } from '../notes-index.js';
+import { pushOverlay, closeAll, el, icon, toast } from './overlay.js';
 import { resolveImages } from './card.js';
 import { sheet, menu } from './sheet.js';
 import { wikiLink, updateFrontmatter } from '../notefile.js';
@@ -48,12 +48,15 @@ export async function openNote(item, opts = {}) {
 
   const star = el('button', { class: 'icon-btn star-btn', 'aria-pressed': String(starred), title: 'Favourite' }, icon('star'));
   const editBtn = writable && !note.imported ? el('button', { class: 'btn' }, 'Edit') : null;
+  const discardBtn = el('button', { class: 'btn btn-quiet discard-btn', hidden: true, title: 'Discard changes' }, 'Discard');
   const linkBtn = el('button', { class: 'btn btn-quiet', hidden: true, title: 'Insert a link to another note' }, '[[ ]]');
   const moreBtn = el('button', { class: 'icon-btn', 'aria-label': 'More', title: 'More' }, '⋯');
   const back = el('button', { class: 'icon-btn', 'aria-label': 'Back' }, icon('back'));
+  const homeBtn = el('button', { class: 'icon-btn home-btn', 'aria-label': 'Home (back to feed)', title: 'Home (back to feed)' }, icon('home'));
+  homeBtn.onclick = () => closeAll();
   const status = el('span', { class: 'status' });
   const titleEl = el('span', { class: 'title' }, note.title);
-  const bar = el('div', { class: 'reader-bar' }, back, titleEl, status, star, linkBtn, editBtn, moreBtn);
+  const bar = el('div', { class: 'reader-bar' }, back, homeBtn, titleEl, status, star, linkBtn, discardBtn, editBtn, moreBtn);
   const scroll = el('div', { class: 'reader-scroll', tabindex: '-1' });
   const root = el('div', { class: 'reader', role: 'dialog', 'aria-modal': 'true', 'aria-label': note.title }, bar, scroll);
 
@@ -88,22 +91,82 @@ export async function openNote(item, opts = {}) {
     );
     scroll.replaceChildren(article);
     titleEl.textContent = note.title;
-    showBacklinks(linked);
+    showConnections(linked);
     return prose;
   };
 
-  async function showBacklinks(section) {
-    const list = await backlinks(item);
-    if (!list.length) return;
+  async function showConnections(section) {
+    const conn = await connections(item);
+    const hasOut = conn.outgoing?.length > 0;
+    const hasIn = conn.backlinks?.length > 0;
+    if (!hasOut && !hasIn) return;
     section.hidden = false;
-    section.replaceChildren(
-      el('h2', {}, `Linked from ${list.length} ${list.length === 1 ? 'note' : 'notes'}`),
-      ...list.map((b) => {
-        const btn = el('button', { class: 'backlink' }, el('b', {}, b.title), el('span', {}, b.context.replace(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (_m, t, alias) => alias || t).replace(/^\s*[-*+]\s+/, '').replace(/[#>*_`]/g, '').slice(0, 160)));
+
+    const children = [];
+
+    // Outgoing links (Links to X notes)
+    if (hasOut) {
+      children.push(el('h2', {}, `Links to ${conn.outgoing.length} ${conn.outgoing.length === 1 ? 'note' : 'notes'}`));
+      for (const o of conn.outgoing) {
+        const head = el('div', { class: 'backlink-head' },
+          el('b', {}, o.title),
+          o.isMutual ? el('span', { class: 'conn-mutual' }, '⇄ Mutual link') : null
+        );
+        const btn = el('button', { class: 'backlink' },
+          head,
+          o.excerpt ? el('span', {}, o.excerpt) : null
+        );
+        btn.onclick = () => opts.openItem?.(o.item);
+        children.push(el('div', { class: 'backlink-row' }, btn));
+      }
+    }
+
+    // Incoming backlinks (Linked from Y notes)
+    if (hasIn) {
+      children.push(el('h2', { class: hasOut ? 'connections-subhead' : '' }, `Linked from ${conn.backlinks.length} ${conn.backlinks.length === 1 ? 'note' : 'notes'}`));
+      for (const b of conn.backlinks) {
+        const head = el('div', { class: 'backlink-head' },
+          el('b', {}, b.title),
+          b.isMutual ? el('span', { class: 'conn-mutual' }, '⇄ Mutual link') : null
+        );
+        const snippet = b.context
+          .replace(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (_m, t, alias) => alias || t)
+          .replace(/^\s*[-*+]\s+/, '')
+          .replace(/[#>*_`]/g, '')
+          .slice(0, 160);
+        const btn = el('button', { class: 'backlink' },
+          head,
+          snippet ? el('span', {}, snippet) : null
+        );
         btn.onclick = () => opts.openItem?.(b.item);
-        return btn;
-      })
-    );
+
+        let linkBackBtn = null;
+        if (!b.isMutual && writable) {
+          linkBackBtn = el('button', { type: 'button', class: 'btn btn-quiet link-back-btn', title: 'Add link under ## Related' }, '+ Link back');
+          linkBackBtn.onclick = async (e) => {
+            e.stopPropagation();
+            linkBackBtn.disabled = true;
+            try {
+              const myLink = await linkFor(b.item);
+              const newText = addToSection(text, 'Related', myLink);
+              if (await save(newText)) {
+                text = newText;
+                note = parseNote(text, item.path);
+                prose = renderArticle();
+                toast(`Linked back to ${b.title}`);
+              }
+            } catch (err) {
+              toast(err.message);
+              linkBackBtn.disabled = false;
+            }
+          };
+        }
+
+        children.push(el('div', { class: 'backlink-row' }, btn, linkBackBtn));
+      }
+    }
+
+    section.replaceChildren(...children);
   }
 
   let prose = renderArticle();
@@ -196,6 +259,13 @@ export async function openNote(item, opts = {}) {
     editBtn.textContent = 'Edit';
     editBtn.classList.remove('btn-primary');
     linkBtn.hidden = true;
+    discardBtn.hidden = true;
+  };
+
+  discardBtn.onclick = () => {
+    stopEditing();
+    prose = renderArticle();
+    toast('Changes discarded');
   };
 
   if (editBtn) {
@@ -210,6 +280,7 @@ export async function openNote(item, opts = {}) {
         editBtn.textContent = 'Save';
         editBtn.classList.add('btn-primary');
         linkBtn.hidden = false;
+        discardBtn.hidden = false;
         // Start at the top of the note, not with the cursor (and view) at the end.
         textarea.setSelectionRange(0, 0);
         textarea.focus({ preventScroll: true });
@@ -361,7 +432,20 @@ export async function openNote(item, opts = {}) {
   async function linkTo() {
     const picked = await pickNote(`Link “${note.title}” to…`, item);
     if (!picked) return;
-    await save(addToSection(text, 'Related', `- ${await linkFor(picked)}`), 'Linked', `Readover: link ${item.path} to ${picked.path}`);
+    const myLink = await linkFor(picked);
+    const theirLink = await linkFor(item);
+    await save(addToSection(text, 'Related', `- ${myLink}`), 'Linked', `Readover: link ${item.path} to ${picked.path}`);
+
+    try {
+      const pickedSrc = getSource(picked.sourceId);
+      if (canWrite(pickedSrc)) {
+        const pickedText = await readText(picked);
+        const newPickedText = addToSection(pickedText, 'Related', `- ${theirLink}`);
+        await writeNote(pickedSrc, picked.path, newPickedText, { message: `Readover: reciprocal link from ${item.path}` });
+      }
+    } catch (err) {
+      console.warn('Could not write reciprocal link', err);
+    }
   }
 
   /**
@@ -491,6 +575,13 @@ export async function openNote(item, opts = {}) {
     } catch (err) {
       toast(err.message);
     }
+  }
+
+  if (opts.startInEditor && editBtn) {
+    editBtn.click();
+  }
+  if (opts.startMove) {
+    setTimeout(() => renameOrMove(), 50);
   }
 }
 

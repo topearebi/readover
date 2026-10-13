@@ -52,6 +52,12 @@ export function closeTop() {
   return top ? requestClose(top) : Promise.resolve();
 }
 
+export async function closeAll() {
+  while (stack.length) {
+    await closeTop();
+  }
+}
+
 /** Open a <dialog> as a sheet, wired to the overlay stack. Resolves with returnValue on close. */
 export function openSheet(dialog) {
   return new Promise((resolve) => {

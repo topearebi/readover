@@ -119,6 +119,73 @@ export async function backlinks(item) {
   return out.sort((a, b) => a.title.localeCompare(b.title));
 }
 
+/** Notes that this note links to, resolved with target item, title, and excerpt. */
+export async function outgoing(item) {
+  const all = await entries();
+  const me = all.find((e) => e.item.key === item.key);
+  if (!me || !me.links?.length) return [];
+  const out = [];
+  const seen = new Set();
+  for (const link of me.links) {
+    const target = resolve(link, me, all);
+    if (!target || target.item.key === item.key || seen.has(target.item.key)) continue;
+    seen.add(target.item.key);
+    out.push({
+      item: target.item,
+      title: target.title,
+      excerpt: excerptOf(target.text, 140),
+    });
+  }
+  return out.sort((a, b) => a.title.localeCompare(b.title));
+}
+
+/** Full bidirectional link model: outgoing links, incoming backlinks, and mutual detection. */
+export async function connections(item) {
+  const [out, inLinks] = await Promise.all([outgoing(item), backlinks(item)]);
+  const outKeys = new Set(out.map((x) => x.item.key));
+  const inKeys = new Set(inLinks.map((x) => x.item.key));
+  const mutual = new Set([...outKeys].filter((k) => inKeys.has(k)));
+
+  return {
+    outgoing: out.map((x) => ({ ...x, isMutual: mutual.has(x.item.key) })),
+    backlinks: inLinks.map((x) => ({ ...x, isMutual: mutual.has(x.item.key) })),
+    mutualKeys: mutual,
+  };
+}
+
+/** Notes with the highest number of backlinks for Hub cards in the feed. */
+export async function hubNotes({ minBacklinks = 2, limit = 10 } = {}) {
+  const all = (await entries()).filter((e) => e.hasText);
+  const backlinkMap = new Map(); // targetKey -> list of { item, title, context }
+
+  for (const e of all) {
+    for (const link of e.links) {
+      const target = resolve(link, e, all);
+      if (!target || target.item.key === e.item.key) continue;
+      const list = backlinkMap.get(target.item.key) || [];
+      const start = e.text.lastIndexOf('\n', link.at) + 1;
+      const end = e.text.indexOf('\n', link.at);
+      list.push({ item: e.item, title: e.title, context: e.text.slice(start, end < 0 ? undefined : end).trim() });
+      backlinkMap.set(target.item.key, list);
+    }
+  }
+
+  const hubs = [];
+  for (const [key, list] of backlinkMap.entries()) {
+    if (list.length < minBacklinks) continue;
+    const entry = all.find((e) => e.item.key === key);
+    if (!entry) continue;
+    hubs.push({
+      item: entry.item,
+      title: entry.title,
+      excerpt: excerptOf(entry.text, 160),
+      count: list.length,
+      links: list.slice(0, 3),
+    });
+  }
+  return hubs.sort((a, b) => b.count - a.count).slice(0, limit);
+}
+
 /* ---------- Search ---------- */
 
 /** Every word must appear in the title, path or text. Title matches rank first. */

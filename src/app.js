@@ -3,7 +3,7 @@ import * as store from './store.js';
 import * as library from './library.js';
 import * as local from './sources/local.js';
 import { buildQueue, foldersFor } from './feed.js';
-import { createCard, hydrateCard } from './ui/card.js';
+import { createCard, hydrateCard, createConnectionCard, createHubCard } from './ui/card.js';
 import { openNote, addToSection, pickNote } from './ui/reader.js';
 import { growthOf, isArchived, garden } from './garden.js';
 import { GROWTH_FILTERS, counts as filterCounts, filterLabel, passes, typeList } from './filters.js';
@@ -11,7 +11,7 @@ import { renderTypeChecks, readTypeChecks } from './ui/types.js';
 import { openGrowthSheet } from './ui/growth.js';
 import { isoDay, updateFrontmatter, parseFrontmatter } from './notefile.js';
 import { entries as noteEntries } from './notes-index.js';
-import { sheet as buildSheet } from './ui/sheet.js';
+import { sheet as buildSheet, menu } from './ui/sheet.js';
 import { initSettings } from './ui/settings.js';
 import { initCompose } from './ui/compose.js';
 import { openSheet, toast, haptic, el, hasOverlay, closeTop } from './ui/overlay.js';
@@ -29,8 +29,8 @@ import { wikiLink } from './notefile.js';
 import { openCapture } from './ui/capture.js';
 import { clipFromLocation } from './clip.js';
 import * as clock from './clock.js';
-import { linkedPairs } from './notes-index.js';
-import { createConnectionCard } from './ui/card.js';
+import { linkedPairs, hubNotes } from './notes-index.js';
+
 
 const $ = (id) => document.getElementById(id);
 const feedEl = $('feed');
@@ -236,11 +236,17 @@ function appendBatch(n = BATCH) {
     feedEl.append(card);
     hydrateObserver.observe(card);
     viewObserver.observe(card);
-    // Now and then, two of your notes that link to each other.
-    if (app.cursor > 0 && app.cursor % CONNECTION_EVERY === CONNECTION_EVERY - 1 && app.pairs?.length) {
-      const conn = createConnectionCard(app.pairs.pop(), { openItem: (item) => openNoteItem(item) });
-      feedEl.append(conn);
-      viewObserver.observe(conn);
+    // Now and then, two connected notes or a garden hub card.
+    if (app.cursor > 0 && app.cursor % CONNECTION_EVERY === CONNECTION_EVERY - 1) {
+      if (app.hubs?.length && (Math.random() < 0.5 || !app.pairs?.length)) {
+        const hub = createHubCard(app.hubs.pop(), { openItem: (item) => openNoteItem(item) });
+        feedEl.append(hub);
+        viewObserver.observe(hub);
+      } else if (app.pairs?.length) {
+        const conn = createConnectionCard(app.pairs.pop(), { openItem: (item) => openNoteItem(item) });
+        feedEl.append(conn);
+        viewObserver.observe(conn);
+      }
     }
   }
   if (app.cursor >= app.queue.length) feedEl.append(endCard());
@@ -332,9 +338,10 @@ async function reload() {
   const gen = ++generation;
   updateScopeLabel();
   const { folder, filter, feedGrowth, feedTypes } = store.getPrefs();
-  const [{ queue, states, reasons, forced, growth }, pairs] = await Promise.all([
+  const [{ queue, states, reasons, forced, growth }, pairs, hubs] = await Promise.all([
     buildQueue({ sourceIds: scopeSourceIds(), folder, filter, growth: feedGrowth, types: typeList(feedTypes) }),
     linkedPairs().catch(() => []),
+    hubNotes().catch(() => []),
   ]);
   if (gen !== generation) return; // a newer reload started meanwhile
   app.queue = queue;
@@ -345,6 +352,9 @@ async function reload() {
   const scope = new Set(scopeSourceIds());
   app.pairs = pairs
     .filter((p) => scope.has(p.a.item.sourceId) && !states.get(p.a.item.key)?.hidden && !states.get(p.b.item.key)?.hidden)
+    .sort(() => Math.random() - 0.5);
+  app.hubs = (hubs || [])
+    .filter((h) => scope.has(h.item.sourceId) && !states.get(h.item.key)?.hidden)
     .sort(() => Math.random() - 0.5);
   try {
     navigator.clearAppBadge?.(); // badges were for notes "due"; nothing is due any more
@@ -425,17 +435,36 @@ async function waterItem(item, thought) {
   return library.writeNote(store.getSource(item.sourceId), item.path, addToSection(text, 'Thoughts', block), { message: `Readover: water ${item.path}` });
 }
 
-/** Graft: link to another note, under ## Related. */
+/** Graft: link to another note, under ## Related (reciprocal by default). */
 async function graftItem(item) {
   item = await latest(item);
   const picked = await pickNote('Graft onto…', item);
   if (!picked) return null;
-  const e = (await noteEntries()).find((x) => x.item.key === picked.key);
+  const entries = await noteEntries();
+  const ePicked = entries.find((x) => x.item.key === picked.key);
+  const eItem = entries.find((x) => x.item.key === item.key);
   const { wikiLink } = await import('./notefile.js');
   const text = await library.readText(item);
-  return library.writeNote(store.getSource(item.sourceId), item.path, addToSection(text, 'Related', `- ${wikiLink(picked.path, e?.title)}`), {
+  const linkToPicked = wikiLink(picked.path, ePicked?.title);
+  const linkToItem = wikiLink(item.path, eItem?.title);
+
+  const updated = await library.writeNote(store.getSource(item.sourceId), item.path, addToSection(text, 'Related', `- ${linkToPicked}`), {
     message: `Readover: graft ${item.path} onto ${picked.path}`,
   });
+
+  try {
+    const pickedSrc = store.getSource(picked.sourceId);
+    if (library.canWrite(pickedSrc)) {
+      const pickedText = await library.readText(picked);
+      await library.writeNote(pickedSrc, picked.path, addToSection(pickedText, 'Related', `- ${linkToItem}`), {
+        message: `Readover: reciprocal graft from ${item.path}`,
+      });
+    }
+  } catch (err) {
+    console.warn('Could not write reciprocal graft', err);
+  }
+
+  return updated;
 }
 
 /** Prune: into Archive/ (in the same library), with pruned: and pruned_from: — one commit. */
@@ -492,6 +521,96 @@ function refreshCard(card, item) {
 }
 
 const actions = {
+  /** 1-tap direct edit for notes from feed card rail. */
+  async editNote(card) {
+    if (!card._item || card._item.kind !== 'note') return;
+    return openNoteItem(card._item, { card, startInEditor: true });
+  },
+
+  /** More actions menu for notes from feed card rail. */
+  async cardMenu(card) {
+    const item = card._item;
+    if (!item || item.kind !== 'note') return;
+    const src = store.getSource(item.sourceId);
+    const writable = library.canWrite(src);
+    const archived = isArchived(item.path);
+    const title = card._note?.title || item.name;
+
+    const menuActions = [];
+    if (writable && !card._note?.imported) {
+      menuActions.push({ id: 'edit', label: 'Edit note', icon: 'pen' });
+      menuActions.push({ id: 'link', label: 'Graft: link to another note', icon: 'open' });
+    }
+    if (writable) {
+      menuActions.push({ id: 'move', label: 'Rename or move', icon: 'feed' });
+    }
+    if (writable && !archived) {
+      menuActions.push({ id: 'prune', label: 'Prune: move to Archive', icon: 'hide' });
+    } else if (writable && archived) {
+      menuActions.push({ id: 'replant', label: 'Replant', icon: 'feed' });
+    }
+    menuActions.push({ id: 'share', label: 'Share', icon: 'share' });
+    if (writable) {
+      menuActions.push({ id: 'delete', label: 'Delete note', icon: 'close', danger: true });
+    }
+
+    const choice = await menu(title, menuActions);
+    if (!choice) return;
+
+    if (choice === 'edit') {
+      return actions.editNote(card);
+    }
+    if (choice === 'move') {
+      return openNoteItem(item, { card, startMove: true });
+    }
+    if (choice === 'link') {
+      try {
+        const updated = await graftItem(item);
+        if (updated) {
+          toast('Grafted');
+          refreshCard(card, updated);
+        }
+      } catch (err) {
+        toast(err.message);
+      }
+      return;
+    }
+    if (choice === 'prune') {
+      try {
+        if (await pruneItem(item, title)) {
+          card.remove();
+        }
+      } catch (err) {
+        toast(err.message);
+      }
+      return;
+    }
+    if (choice === 'replant') {
+      try {
+        await replantItem(item);
+      } catch (err) {
+        toast(err.message);
+      }
+      return;
+    }
+    if (choice === 'share') {
+      return actions.share(card);
+    }
+    if (choice === 'delete') {
+      const where = src.type === 'github' ? `It's removed from ${src.owner}/${src.repo}, and you can still restore it from the repository's history on GitHub.` : src.type === 'device' ? "It's removed from this device for good." : "It's removed from the folder on this device.";
+      const { value } = await buildSheet({ title: `Delete “${title}”?`, fields: [el('p', { class: 'hint' }, where)], submit: 'Delete note', danger: true });
+      if (value !== 'ok') return;
+      try {
+        await library.deleteNote(item);
+        card.remove();
+        toast('Deleted');
+      } catch (err) {
+        toast(err.message);
+      }
+      return;
+    }
+  },
+
   /** Water from the card's own field. Resolves true when saved. */
   async waterNote(card, thought) {
     try {
@@ -627,12 +746,14 @@ const actions = {
 };
 
 /** Open a note in the reader, from anywhere (feed card, Notes, a link in another note). */
-async function openNoteItem(item, { card = null, highlight = null, section = '' } = {}) {
+async function openNoteItem(item, { card = null, highlight = null, section = '', startInEditor = false, startMove = false } = {}) {
   try {
     await openNote(item, {
       starred: Boolean((await store.state.get(item.key))?.starred),
       highlight,
       section,
+      startInEditor,
+      startMove,
       onStar: async (on) => {
         if (card) return actions.star(card);
         const st = await library.setFlag(item, 'starred', on);
@@ -655,6 +776,73 @@ async function openNoteItem(item, { card = null, highlight = null, section = '' 
   } catch (err) {
     toast(err.message);
   }
+}
+
+/** Search notes from anywhere in the app (feed header, keyboard shortcut /). */
+async function searchNotesDialog() {
+  const { search } = await import('./notes-index.js');
+  const input = el('input', {
+    type: 'search',
+    class: 'feed-search-input',
+    placeholder: 'Search notes, titles and text…',
+    autocomplete: 'off',
+    'aria-label': 'Search notes',
+  });
+  const resultsEl = el('div', { class: 'feed-search-results' });
+  const statusEl = el('p', { class: 'hint feed-search-status' }, 'Type to search all your notes');
+  let timer;
+  let close = () => {};
+
+  const runSearch = async () => {
+    const q = input.value.trim();
+    if (!q) {
+      statusEl.textContent = 'Type to search all your notes';
+      statusEl.hidden = false;
+      resultsEl.replaceChildren();
+      return;
+    }
+    statusEl.textContent = 'Searching…';
+    statusEl.hidden = false;
+    const found = await search(q, { limit: 40 });
+    if (!found.length) {
+      statusEl.textContent = `No notes match “${q}”`;
+      resultsEl.replaceChildren();
+      return;
+    }
+    statusEl.hidden = true;
+    const rows = found.map((r) => {
+      const src = store.getSource(r.item.sourceId);
+      const where = [src?.name, r.item.folder].filter(Boolean).join(' / ');
+      const b = el(
+        'button',
+        { type: 'button', class: 'feed-search-item' },
+        el('b', {}, r.title),
+        r.snippet ? el('span', { class: 'feed-search-snippet' }, r.snippet) : null,
+        where ? el('small', {}, where) : null
+      );
+      b.onclick = () => {
+        close();
+        openNoteItem(r.item);
+      };
+      return b;
+    });
+    resultsEl.replaceChildren(...rows);
+  };
+
+  input.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(runSearch, 150);
+  });
+
+  await buildSheet({
+    title: 'Search notes',
+    fields: [input, statusEl, resultsEl],
+    tall: true,
+    onOpen: (form, dialog) => {
+      close = () => dialog.close();
+      setTimeout(() => input.focus(), 60);
+    },
+  });
 }
 
 /** "gh:owner/repo|path" (as stored in highlight anchors) → this device's item. */
@@ -840,12 +1028,11 @@ window.addEventListener('keydown', (e) => {
   if ((e.key === 'Enter' || e.key === ' ') && e.target.closest?.('button, a[href], summary, [role=button]')) return;
   if (e.key === '/') {
     e.preventDefault();
-    showView('notes');
-    notesView.focusSearch();
+    searchNotesDialog();
     return;
   }
   if (app.view !== 'feed') {
-    if (e.key.toLowerCase() === 'n') compose.open();
+    if (e.key.toLowerCase() === 'n' || e.key === '+') compose.open();
     return;
   }
   const card = app.current;
@@ -859,10 +1046,12 @@ window.addEventListener('keydown', (e) => {
     k: () => scrollBy(-1),
     Enter: () => card?._item && actions.open(card),
     o: () => card?._item && actions.open(card),
+    e: () => card?._item && actions.editNote?.(card),
     s: () => card?._item && actions.star(card),
     x: () => card?._item && actions.hide(card),
     r: () => reload(),
     n: () => compose.open(),
+    '+': () => compose.open(),
   }[key];
   if (run) {
     e.preventDefault();
@@ -955,6 +1144,7 @@ $('brand').onclick = () => {
   feedEl.focus({ preventScroll: true });
 };
 $('scope-btn').onclick = openScope;
+$('search-btn').onclick = searchNotesDialog;
 $('settings-btn').onclick = () => settings.open();
 $('write-btn').onclick = () => compose.open();
 // "Paste a quote": read the clipboard while the tap still counts as a tap (iPhone asks

@@ -1,0 +1,8 @@
+{
+  "name": "Readover",
+  "description": "Your notes, highlights and books as a full-screen reading feed.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ],
+  "permissions": []
+}

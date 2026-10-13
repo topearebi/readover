@@ -66,6 +66,17 @@ function rail(card, item) {
     e.stopPropagation();
     actions.star(card);
   };
+
+  const moreBtn = item.kind === 'note' && actions.cardMenu
+    ? el('button', { class: 'more-btn', title: 'Note actions (⋯)', 'aria-label': 'Note actions' }, el('span', { class: 'rail-more-dots', 'aria-hidden': 'true' }, '⋯'))
+    : null;
+  if (moreBtn) {
+    moreBtn.onclick = (e) => {
+      e.stopPropagation();
+      actions.cardMenu(card);
+    };
+  }
+
   const hideBtn = el('button', { title: 'Hide from feed (X)', 'aria-label': 'Hide from feed' }, icon('hide'));
   hideBtn.onclick = (e) => {
     e.stopPropagation();
@@ -81,7 +92,12 @@ function rail(card, item) {
     e.stopPropagation();
     actions.open(card);
   };
-  return el('div', { class: 'rail' }, starBtn, hideBtn, shareBtn, openBtn);
+
+  const buttons = item.kind === 'note'
+    ? [starBtn, moreBtn, hideBtn, openBtn].filter(Boolean)
+    : [starBtn, hideBtn, shareBtn, openBtn];
+
+  return el('div', { class: 'rail' }, ...buttons);
 }
 
 function setReason(card, text) {
@@ -323,6 +339,35 @@ export function createConnectionCard(pair, actions) {
       side(pair.a),
       el('div', { class: 'conn-link', 'aria-hidden': 'true' }, el('i'), 'links to', el('i')),
       side(pair.b)
+    )
+  );
+}
+
+export function createHubCard(hub, actions) {
+  const hubBtn = el('button', { class: 'conn-note conn-hub-main' }, el('b', {}, hub.title), el('span', {}, hub.excerpt));
+  hubBtn.onclick = () => actions.openItem(hub.item);
+
+  const backlinkItems = (hub.links || []).map((link) => {
+    const b = el(
+      'button',
+      { class: 'conn-backlink-item' },
+      el('strong', {}, link.title),
+      el('span', {}, link.context.replace(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (_m, t, alias) => alias || t).replace(/^[#>*_`\s-]+/, '').slice(0, 120))
+    );
+    b.onclick = () => actions.openItem(link.item);
+    return b;
+  });
+
+  return el(
+    'section',
+    { class: 'card card-connection card-hub' },
+    el(
+      'div',
+      { class: 'card-body' },
+      el('p', { class: 'card-reason' }, `Garden Hub · Linked from ${hub.count} notes`),
+      hubBtn,
+      el('div', { class: 'conn-link', 'aria-hidden': 'true' }, el('i'), 'referenced by', el('i')),
+      el('div', { class: 'conn-hub-list' }, ...backlinkItems)
     )
   );
 }

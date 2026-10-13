@@ -6,6 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Readover</title>
   <meta name="description" content="Your notes, highlights and books as a full-screen reading feed." />
+  <meta property="og:title" content="Readover" />
+  <meta property="og:description" content="Your notes, highlights and books as a full-screen reading feed." />
   <meta name="theme-color" content="#e8ebe3" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#141816" media="(prefers-color-scheme: dark)" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -43,6 +45,8 @@
       <symbol id="i-feed" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/></symbol>
       <symbol id="i-shelf" viewBox="0 0 24 24"><path d="M4 4h4v16H4zM10 4h4v16h-4zM16.5 4.5l3.8 1 -3.8 15-3.8-1z"/></symbol>
       <symbol id="i-marker" viewBox="0 0 24 24"><path d="M9 11l-5 5v4h4l5-5M9 11l6-6 4 4-6 6M9 11l4 4M14 20h7"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke="currentColor" fill="none" stroke-width="2"/><path d="M16.5 16.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" stroke="currentColor" fill="none" stroke-width="2" stroke-linejoin="round"/></symbol>
     </defs>
   </svg>
 
@@ -54,8 +58,11 @@
         <span id="scope-label">Everything</span>
         <svg class="i i-sm"><use href="#i-down"/></svg>
       </button>
-      <button id="write-btn" class="icon-btn" title="Write a note (N)">
-        <svg class="i"><use href="#i-pen"/></svg><span class="sr">Write a note</span>
+      <button id="search-btn" class="icon-btn" title="Search notes (/)">
+        <svg class="i"><use href="#i-search"/></svg><span class="sr">Search</span>
+      </button>
+      <button id="write-btn" class="icon-btn" title="New note (+ or N)">
+        <svg class="i"><use href="#i-plus"/></svg><span class="sr">New note</span>
       </button>
       <button id="settings-btn" class="icon-btn" title="Settings">
         <svg class="i"><use href="#i-gear"/></svg><span class="sr">Settings</span>
