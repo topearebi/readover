@@ -524,7 +524,12 @@ const actions = {
   /** 1-tap direct edit for notes from feed card rail. */
   async editNote(card) {
     if (!card._item || card._item.kind !== 'note') return;
-    return openNoteItem(card._item, { card, startInEditor: true });
+    return compose.open({
+      existingItem: card._item,
+      onSaved: (item) => {
+        refreshCard(card, item);
+      },
+    });
   },
 
   /** More actions menu for notes from feed card rail. */
@@ -536,6 +541,7 @@ const actions = {
     const archived = isArchived(item.path);
     const rawText = (await store.content.get(item.key))?.text || '';
     const isInsight = Boolean(card._highlight) || insights.isInsightOrHighlight(item, card._note, rawText);
+    const title = card._note?.title || item.title || item.path?.split('/').pop()?.replace(/\.md$/i, '') || 'Note';
 
     const menuActions = [];
     if (writable && !card._note?.imported) {
@@ -756,6 +762,21 @@ async function openNoteItem(item, { card = null, highlight = null, section = '',
       section,
       startInEditor,
       startMove,
+      editNote: (noteItem, editOpts = {}) => {
+        return compose.open({
+          existingItem: noteItem,
+          onSaved: async (savedItem, updatedText) => {
+            if (card) {
+              card._item = { ...card._item, ...savedItem };
+              card.dataset.key = savedItem.key;
+              card._hydrated = false;
+              card.className = 'card';
+              hydrateCard(card);
+            }
+            await editOpts.onSaved?.(savedItem, updatedText);
+          },
+        });
+      },
       onStar: async (on) => {
         if (card) return actions.star(card);
         const st = await library.setFlag(item, 'starred', on);

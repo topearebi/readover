@@ -15,7 +15,7 @@ import { askNote } from './highlight-note.js';
 const today = () => new Date().toISOString().slice(0, 10);
 const linkName = (item) => item.path.split('/').pop().replace(/\.(md|markdown|txt)$/i, '');
 /** [[file-name|Title]] for a note, using the title Readover shows for it. */
-async function linkFor(item) {
+export async function linkFor(item) {
   const e = (await entries()).find((x) => x.item.key === item.key);
   return wikiLink(item.path, e?.title);
 }
@@ -395,6 +395,23 @@ export async function openNote(item, opts = {}) {
 
   if (editBtn) {
     editBtn.onclick = async () => {
+      if (opts.editNote) {
+        return opts.editNote(item, {
+          onSaved: async (savedItem, updatedText) => {
+            Object.assign(item, savedItem);
+            text = updatedText;
+            note = parseNote(text, item.path);
+            titleEl.textContent = note.title;
+            root.setAttribute('aria-label', note.title);
+            prose = renderArticle();
+            try {
+              const conn = await connections(item);
+              showConnections(conn);
+            } catch {}
+            opts.onSaved?.(item, text);
+          },
+        });
+      }
       if (!editing) {
         editing = true;
         textarea = el('textarea', { spellcheck: 'true', 'aria-label': 'Note source' });
