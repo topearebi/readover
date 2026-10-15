@@ -317,3 +317,113 @@ export function renamedStem(oldPath, title) {
   if (m) return `${m[1]}-${m[2]}-${m[3]}-${slugify(t)}`;
   return t.replace(/[\\/:*?"<>|#^[\]]+/g, '').replace(/\s+/g, ' ').trim() || stem;
 }
+
+/** Add `block` to the end of a "## <heading>" section, creating the section if needed. */
+export function addToSection(text, heading, block) {
+  const lines = String(text || '').replace(/\s*$/, '').split('\n');
+  const at = lines.findIndex((l) => new RegExp(`^##\\s+${heading}\\s*$`, 'i').test(l));
+  if (at < 0) return `${lines.join('\n')}\n\n## ${heading}\n\n${block}\n`;
+  let end = lines.findIndex((l, i) => i > at && /^#{1,2}\s/.test(l));
+  if (end < 0) end = lines.length;
+  while (end > at + 1 && !lines[end - 1].trim()) end--;
+  lines.splice(end, 0, block);
+  return `${lines.join('\n')}\n`;
+}
+
+/** Append a wiki link to ## Related without duplicating existing links. */
+export function addRelatedLink(text, link) {
+  const raw = String(text || '');
+  const cleanLink = String(link || '').trim().replace(/^[-*+]\s*/, '');
+  const baseTarget = cleanLink.replace(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]+)?\]\]/, '$1').trim().toLowerCase();
+  // Check if link or target is already present in raw text
+  if (raw.toLowerCase().includes(baseTarget)) return raw;
+  const line = `- ${cleanLink.startsWith('[[') ? cleanLink : `[[${cleanLink}]]`}`;
+  return addToSection(raw, 'Related', line);
+}
+
+/**
+ * Format clean markdown prose hierarchy for garden notes:
+ * User's lead editable thought first at the top, cleanly separated blockquoted citation
+ * beneath, and reciprocal backlink under ## Related.
+ */
+export function formatGardenNoteBody({ thought = '', quote = '', attribution = '', relatedLink = '', related = [] }) {
+  const parts = [];
+  const lead = String(thought || '').trim();
+  if (lead) parts.push(lead);
+
+  const cleanQuote = String(quote || '').trim();
+  if (cleanQuote) {
+    const qLines = cleanQuote.split(/\r?\n/).map((l) => (l.trim() ? `> ${l.trim()}` : '>'));
+    const cleanAttr = String(attribution || '').trim();
+    if (cleanAttr && !cleanQuote.includes(`— ${cleanAttr}`)) {
+      qLines.push('>', `> — ${cleanAttr}`);
+    }
+    parts.push(qLines.join('\n'));
+  }
+
+  const allRelated = [...(relatedLink ? [relatedLink] : []), ...(related || [])];
+  const uniqueRelated = [...new Set(allRelated.map((l) => String(l || '').trim()).filter(Boolean))];
+  if (uniqueRelated.length) {
+    parts.push(`## Related\n\n${uniqueRelated.map((l) => (l.startsWith('- ') ? l : `- ${l}`)).join('\n')}`);
+  }
+
+  return parts.join('\n\n');
+}
+
+/**
+ * Parse an insight or highlight note into its constituent components:
+ * thought, quote, attribution, tags, and related links.
+ */
+export function extractInsightComponents(rawText, path = '', metaFallback = {}) {
+  const { meta, body } = parseFrontmatter(rawText || '');
+  const lines = String(body || '').split(/\r?\n/);
+  const quoteLines = [];
+  let attribution = '';
+  const proseLines = [];
+  const related = [];
+  let section = '';
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const h = /^##\s+(.*)$/i.exec(line);
+    if (h) {
+      section = h[1].trim().toLowerCase();
+      continue;
+    }
+    if (section.startsWith('related')) {
+      const rm = /^\s*[-*+]\s+(.*)$/.exec(line);
+      if (rm) related.push(rm[1].trim());
+      continue;
+    }
+    if (/<!--\s*readover\s+.*-->/i.test(line)) continue;
+
+    if (/^\s*>/.test(line)) {
+      const q = line.replace(/^\s*>\s?/, '');
+      const attrMatch = /^\s*(?:—|–|--)\s*(.*)$/.exec(q);
+      if (attrMatch) {
+        attribution = attrMatch[1].trim();
+      } else {
+        quoteLines.push(q);
+      }
+    } else {
+      proseLines.push(line);
+    }
+  }
+
+  const cleanQuote = quoteLines.join('\n').trim();
+  const cleanThought = proseLines.join('\n').trim();
+  const sourceTitle = meta.source || metaFallback.source || attribution || '';
+  const title = meta.title || metaFallback.title || (path ? titleFromPath(path) : '') || titleFromText(cleanQuote);
+  const tags = meta.tags || metaFallback.tags || [];
+
+  return {
+    title,
+    thought: cleanThought,
+    quote: cleanQuote,
+    attribution: attribution || sourceTitle,
+    tags,
+    related,
+    meta,
+  };
+}
+

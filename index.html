@@ -47,6 +47,7 @@
       <symbol id="i-marker" viewBox="0 0 24 24"><path d="M9 11l-5 5v4h4l5-5M9 11l6-6 4 4-6 6M9 11l4 4M14 20h7"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke="currentColor" fill="none" stroke-width="2"/><path d="M16.5 16.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
       <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" stroke="currentColor" fill="none" stroke-width="2" stroke-linejoin="round"/></symbol>
+      <symbol id="i-cultivate" viewBox="0 0 24 24"><path d="M12 21v-8M12 13c0-3.5-2.5-5.5-6-5.5 0 4 2.5 5.5 6 5.5zM12 13c0-4 3-6.5 7-6.5 0 4.5-3 6.5-7 6.5zM5 21c2.5-.8 5-.8 7-.8s4.5 0 7 .8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
     </defs>
   </svg>
 
@@ -371,7 +372,10 @@
         <h2 id="compose-title">New note</h2>
         <button class="icon-btn" type="button" data-close aria-label="Close"><svg class="i"><use href="#i-close"/></svg></button>
       </div>
-      <button type="button" id="compose-paste" class="btn compose-paste">“ Paste a quote</button>
+      <div class="compose-tools">
+        <button type="button" id="compose-paste" class="btn compose-paste">“ Paste a quote</button>
+        <button type="button" id="compose-include-citation" class="btn compose-include-citation" title="Browse and insert citations from your highlights folder"><svg class="i i-sm"><use href="#i-search"/></svg> “ Include citation…</button>
+      </div>
       <label class="field"><span>Title <span class="field-opt">optional</span></span>
         <input name="title" placeholder="Left empty, the first words are used" />
       </label>
@@ -398,7 +402,9 @@
       <label class="field"><span>Tags <span class="field-opt">optional</span></span>
         <input name="tags" placeholder="e.g. habits, writing" autocapitalize="off" spellcheck="false" />
       </label>
-      <button class="btn btn-primary" type="submit">Save note</button>
+      <div class="compose-submit-bar">
+        <button class="btn btn-primary btn-save-note" type="submit">Save note</button>
+      </div>
     </form>
   </dialog>
 

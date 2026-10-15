@@ -1,6 +1,6 @@
 {
-  "summary": "Implementation plan addressing feed card actions, direct edit mode fix, topbar search, default bidirectional linking, reader home escape, and discard button in editor.",
-  "updatedAt": "2026-10-13T08:53:03.389781851Z",
+  "summary": "Refactor plan to refine note creation and citation workflow:\n- Clean up redundant \"Make it a note\" buttons across cards, reader, and growth sheets\n- Transform \"Include insights\" into \"Include citation\" in the composer\n- Dynamically query citations based on the user's configured Highlights folder setting\n- Insert standard Obsidian citation callout blocks with wikilinks: > [!quote] [[Source]]\n- Render citations as bounded editorial cards with title headers, quotation accents, and direct links\n- Preserve graph engine integrity with automatic bidirectional citation indexing",
+  "updatedAt": "2026-10-15T02:41:23.214098877Z",
   "requestFeedback": true,
   "userFacing": true
 }

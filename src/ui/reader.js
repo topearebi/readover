@@ -33,6 +33,94 @@ export function addToSection(text, heading, block) {
 }
 
 /**
+ * Transforms Obsidian citation callouts ([!quote], [!cite]) or blockquotes with source
+ * attribution links into bounded, styled evidence cards with distinct typography and direct links.
+ */
+function transformCitationCards(root) {
+  const bqs = [...root.querySelectorAll('blockquote')];
+  for (const bq of bqs) {
+    if (bq.closest('.citation-card')) continue;
+
+    const rawText = bq.textContent || '';
+    const isCallout = /\[!(?:quote|cite)\]/i.test(rawText);
+    const linkEl = bq.querySelector('a.wikilink, a[data-wikilink], a[href]');
+    const hasAttributionLink = !isCallout && linkEl && /^(?:—|–|--)\s*/.test(linkEl.parentElement?.textContent?.trim() || '');
+
+    if (!isCallout && !hasAttributionLink) continue;
+
+    let targetLink = '';
+    let targetTitle = '';
+    if (linkEl) {
+      targetLink = linkEl.getAttribute('data-wikilink') || linkEl.getAttribute('href') || '';
+      targetTitle = linkEl.textContent.trim();
+    }
+
+    const clone = bq.cloneNode(true);
+    let attributionHtml = '';
+    const paragraphs = [...clone.querySelectorAll('p, div, li')];
+
+    if (paragraphs.length) {
+      for (const p of paragraphs) {
+        if (/\[!(?:quote|cite)\]/i.test(p.textContent)) {
+          const headLink = p.querySelector('a.wikilink, a[data-wikilink], a[href]');
+          if (headLink) {
+            targetLink = targetLink || headLink.getAttribute('data-wikilink') || headLink.getAttribute('href') || '';
+            targetTitle = targetTitle || headLink.textContent.trim();
+          }
+          p.innerHTML = p.innerHTML.replace(/\[!(?:quote|cite)\][+-]?/i, '').trim();
+          if (!p.textContent.replace(targetTitle, '').trim()) {
+            p.remove();
+          }
+        }
+        const pText = p.textContent.trim();
+        if (/^(?:—|–|--)\s*\S/.test(pText)) {
+          attributionHtml = p.innerHTML.replace(/^(?:—|–|--)\s*/, '').trim();
+          p.remove();
+        }
+      }
+    }
+
+    const card = document.createElement('figure');
+    card.className = 'citation-card';
+    if (targetLink) card.setAttribute('data-wikilink', targetLink);
+
+    const head = document.createElement('div');
+    head.className = 'citation-card-head';
+
+    const label = document.createElement('div');
+    label.className = 'citation-card-label';
+    label.innerHTML = '<span class="citation-glyph" aria-hidden="true">“</span><span class="citation-kicker">Cited Evidence</span>';
+    head.appendChild(label);
+
+    if (targetLink) {
+      const sourceLink = document.createElement('a');
+      sourceLink.className = 'citation-source-link wikilink';
+      sourceLink.setAttribute('role', 'link');
+      sourceLink.setAttribute('tabindex', '0');
+      sourceLink.setAttribute('data-wikilink', targetLink);
+      sourceLink.setAttribute('title', `Open original note: ${targetTitle || targetLink}`);
+      sourceLink.innerHTML = `<span class="citation-source-title">${targetTitle || targetLink}</span><span class="citation-arrow" aria-hidden="true">↗</span>`;
+      head.appendChild(sourceLink);
+    }
+    card.appendChild(head);
+
+    const quoteBody = document.createElement('blockquote');
+    quoteBody.className = 'citation-card-quote';
+    quoteBody.innerHTML = clone.innerHTML.trim() || rawText.trim();
+    card.appendChild(quoteBody);
+
+    if (attributionHtml) {
+      const meta = document.createElement('figcaption');
+      meta.className = 'citation-card-meta';
+      meta.innerHTML = `<span class="citation-dash">—</span> <span class="citation-attribution">${attributionHtml}</span>`;
+      card.appendChild(meta);
+    }
+
+    bq.replaceWith(card);
+  }
+}
+
+/**
  * @param item  the note
  * @param opts  { starred, onStar(bool), highlight?, onSaved(item, text), openItem(item), createNote(title),
  *                makeInsight?(note, { text, thought, title, h }) → Promise,
@@ -45,7 +133,6 @@ export async function openNote(item, opts = {}) {
   let note = parseNote(text, item.path);
   let starred = Boolean(opts.starred);
   const writable = canWrite(src);
-
   const star = el('button', { class: 'icon-btn star-btn', 'aria-pressed': String(starred), title: 'Favourite' }, icon('star'));
   const editBtn = writable && !note.imported ? el('button', { class: 'btn' }, 'Edit') : null;
   const discardBtn = el('button', { class: 'btn btn-quiet discard-btn', hidden: true, title: 'Discard changes' }, 'Discard');
@@ -77,6 +164,7 @@ export async function openNote(item, opts = {}) {
       .catch(() => {});
     prose.innerHTML = note.html;
     resolveImages(prose, item);
+    transformCitationCards(prose);
     const crumbs = item.folder ? item.folder.split('/') : [];
     const linked = el('section', { class: 'backlinks', hidden: true });
     const article = el(
@@ -97,22 +185,46 @@ export async function openNote(item, opts = {}) {
 
   async function showConnections(section) {
     const conn = await connections(item);
-    const hasOut = conn.outgoing?.length > 0;
-    const hasIn = conn.backlinks?.length > 0;
-    if (!hasOut && !hasIn) return;
+    const hasMutual = conn.mutual?.length > 0;
+    const hasPureOut = conn.pureOutgoing?.length > 0;
+    const hasPureIn = conn.pureBacklinks?.length > 0;
+
+    if (!hasMutual && !hasPureOut && !hasPureIn) {
+      section.hidden = true;
+      section.replaceChildren();
+      return;
+    }
     section.hidden = false;
 
     const children = [];
 
-    // Outgoing links (Links to X notes)
-    if (hasOut) {
-      children.push(el('h2', {}, `Links to ${conn.outgoing.length} ${conn.outgoing.length === 1 ? 'note' : 'notes'}`));
-      for (const o of conn.outgoing) {
+    // 1. Related Notes (Mutual: Outbound ∩ Inbound)
+    // Rendered as a single card per note with a subtle muted reciprocal badge: ⇄ Mutual
+    if (hasMutual) {
+      children.push(el('h2', {}, 'Related Notes'));
+      for (const m of conn.mutual) {
         const head = el('div', { class: 'backlink-head' },
-          el('b', {}, o.title),
-          o.isMutual ? el('span', { class: 'conn-mutual' }, '⇄ Mutual link') : null
+          el('b', {}, m.title),
+          el('span', { class: 'conn-mutual', title: 'Reciprocal link: both notes cite each other' }, '⇄ Mutual')
         );
-        const btn = el('button', { class: 'backlink' },
+        const btn = el('button', { class: 'backlink', type: 'button' },
+          head,
+          m.excerpt ? el('span', {}, m.excerpt) : null
+        );
+        btn.onclick = () => opts.openItem?.(m.item);
+        children.push(el('div', { class: 'backlink-row' }, btn));
+      }
+    }
+
+    // 2. Referenced in Text (Pure Outbound: Outbound \ Mutual)
+    // Notes cited here in passing
+    if (hasPureOut) {
+      children.push(el('h2', { class: hasMutual ? 'connections-subhead' : '' }, 'Referenced in Text'));
+      for (const o of conn.pureOutgoing) {
+        const head = el('div', { class: 'backlink-head' },
+          el('b', {}, o.title)
+        );
+        const btn = el('button', { class: 'backlink', type: 'button' },
           head,
           o.excerpt ? el('span', {}, o.excerpt) : null
         );
@@ -121,27 +233,40 @@ export async function openNote(item, opts = {}) {
       }
     }
 
-    // Incoming backlinks (Linked from Y notes)
-    if (hasIn) {
-      children.push(el('h2', { class: hasOut ? 'connections-subhead' : '' }, `Linked from ${conn.backlinks.length} ${conn.backlinks.length === 1 ? 'note' : 'notes'}`));
-      for (const b of conn.backlinks) {
+    // 3. Referenced By (Pure Inbound: Inbound \ Mutual)
+    // Notes elsewhere citing this note; hide entirely if empty
+    if (hasPureIn) {
+      children.push(el('h2', { class: (hasMutual || hasPureOut) ? 'connections-subhead' : '' }, 'Referenced By'));
+      for (const b of conn.pureBacklinks) {
         const head = el('div', { class: 'backlink-head' },
-          el('b', {}, b.title),
-          b.isMutual ? el('span', { class: 'conn-mutual' }, '⇄ Mutual link') : null
+          el('b', {}, b.title)
         );
-        const snippet = b.context
-          .replace(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (_m, t, alias) => alias || t)
-          .replace(/^\s*[-*+]\s+/, '')
-          .replace(/[#>*_`]/g, '')
-          .slice(0, 160);
-        const btn = el('button', { class: 'backlink' },
+        let snippet = b.excerpt;
+        if (b.context) {
+          const rawSnippet = b.context
+            .replace(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (_m, t, alias) => {
+              const label = alias || t.split('/').pop().replace(/\.(md|markdown)$/i, '');
+              try { return decodeURIComponent(label); } catch { return label; }
+            })
+            .replace(/\[(.*?)\]\([^)]*\)/g, (_m, anchor) => {
+              try { return decodeURIComponent(anchor); } catch { return anchor; }
+            })
+            .replace(/^\s*[-*+]\s+/, '')
+            .replace(/[#>*_`=~]/g, '')
+            .trim();
+          if (rawSnippet && rawSnippet.length > 20) {
+            snippet = rawSnippet.slice(0, 160);
+          }
+        }
+
+        const btn = el('button', { class: 'backlink', type: 'button' },
           head,
           snippet ? el('span', {}, snippet) : null
         );
         btn.onclick = () => opts.openItem?.(b.item);
 
         let linkBackBtn = null;
-        if (!b.isMutual && writable) {
+        if (writable) {
           linkBackBtn = el('button', { type: 'button', class: 'btn btn-quiet link-back-btn', title: 'Add link under ## Related' }, '+ Link back');
           linkBackBtn.onclick = async (e) => {
             e.stopPropagation();

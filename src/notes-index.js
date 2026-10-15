@@ -102,7 +102,7 @@ export async function findByLink(target, fromItem) {
   return resolve(target.endsWith('.md') && target.includes('/') ? { href: target } : { wiki: target }, from, all)?.item || null;
 }
 
-/** Notes that link to this one, with the line the link sits on. */
+/** Notes that link to this one, with the line the link sits on and substantive excerpt. */
 export async function backlinks(item) {
   const all = await entries();
   const out = [];
@@ -112,14 +112,19 @@ export async function backlinks(item) {
       if (resolve(link, e, all)?.item.key !== item.key) continue;
       const start = e.text.lastIndexOf('\n', link.at) + 1;
       const end = e.text.indexOf('\n', link.at);
-      out.push({ item: e.item, title: e.title, context: e.text.slice(start, end < 0 ? undefined : end).trim() });
+      out.push({
+        item: e.item,
+        title: e.title,
+        context: e.text.slice(start, end < 0 ? undefined : end).trim(),
+        excerpt: substantiveExcerpt(e.text, 160),
+      });
       break;
     }
   }
   return out.sort((a, b) => a.title.localeCompare(b.title));
 }
 
-/** Notes that this note links to, resolved with target item, title, and excerpt. */
+/** Notes that this note links to, resolved with target item, title, and substantive excerpt. */
 export async function outgoing(item) {
   const all = await entries();
   const me = all.find((e) => e.item.key === item.key);
@@ -133,23 +138,53 @@ export async function outgoing(item) {
     out.push({
       item: target.item,
       title: target.title,
-      excerpt: excerptOf(target.text, 140),
+      excerpt: substantiveExcerpt(target.text, 160),
     });
   }
   return out.sort((a, b) => a.title.localeCompare(b.title));
 }
 
-/** Full bidirectional link model: outgoing links, incoming backlinks, and mutual detection. */
+/** Full bidirectional link model: outbound, inbound, mutual intersection, and pure partitions. */
 export async function connections(item) {
   const [out, inLinks] = await Promise.all([outgoing(item), backlinks(item)]);
-  const outKeys = new Set(out.map((x) => x.item.key));
-  const inKeys = new Set(inLinks.map((x) => x.item.key));
-  const mutual = new Set([...outKeys].filter((k) => inKeys.has(k)));
+  const inMap = new Map(inLinks.map((x) => [x.item.key, x]));
+  const outMap = new Map(out.map((x) => [x.item.key, x]));
+
+  const mutualKeys = new Set([...outMap.keys()].filter((k) => inMap.has(k)));
+
+  const mutual = [];
+  const pureOutgoing = [];
+  const pureBacklinks = [];
+
+  for (const [key, o] of outMap.entries()) {
+    if (mutualKeys.has(key)) {
+      const b = inMap.get(key);
+      mutual.push({
+        item: o.item,
+        title: o.title,
+        excerpt: o.excerpt || b?.excerpt || '',
+        isMutual: true,
+        backlink: b,
+        outlink: o,
+      });
+    } else {
+      pureOutgoing.push({ ...o, isMutual: false });
+    }
+  }
+
+  for (const [key, b] of inMap.entries()) {
+    if (!mutualKeys.has(key)) {
+      pureBacklinks.push({ ...b, isMutual: false });
+    }
+  }
 
   return {
-    outgoing: out.map((x) => ({ ...x, isMutual: mutual.has(x.item.key) })),
-    backlinks: inLinks.map((x) => ({ ...x, isMutual: mutual.has(x.item.key) })),
-    mutualKeys: mutual,
+    outgoing: out.map((x) => ({ ...x, isMutual: mutualKeys.has(x.item.key) })),
+    backlinks: inLinks.map((x) => ({ ...x, isMutual: mutualKeys.has(x.item.key) })),
+    mutualKeys,
+    mutual,
+    pureOutgoing,
+    pureBacklinks,
   };
 }
 
@@ -290,15 +325,107 @@ export async function related(item, { limit = 12 } = {}) {
   return out.sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
+/** Truncate text cleanly at a word boundary when possible */
+function truncateText(str, max = 160) {
+  if (!str || str.length <= max) return str || '';
+  const cut = str.slice(0, max);
+  const lastSpace = cut.lastIndexOf(' ');
+  return (lastSpace > max * 0.7 ? cut.slice(0, lastSpace) : cut).trim() + '…';
+}
+
+/**
+ * Extracts a substantive excerpt from note markdown for related preview cards:
+ * 1. Ignores YAML frontmatter blocks and HTML comments.
+ * 2. Skips any lines starting with bullet points containing links or headers.
+ * 3. Falls back to the first non-heading, non-list paragraph containing >30 plain-text characters.
+ * 4. Strips URL formatting: decodes link anchors with decodeURIComponent() and strips regex \[(.*?)\]\(.*?\) to plain text.
+ */
+export function substantiveExcerpt(text, length = 160) {
+  if (!text) return '';
+  // Strip frontmatter blocks
+  let clean = text.replace(/^---[\s\S]*?\n---\s*/, '');
+  clean = clean.replace(/<!--[\s\S]*?-->/g, '');
+
+  const stripFormatting = (str) =>
+    (str || '')
+      // Decode and strip markdown link anchors: [anchor text](url) -> decoded plain text
+      .replace(/\[(.*?)\]\([^)]*\)/g, (_m, anchor) => {
+        try {
+          return decodeURIComponent(anchor);
+        } catch {
+          return anchor;
+        }
+      })
+      // Wikilinks: [[target|alias]] -> alias or decoded target stem
+      .replace(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (_m, t, a) => {
+        const label = a || t.split('/').pop().replace(/\.(md|markdown)$/i, '');
+        try {
+          return decodeURIComponent(label);
+        } catch {
+          return label;
+        }
+      })
+      // Bare URLs
+      .replace(/<https?:\/\/[^>]+>/g, '')
+      // Headings, quotes, bold, italic, code marks
+      .replace(/[#>*_`=~]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  // Split into paragraphs by blank lines
+  const paragraphs = clean.split(/\n\s*\n+/);
+  let fallback = '';
+
+  for (const p of paragraphs) {
+    const trimmed = p.trim();
+    if (!trimmed) continue;
+    const lines = trimmed.split('\n').map((l) => l.trim()).filter(Boolean);
+    if (!lines.length) continue;
+
+    // Skip paragraphs starting with headers
+    if (/^#{1,6}\s/.test(lines[0])) continue;
+
+    // Skip paragraphs starting with bullet/numbered lists
+    if (/^([-*+]|\d+\.)\s/.test(lines[0])) continue;
+
+    // Filter out any standalone bullet points or heading lines within the block
+    const contentLines = lines.filter((l) => !/^#{1,6}\s|^([-*+]|\d+\.)\s/.test(l));
+    if (!contentLines.length) continue;
+
+    const plain = stripFormatting(contentLines.join(' '));
+    if (!plain) continue;
+
+    // First non-heading, non-list paragraph containing >30 plain-text characters
+    if (plain.length > 30) {
+      return truncateText(plain, length);
+    }
+    if (!fallback) {
+      fallback = plain;
+    }
+  }
+
+  if (fallback) {
+    return truncateText(fallback, length);
+  }
+
+  return excerptOf(clean, length);
+}
+
 /** The first lines of a note's text, without headings or markup, for previews. */
 export function excerptOf(text, length = 220) {
   return (text || '')
-    .replace(/^---[\s\S]*?\n---\n/, '')
+    .replace(/^---[\s\S]*?\n---\s*/, '')
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/^#.*$/gm, '')
     .replace(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (_m, t, a) => a || t)
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/[#>*_`=]/g, '')
+    .replace(/\[(.*?)\]\([^)]*\)/g, (_m, anchor) => {
+      try {
+        return decodeURIComponent(anchor);
+      } catch {
+        return anchor;
+      }
+    })
+    .replace(/[#>*_`=~]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, length);

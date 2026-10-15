@@ -534,7 +534,8 @@ const actions = {
     const src = store.getSource(item.sourceId);
     const writable = library.canWrite(src);
     const archived = isArchived(item.path);
-    const title = card._note?.title || item.name;
+    const rawText = (await store.content.get(item.key))?.text || '';
+    const isInsight = Boolean(card._highlight) || insights.isInsightOrHighlight(item, card._note, rawText);
 
     const menuActions = [];
     if (writable && !card._note?.imported) {
@@ -638,6 +639,7 @@ const actions = {
         toast(err.message);
       }
     };
+    const rawText = (await store.content.get(item.key))?.text || '';
     await openGrowthSheet(title, g, {
       water: async () => card.querySelector('.water-open')?.click(),
       graft: run(async () => {

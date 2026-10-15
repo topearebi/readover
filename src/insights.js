@@ -19,11 +19,14 @@
 //   The thought written when it was saved, if any.
 import * as store from './store.js';
 import * as library from './library.js';
-import { parseFrontmatter, newNotePath, newNoteText } from './notefile.js';
+import { parseFrontmatter, newNotePath, newNoteText, formatGardenNoteBody, extractInsightComponents, addToSection, addRelatedLink } from './notefile.js';
 import { entries } from './notes-index.js';
 import { ANCHOR_RE, extractHighlights } from './markdown.js';
 import { parseImport } from './imports.js';
 import * as dataSync from './sync.js';
+
+export { formatGardenNoteBody, extractInsightComponents, addToSection, addRelatedLink };
+
 
 /* ---------- Where new notes go ---------- */
 
@@ -111,6 +114,27 @@ export function isInbox(text, path) {
   const { meta, body } = parseFrontmatter(text || '');
   if (meta.type || meta.date) return false;
   return body.split(/\r?\n/).some((l) => ANCHOR_RE.test(l));
+}
+
+/**
+ * Does this item qualify for "Make it a note"?
+ * Strictly scoped to insights, highlights, and seed cards with quotes,
+ * rather than appearing on ordinary plain notes.
+ */
+export function isInsightOrHighlight(item, note = null, rawText = '') {
+  if (!item) return false;
+  // Highlight cards or notes containing parsed highlights
+  if (note?.highlights?.length > 0) return true;
+  // Items in highlights folder
+  const folder = String(item.folder || '').toLowerCase();
+  if (folder === 'highlights' || folder.endsWith('/highlights')) return true;
+  // Check text content for inbox or blockquotes
+  const text = String(rawText || note?.body || '');
+  if (isInbox(text, item.path)) return true;
+  if (/<!--\s*readover\s+.*-->/i.test(text)) return true;
+  if (/(?:^|\n)\s*>\s*.+/m.test(text)) return true;
+  if (note?.meta?.source || note?.meta?.book) return true;
+  return false;
 }
 
 const norm = (s) =>

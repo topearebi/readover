@@ -24,6 +24,8 @@ const GLYPHS = {
   pruned: '<circle cx="4.5" cy="11.5" r="2" stroke="currentColor" stroke-width="1.4" fill="none"/><circle cx="11.5" cy="11.5" r="2" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M5.8 10L12 3M10.2 10L4 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
   drop: '<path d="M8 2s4.5 5 4.5 8A4.5 4.5 0 0 1 3.5 10C3.5 7 8 2 8 2z" fill="currentColor"/>',
   graft: '<path d="M6.5 9.5l3-3M7 4.5l1-1a2.5 2.5 0 0 1 3.5 3.5l-1 1M9 11.5l-1 1A2.5 2.5 0 0 1 4.5 9l1-1" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/>',
+  cultivate: '<path d="M8 14V8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M8 9C8 6.5 6.2 5 3.5 5 3.5 7.8 5.2 9 8 9zM8 8.5c0-2.8 2.2-4.2 5-4.2 0 3-2 4.2-5 4.2z" fill="currentColor"/><path d="M3 14c2-.6 4-.6 5-.6s3 0 5 .6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/>',
+  note: '<rect x="3" y="2.5" width="10" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5.5 6h5M5.5 8.5h5M5.5 11h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>',
 };
 export function glyph(name) {
   const ns = 'http://www.w3.org/2000/svg';

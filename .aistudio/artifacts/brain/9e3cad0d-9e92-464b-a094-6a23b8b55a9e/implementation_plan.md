@@ -1,149 +1,184 @@
-# Readover Navigation, Feed Actions & Bidirectional Linking Plan
+# Refined Citation Workflow & Bounded Callout Cards
 
-Detailed implementation plan for resolving feed action menus, fixing direct edit mode, replacing header icons, adding feed-level search, enforcing default bidirectional linking with reciprocal writes, adding a reader Home escape button, and providing a Discard button in editor mode.
+Clean up redundant note-creation buttons, retool the composer to support dynamic "Include citation" filtering against the configured highlights folder, and transform citation blockquotes into bounded, styled evidence cards with full bidirectional graph integrity.
 
----
-
-## User Review & Critical Decisions
+### User Review & Critical Decisions
 
 > [!IMPORTANT]
-> The following core decisions and clarifications have been finalized:
-> - **Default Bidirectional Linking**: When creating a link via Graft or the link picker, Readover will automatically write reciprocal links into both markdown files by default (inserting `[[link]]` under `## Related` in the destination note), ensuring complete two-way navigability in any Markdown tool.
-> - **Search from Feed**: A dedicated Search button (`icon('search')`) will be added to the topbar header next to the scope chip. Clicking it (or pressing `/`) opens a fast, full-text search sheet querying `notes-index.js` that allows jumping straight into any note.
-> - **Header & Rail Icon De-duplication**:
->   - The header button for creating notes will change from a pen icon to a clear `+` icon (`icon('plus')`).
->   - The redundant pen icon will be removed from the feed card rail, leaving the rail clean and distinct: `[Star] [⋯ Actions] [Hide] [Open]`.
-> - **Direct Edit Mode Fix**: Fixed the callback sequencing in `reader.js` so that choosing "Edit note" immediately activates the full textarea editor with pre-focused input.
-> - **Rename or Move in Card Menu**: Restored the missing "Rename or move" action in the feed card `⋯` menu, linking directly into the interactive renaming and link re-indexing pipeline.
-> - **Home Escape Button in Reader**: A Home button (`icon('home')`) will sit adjacent to the Back button in the reader header, allowing users nested 10+ layers deep in link rabbit holes to escape back to the feed in a single tap.
-> - **Discard Button in Editor**: A "Discard" button will appear alongside "Save" during note editing to let users safely abandon accidental edits without applying changes.
+> The following architectural decisions were confirmed with the user in Phase 1:
+> - **Citation Card Styling**: Rendered as a **bounded card with quotation accent, source badge, and direct link**, providing distinct visual separation between the writer's argument and cited evidence.
+> - **Folder Indexing**: Citation search dynamically filters notes from the **user's configured Highlights folder** (from Settings), eliminating clutter from unsorted or general garden notes.
+> - **Insertion Syntax**: The composer will insert clean **Obsidian citation callouts with wiki links** (`> [!quote] [[Source Note Title]]\n> "Quoted text..."\n> — Attribution`), preserving seamless interop and markdown portability.
+
+- **Confirmed Decision 1 (Cleanup)**: Remove the redundant "Make it a note" action from feed card actions, note reader action bars, and growth sheets.
+- **Confirmed Decision 2 (Graph Integrity)**: Citation callouts retain standard wiki link syntax (`[[Source Note]]`), ensuring `src/notes-index.js` automatically indexes outbound links and registers this document in the source note's "Referenced By" section.
+- **Confirmed Decision 3 (Naming)**: Rename the composer tool from "Include insights" to **"Include citation"**.
 
 ---
 
 ## 1. Overview & Core Concept
 
-Readover is an offline-first personal reading feed and digital garden for personal knowledge management (PKM). This update addresses key ergonomics, navigation, and editing workflows:
+Readover's note creation and clipping features already provide streamlined pathways to capture thoughts and grow notes. Having a separate "Make it a note" button created clutter and visual overlap across cards, reader action bars, and growth menus.
 
-1. **Seamless Editing & Maintenance**:
-   - Choosing "Edit note" in the feed card `⋯` menu immediately places the user into the Markdown editing interface.
-   - The editor provides both a primary **Save** button and a quiet **Discard** button to cleanly abandon unwanted changes.
-   - Feed cards provide complete garden lifecycle controls: Edit, Graft, Rename/Move, Prune (Archive), Share, and Delete.
-2. **Effortless Discovery & Navigation**:
-   - Quick Search icon in the feed header unlocks instant full-text retrieval across titles and note bodies without leaving the feed.
-   - Home escape button in the reader allows returning to the feed root from any link depth.
-3. **True Two-Way Bidirectional Connections**:
-   - Creating a link between Note A and Note B automatically adds reciprocal `[[wiki links]]` in both files under `## Related`, keeping links transparent, human-readable, and platform-agnostic.
-   - Reader connection cards display rich snippets, source libraries, and `⇄ Mutual link` status indicators.
+This refactor:
+1. **Prunes UI Clutter**: Removes all instances of the standalone "Make note" / "Make it a note" button.
+2. **Elevates the Citation Workflow**: Renames and upgrades the composer tool to **"Include citation"**, backed by dynamic indexing that pulls highlights and quotes strictly from the folder currently configured in Settings (`store.getPrefs().highlightsFolder`, defaulting to `Highlights`).
+3. **Card-Based Citation Rendering**: Replaces raw text blockquotes with **bounded evidence cards** in the reader. When markdown contains citation callouts (`> [!quote] [[...]]` or `> [!cite] [[...]]`), it transforms them into distinguished editorial cards featuring a quotation accent icon, prominent source title badge, styled passage excerpt, and a direct navigation link to the cited note.
+4. **Guaranteed Graph Integrity**: Because the citation embeds a standard `[[Source]]` wiki link, Readover's set-theoretic graph engine automatically registers the citation as an outbound reference, populating the source note's "Referenced By" list and preserving bidirectional navigation.
 
 ---
 
 ## 2. User Experience & Visual Design
 
-### Design Tokens & Layout Consistency
-- Paper canvas: `--paper: #e8ebe3` (dark: `--paper: #141816`).
-- Ink & Accent: `--accent: #2e5b4f`, `--ink: #1f2623` (dark: `#e3e8e5`).
-- Typography: Literata serif for reading; system sans for controls, inputs, and button labels.
-- Zero-pill discipline: Clean unboxed metadata with dot separators (`Essays · 3 backlinks · ⇄ Mutual link`).
+### Key User Flows
 
-### UI Component Updates
+1. **Configuring Highlights Folder**:
+   - The user opens Settings and sets the Highlights folder (e.g., `Readwise`, `Books/Quotes`, or `Citations`).
+   - Readover stores this preference dynamically.
 
-#### 1. Header Topbar (`index.html`)
-- **Brand**: `Readover`
-- **Scope Chip**: `Everything ▼`
-- **Search Button**: `<button id="search-btn" class="icon-btn" title="Search notes (/)">` with SVG search icon.
-- **New Note Button**: Changed icon from `pen` to `+` (`icon('plus')`), title "New note (+ or N)".
-- **Settings**: Gear icon.
+2. **Inserting a Citation in the Composer**:
+   - While composing a note, the user taps the **“ Include citation** button in the composer toolbar.
+   - An intelligent picker sheet opens, querying only notes located within the configured highlights folder.
+   - The user searches or selects an excerpt.
+   - Tapping **Insert** inserts an Obsidian citation callout block at the cursor:
+     ```markdown
+     > [!quote] [[Atomic Habits|Atomic Habits]]
+     > Small 1% improvements compound into remarkable results over time.
+     > — James Clear
+     ```
+   - The source note is tracked for reciprocal graph synchronization on save.
 
-#### 2. Feed Card Rail (`src/ui/card.js`)
-- Monochromatic, reels-style circular buttons along the right edge:
-  - `Star` (Favourite / `S`)
-  - `⋯` (Note actions: Edit, Graft, Rename/Move, Prune, Share, Delete)
-  - `Hide` (Hide from feed / `X`)
-  - `Open` (Open note reader / `Enter`)
+3. **Reading & Reviewing Bounded Citation Cards**:
+   - When viewing the note in the reader, the raw blockquote is rendered as a clean, bounded card:
+     ```
+     ┌────────────────────────────────────────────────────────┐
+     │ “ CITED EVIDENCE                [[ Atomic Habits ]] ↗  │
+     ├────────────────────────────────────────────────────────┤
+     │ Small 1% improvements compound into remarkable results │
+     │ over time.                                             │
+     │                                                        │
+     │ — James Clear                                          │
+     └────────────────────────────────────────────────────────┘
+     ```
+   - Clicking the title badge or link navigates straight to `Atomic Habits`.
+   - The reader's connection footer displays `Atomic Habits` under **"Referenced in Text"** (or **"Related Notes"** if mutual), and `Atomic Habits` displays this note under **"Referenced By"**.
 
-#### 3. Note Reader Header (`src/ui/reader.js`)
-- Left side controls:
-  - `Back` arrow (`icon('back')`) — steps back one navigation level.
-  - `Home` icon (`icon('home')`) — immediately closes all reader layers and returns to the feed.
-- Center: Note title and auto-save status.
-- Right side controls:
-  - `Star` button.
-  - `[[ ]]` link insertion button (visible only during edit).
-  - `Discard` button (visible only during edit, quiet style).
-  - `Edit` / `Save` button (primary style when editing).
-  - `⋯` More menu.
+### Visual Styling & Typographic Hierarchy
 
-#### 4. Feed Search Modal (`src/ui/search-sheet.js` / `src/app.js`)
-- Full-screen or tall sheet with immediate autofocus on search input.
-- Real-time search as you type, querying `notes-index.js`.
-- Result cards show: Note title, folder/type breadcrumb, and excerpt with matched keyword context.
-- Tapping any result opens the note directly.
+- **Bounded Container**: Subtle hairline border (`1px solid color-mix(in srgb, var(--line) 75%, transparent)`), rounded corners (`border-radius: 8px`), and a whisper surface tint (`color-mix(in srgb, var(--muted) 4%, transparent)`).
+- **Header Strip**: Distinct uppercase kicker (`CITED EVIDENCE` or quotation glyph `“`) paired with a clickable source badge displaying the book or note title and an arrow indicator (`↗`).
+- **Quote Body**: Clean editorial typography (refined serif or legible italic with relaxed leading), visually set apart from the author's primary argument.
+- **Attribution**: Subtle muted attribution line (`— Author`).
 
 ---
 
-## 3. Key Technical Decisions & Architecture
+## 3. Key Product Decisions & Trade-Offs
 
-### System Flow Diagram
+- **Decision 1: Removal of "Make it a note" Button**
+  - *Chosen Approach*: Clean up the standalone button from cards, reader headers, and growth sheets.
+  - *Why*: Existing clipping, quick-capture, and garden cultivation actions already cover note creation without cluttering reading surfaces.
+  - *Alternatives Considered*: Keeping it hidden behind a sub-menu was rejected to avoid code bloat.
+
+- **Decision 2: Dynamic Highlights Folder Resolution**
+  - *Chosen Approach*: Call `highlightsFolder()` from `src/insights.js` on every search rather than hardcoding `'Highlights'`. Filter by `item.folder === hlFolder || item.folder?.startsWith(hlFolder + '/')`.
+  - *Why*: Allows users to rename their highlights folder at any time without breaking the citation picker.
+  - *Alternatives Considered*: Requiring a manual tag filter was rejected as too tedious for users.
+
+- **Decision 3: Markdown Callout Extension vs. Raw HTML**
+  - *Chosen Approach*: Store citations as standard Obsidian markdown callouts (`> [!quote] [[Title]]\n> Text`) and render them as cards in the markdown pipeline and reader DOM.
+  - *Why*: Preserves 100% plain-text portability and Obsidian compatibility while delivering a rich card interface in Readover.
+
+---
+
+## 4. Technical Architecture & Data Strategy
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      Readover Application                       │
-├───────────────────────────────┬─────────────────────────────────┤
-│          Feed View            │           Reader View           │
-│ ┌───────────────────────────┐ │ ┌─────────────────────────────┐ │
-│ │ Topbar Header:            │ │ │ Topbar Bar:                 │ │
-│ │  ├─ Brand ("Readover")    │ │ │  ├─ Back (1 level)          │ │
-│ │  ├─ Scope ("Everything")  │ │ │  ├─ Home (Escape to Feed)   │ │
-│ │  ├─ Search ([/] button)   │ │ │  ├─ Title & Status          │ │
-│ │  ├─ New Note ('+' button) │ │ │  ├─ Discard (when editing)  │ │
-│ │  └─ Settings (Gear)       │ │ │  ├─ Save/Edit button        │ │
-│ ├───────────────────────────┤ │ │  └─ More (⋯) Menu           │ │
-│ │ Card Rail:                │ │ ├─────────────────────────────┤ │
-│ │  ├─ Star                  │ │ │ Markdown Prose or Textarea  │ │
-│ │  ├─ Note Actions (⋯)      │ │ ├─────────────────────────────┤ │
-│ │  │   ├─ Edit note (fixed) │ │ │ Connections & Links Section:│ │
-│ │  │   ├─ Graft (reciprocal)│ │ │  ├─ Outgoing Cards          │ │
-│ │  │   ├─ Rename or move    │ │ │  ├─ Incoming Cards          │ │
-│ │  │   ├─ Prune (Archive)   │ │ │  └─ ⇄ Mutual Indicator      │ │
-│ │  │   ├─ Share             │ │ └──────────────┬──────────────┘ │
-│ │  │   └─ Delete            │ │                │                │
-│ │  ├─ Hide                  │ │                │                │
-│ │  └─ Open                  │ │                │                │
-│ └─────────────┬─────────────┘ │                │                │
-└───────────────┼────────────────────────────────┼────────────────┘
-                ▼                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              Reciprocal Grafting & Linking Engine               │
-│  1. `graftItem(fromItem, toItem)`:                             │
-│     - Writes `[[toItem|Title]]` under `## Related` in `from`    │
-│     - Automatically writes `[[fromItem|Title]]` in `to`         │
-│     - Emits single commit/save for each and clears link cache   │
-│  2. `notes-index.js`: Recomputes graph with mutual connections  │
+│                    Readover Citation System                     │
+│                                                                 │
+│  ┌──────────────────────┐        ┌───────────────────────────┐  │
+│  │   Settings Sheet     │───────►│ Preference:               │  │
+│  │   "Highlights folder"│        │ highlightsFolder          │  │
+│  └──────────────────────┘        └─────────────┬─────────────┘  │
+│                                                │                │
+│                                                ▼                │
+│  ┌──────────────────────┐        ┌───────────────────────────┐  │
+│  │  Composer Toolbar    │───────►│ Citation Picker Modal     │  │
+│  │  "“ Include citation"│        │ Dynamic Folder Filter     │  │
+│  └──────────────────────┘        └─────────────┬─────────────┘  │
+│                                                │ Insert callout │
+│                                                ▼                │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │ Markdown Note Body:                                       │  │
+│  │ > [!quote] [[Source Note|Source Title]]                   │  │
+│  │ > "Passage text..."                                       │  │
+│  └─────────────────────────────┬─────────────────────────────┘  │
+│                                │                                │
+│                ┌───────────────┴───────────────┐                │
+│                ▼                               ▼                │
+│  ┌───────────────────────────┐   ┌───────────────────────────┐  │
+│  │ Markdown Tokenizer / Purify│  │ Notes Index & Graph       │  │
+│  │ Renders Bounded Card DOM  │   │ Detects [[Source Note]]   │  │
+│  │ with direct navigation    │   │ Updates Inbound/Outbound  │  │
+│  └───────────────────────────┘   └───────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+### File Modification Plan
+
+1. **`src/ui/card.js`**:
+   - Remove `makeNote` button and `makeNote` action invocation on seed cards.
+
+2. **`src/ui/reader.js`**:
+   - Remove `makeNoteBtn` from header bar.
+   - Remove `makenote` action from the reader's `moreBtn` action sheet.
+   - Enhance article DOM post-processing: find citation callouts (`blockquote.callout-quote` or blockquotes with `[!quote]`/`[!cite]`) and wrap/enhance them into bounded cards with source link hooks (`data-wikilink` delegation).
+
+3. **`src/ui/growth.js`**:
+   - Remove `on.makeNote` from the growth sheet actions list.
+
+4. **`index.html`**:
+   - Update compose tools: replace `#compose-include-insight` with `#compose-include-citation` (`“ Include citation”).
+
+5. **`src/ui/compose.js`**:
+   - Rename `includeInsightBtn` to `includeCitationBtn`.
+   - Update picker modal title to **"Include citation"**.
+   - Dynamically retrieve `highlightsFolder()` from `../insights.js`. Filter note entries strictly by matching the configured highlights folder.
+   - Format inserted citation as Obsidian callout:
+     ```markdown
+     > [!quote] [[TargetPath|SourceTitle]]
+     > Quoted text...
+     > — Attribution
+     ```
+   - Automatically register target note in reciprocal tracking for graph synchronization upon saving.
+
+6. **`src/markdown.js`**:
+   - Add custom tokenizer/renderer rule for `[!quote]` / `[!cite]` Obsidian callouts, producing `<div class="citation-card" data-wikilink="...">` containing the header, quote body, and attribution.
+
+7. **`src/style.css`**:
+   - Style `.citation-card`: bounded card, clean hairline border, subtle background tint, quotation mark icon, source badge link, and responsive touch layout.
+   - Remove deprecated `.make-note-btn` and `.make-note-seed-btn` CSS rules.
+
 ---
 
-## 4. Implementation Steps
+## 5. Verification & Completed Implementation
 
-1. **SVG Icons**:
-   - Add `#i-home` and `#i-search` symbols to `<svg>` defs in `index.html`.
-2. **Header Markup & Wiring (`index.html`, `src/app.js`)**:
-   - Update `#write-btn` to use `#i-plus`.
-   - Add `#search-btn` with `#i-search`.
-   - Wire `#search-btn` and keyboard shortcut `/` to open the full-text search dialog.
-3. **Feed Rail Cleanup (`src/ui/card.js`)**:
-   - Remove redundant `editBtn` from `rail()`. Keep `[Star] [⋯ Actions] [Hide] [Open]`.
-4. **Feed Card Actions Menu (`src/app.js`)**:
-   - Ensure `actions.cardMenu(card)` includes `move` ("Rename or move").
-   - Fix `actions.editNote(card)` to ensure it reliably starts the reader in textarea edit mode.
-5. **Reader Editing & Navigation (`src/ui/reader.js`)**:
-   - Fix `startInEditor`: trigger edit mode after `editBtn.onclick` handler is defined.
-   - Add `cancelBtn` ("Discard") during `editing = true`. Restores original `text` without saving.
-   - Add `homeBtn` to reader header: closes reader and all stacked overlays.
-6. **Default Reciprocal Linking (`src/app.js`, `src/ui/reader.js`)**:
-   - Update grafting logic: when grafting `A` to `B`, write `[[B|Title]]` to `A` AND write `[[A|Title]]` to `B` under `## Related`.
-7. **Verification**:
-   - Verify syntax via `node --check`.
-   - Verify compilation with `compile_applet`.
-   - Test all user flows end-to-end.
+- [x] **UI Cleanup Complete**: "Make note" / "Make it a note" buttons successfully removed from seed cards (`src/ui/card.js`), reader header action bar and more menu (`src/ui/reader.js`), growth sheets (`src/ui/growth.js`), and card menu handlers (`src/app.js`).
+- [x] **Dynamic Highlights Folder Indexing**:
+  - `src/ui/compose.js` dynamically pulls `highlightsFolder()` from preferences.
+  - Citation picker indexes only notes matching the configured highlights folder path, preventing library bloating.
+  - Search input dynamically indicates the target directory (`Search citations in <folder>...`).
+- [x] **Renamed to "Include citation"**:
+  - `index.html`: `#compose-include-citation` button labeled `“ Include citation…`.
+  - `src/ui/compose.js`: modal sheet titled `Include citation`.
+- [x] **Obsidian Callout Syntax Insertion**:
+  - Inserts standard `> [!quote] [[TargetPath|Title]]\n> Quoted passage\n> — Source`.
+  - Reciprocal link tracked on save for graph synchronization.
+- [x] **Bounded Citation Card Rendering**:
+  - `src/ui/reader.js`: `transformCitationCards()` transforms citation callouts and blockquotes with source links into bounded cards.
+  - Header displays quotation accent (`“`) and `CITED EVIDENCE` kicker with direct clickable source link (`[Title] ↗`).
+  - Styled with distinct typography (`src/style.css`), hairline borders, and subtle background contrast.
+- [x] **Graph Integrity Maintained**:
+  - Standard `[[WikiLinks]]` inside callouts are indexed by `notes-index.js`.
+  - Outbound references and inbound "Referenced By" links are accurately populated.
+- [x] **Compilation & Linting Verified**: Zero build or lint errors (`compile_applet` passed).

@@ -38,16 +38,21 @@ marked.use({
   ],
 });
 
-DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-  if (node.tagName === 'A' && node.getAttribute('href')) {
-    node.setAttribute('target', '_blank');
-    node.setAttribute('rel', 'noopener noreferrer');
-  }
-});
+if (typeof DOMPurify?.addHook === 'function') {
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    if (node.tagName === 'A' && node.getAttribute('href')) {
+      node.setAttribute('target', '_blank');
+      node.setAttribute('rel', 'noopener noreferrer');
+    }
+  });
+}
 
 export function renderMarkdown(md) {
   // Code blocks and tables scroll sideways when wide, so keyboards need to reach them.
-  return DOMPurify.sanitize(marked.parse(md || ''), { FORBID_TAGS: ['style', 'form', 'input'] }).replace(/<(pre|table)>/g, '<$1 tabindex="0">');
+  const raw = marked.parse(md || '');
+  return typeof DOMPurify?.sanitize === 'function'
+    ? DOMPurify.sanitize(raw, { FORBID_TAGS: ['style', 'form', 'input'] }).replace(/<(pre|table)>/g, '<$1 tabindex="0">')
+    : raw.replace(/<(pre|table)>/g, '<$1 tabindex="0">');
 }
 
 /** Frontmatter and body (see notefile.js). Kept here for older imports. */
