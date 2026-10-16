@@ -156,14 +156,14 @@
       </div>
 
       <nav class="settings-tabs" role="tablist" aria-label="Settings categories">
-        <button type="button" class="settings-tab is-active" data-tab="tab-sources" role="tab" aria-selected="true">Sources &amp; Sync</button>
-        <button type="button" class="settings-tab" data-tab="tab-garden" role="tab" aria-selected="false">Garden</button>
-        <button type="button" class="settings-tab" data-tab="tab-reading" role="tab" aria-selected="false">Reading &amp; Export</button>
-        <button type="button" class="settings-tab" data-tab="tab-app" role="tab" aria-selected="false">App &amp; Device</button>
+        <button type="button" class="settings-tab is-active" data-tab="tab-sources" id="tab-btn-sources" role="tab" aria-selected="true" aria-controls="tab-sources" tabindex="0">Sources &amp; Sync</button>
+        <button type="button" class="settings-tab" data-tab="tab-garden" id="tab-btn-garden" role="tab" aria-selected="false" aria-controls="tab-garden" tabindex="-1">Garden</button>
+        <button type="button" class="settings-tab" data-tab="tab-reading" id="tab-btn-reading" role="tab" aria-selected="false" aria-controls="tab-reading" tabindex="-1">Reading &amp; Export</button>
+        <button type="button" class="settings-tab" data-tab="tab-app" id="tab-btn-app" role="tab" aria-selected="false" aria-controls="tab-app" tabindex="-1">App &amp; Device</button>
       </nav>
 
       <!-- Tab 1: Sources & Sync -->
-      <div id="tab-sources" class="settings-tab-panel is-active" role="tabpanel">
+      <div id="tab-sources" class="settings-tab-panel is-active" role="tabpanel" aria-labelledby="tab-btn-sources">
         <section class="settings-group settings-first">
           <h3>Connected Libraries</h3>
           <p class="hint">Your notes, books, and archives mount together across Readover.</p>
@@ -387,7 +387,7 @@
       </div>
 
       <!-- Tab 2: Garden -->
-      <div id="tab-garden" class="settings-tab-panel" role="tabpanel" hidden>
+      <div id="tab-garden" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-btn-garden" hidden>
         <section class="settings-group settings-first" id="notes-group">
           <h3>Note Destinations</h3>
           <p class="hint">Assign clear destination roles to your connected libraries.</p>
@@ -429,7 +429,7 @@
       </div>
 
       <!-- Tab 3: Reading & Export -->
-      <div id="tab-reading" class="settings-tab-panel" role="tabpanel" hidden>
+      <div id="tab-reading" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-btn-reading" hidden>
         <section class="settings-group settings-first">
           <h3>Appearance &amp; Habits</h3>
           <label class="field">Theme
@@ -476,7 +476,7 @@
       </div>
 
       <!-- Tab 4: App & Device -->
-      <div id="tab-app" class="settings-tab-panel" role="tabpanel" hidden>
+      <div id="tab-app" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-btn-app" hidden>
         <section class="settings-group settings-first" id="clip-group">
           <h3>Clip from anywhere</h3>
           <p class="hint">A clip is a quote, where it’s from, and your thought. It’s saved like any new note.</p>
@@ -642,9 +642,6 @@
       <label class="field"><span>Title <span class="field-opt">optional</span></span>
         <input name="title" placeholder="Left empty, the first words are used" />
       </label>
-      <label class="field field-fill">Note
-        <textarea name="body" rows="10" placeholder="Write it the way you'd want to read it again. Markdown works, and a line starting with > becomes a highlight."></textarea>
-      </label>
       <div class="field-pair">
         <label class="field">Save to
           <select name="source" required></select>
@@ -662,6 +659,9 @@
         <label><input type="radio" name="status" value="" checked /><span>In progress</span></label>
         <label><input type="radio" name="status" value="done" /><span>Done</span></label>
       </fieldset>
+      <label class="field field-fill">Note
+        <textarea name="body" rows="10" placeholder="Write it the way you'd want to read it again. Markdown works, and a line starting with > becomes a highlight."></textarea>
+      </label>
       <label class="field"><span>Tags <span class="field-opt">optional</span></span>
         <input name="tags" placeholder="e.g. habits, writing" autocapitalize="off" spellcheck="false" />
       </label>

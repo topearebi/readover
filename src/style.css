@@ -29,6 +29,8 @@
   --paper: #e8ebe3;
   --card: #f7f8f3;
   --ink: #1d2320;
+  --text: var(--ink);
+  --text-muted: var(--muted);
   --muted: #4b5650;
   --faint: #5f6a62; /* text on paper and cards: 4.5:1 or more */
   --line: #d3d8cf;
@@ -58,6 +60,8 @@
     --paper: #141816;
     --card: #1c221f;
     --ink: #e3e7df;
+    --text: var(--ink);
+    --text-muted: var(--muted);
     --muted: #aab4ad;
     --faint: #8a948c;
     --line: #2c3430;
@@ -79,6 +83,8 @@
   --paper: #141816;
   --card: #1c221f;
   --ink: #e3e7df;
+  --text: var(--ink);
+  --text-muted: var(--muted);
   --muted: #aab4ad;
   --faint: #8a948c;
   --line: #2c3430;
@@ -197,11 +203,12 @@ a {
   gap: 4px;
   max-width: 46vw;
   min-width: 0;
+  min-height: 44px;
   flex-shrink: 1;
   border: 1px solid var(--line);
   background: var(--card);
   border-radius: 999px;
-  padding: 6px 10px 6px 14px;
+  padding: 6px 12px 6px 14px;
   font-size: 0.875rem;
   color: var(--muted);
 }
@@ -795,6 +802,10 @@ details.field[open] summary {
   .sheet {
     margin: auto;
     border-radius: 14px;
+    overflow: hidden;
+  }
+  .sheet-inner {
+    padding-bottom: 24px;
   }
 }
 .sheet-tall {
@@ -814,11 +825,11 @@ details.field[open] summary {
   justify-content: space-between;
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 10;
   background: var(--card);
   /* Sticky at the very top, so nothing shows above it while scrolling. */
-  padding: 16px 0 8px;
-  margin: 0 -10px -8px 0;
+  padding: 16px 0 12px;
+  margin: 0;
 }
 .sheet h2 {
   font-family: var(--serif);
@@ -841,12 +852,15 @@ details.field[open] summary {
   color: var(--faint);
 }
 .field.field-fill {
-  flex: 1;
-  min-height: 0;
+  flex: 1 0 auto;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
 }
 .field.field-fill textarea {
   flex: 1;
-  min-height: 120px; /* grows into spare room; shrinks so Save stays on screen */
+  min-height: 180px; /* grows into spare room; comfortable visible height */
+  resize: vertical;
 }
 
 .seg {
@@ -1524,6 +1538,8 @@ details.field[open] summary {
   color: var(--faint);
   font-size: 0.75rem;
   font-weight: 600;
+  min-height: 44px;
+  min-width: 44px;
 }
 .tab .i {
   width: 22px;
@@ -2213,25 +2229,33 @@ details.how li + li {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   margin-top: -6px;
 }
+.compose-tools .btn,
 .compose-paste,
 .compose-include-insight,
 .compose-include-citation,
-.compose-link-note {
+.compose-link-note,
+.compose-attach-image {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
+  gap: 5px;
+  padding: 6px 10px;
+  font-size: 0.8125rem;
+  font-weight: 500;
   color: var(--ink);
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 8px;
+  white-space: nowrap;
 }
+.compose-tools .btn:hover,
+.compose-paste:hover,
 .compose-include-insight:hover,
 .compose-include-citation:hover,
-.compose-link-note:hover {
+.compose-link-note:hover,
+.compose-attach-image:hover {
   background: var(--card);
 }
 .insight-picker {
@@ -2525,13 +2549,17 @@ details.how li + li {
   position: sticky;
   bottom: 0;
   background: var(--card);
-  padding: 12px 0 calc(12px + var(--bottom));
+  padding: 12px 20px calc(12px + var(--bottom));
   margin: auto -20px calc(-24px - var(--bottom));
-  padding-left: 20px;
-  padding-right: 20px;
   border-top: 1px solid var(--line);
   z-index: 10;
   display: flex;
+}
+@media (min-width: 640px) {
+  .compose-submit-bar {
+    padding: 16px 20px 20px;
+    margin: auto -20px -24px;
+  }
 }
 .compose-submit-bar .btn-save-note {
   width: 100%;
@@ -3036,6 +3064,7 @@ details > summary {
 /* ---------- Settings 4-Tab Workstation ---------- */
 .settings-tabs {
   display: flex;
+  align-items: center;
   gap: 4px;
   padding: 4px;
   background: color-mix(in srgb, var(--paper) 80%, var(--line));
@@ -3043,35 +3072,53 @@ details > summary {
   border: 1px solid var(--line);
   margin-bottom: 20px;
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: none;
+  height: auto;
+  min-height: 44px;
+  box-sizing: border-box;
 }
 .settings-tabs::-webkit-scrollbar {
   display: none;
 }
 .settings-tab {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: max-content;
-  padding: 8px 12px;
+  height: auto;
+  min-height: 36px;
+  padding: 8px 14px;
   border: 0;
-  background: none;
+  background: transparent;
   border-radius: 7px;
   font-family: inherit;
   font-size: 0.8125rem;
   font-weight: 500;
-  color: var(--muted);
+  color: var(--text);
   cursor: pointer;
   text-align: center;
   transition: all 0.15s ease;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: normal;
+  overflow: visible;
+  visibility: visible;
+  opacity: 1;
 }
 .settings-tab:hover {
-  color: var(--ink);
+  color: var(--text);
+  background: color-mix(in srgb, var(--card) 45%, transparent);
 }
 .settings-tab.is-active {
   background: var(--card);
-  color: var(--ink);
+  color: var(--text);
   font-weight: 600;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14);
+}
+.settings-tab:focus-visible {
+  outline: 2px solid var(--action);
+  outline-offset: 1px;
 }
 .settings-tab-panel {
   display: flex;

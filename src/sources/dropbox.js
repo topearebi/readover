@@ -214,7 +214,9 @@ function base64url(buffer) {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-export async function createPKCEAuthUrl(clientId, redirectUri) {
+export async function createPKCEAuthUrl(clientId = '9c0wff8143gq9i0', redirectUri = '') {
+  const resolvedClientId = clientId || '9c0wff8143gq9i0';
+  const resolvedRedirectUri = redirectUri || (typeof location !== 'undefined' ? `${location.origin}/auth/callback` : '');
   const verifier = generateRandomString(64);
   sessionStorage.setItem('readover_dropbox_verifier', verifier);
 
@@ -222,11 +224,11 @@ export async function createPKCEAuthUrl(clientId, redirectUri) {
   const challenge = base64url(hashed);
 
   const params = new URLSearchParams({
-    client_id: clientId,
+    client_id: resolvedClientId,
     response_type: 'code',
     code_challenge: challenge,
     code_challenge_method: 'S256',
-    redirect_uri: redirectUri,
+    redirect_uri: resolvedRedirectUri,
     token_access_type: 'offline',
   });
 
@@ -236,13 +238,15 @@ export async function createPKCEAuthUrl(clientId, redirectUri) {
   };
 }
 
-export async function exchangePKCECode(code, clientId, redirectUri) {
+export async function exchangePKCECode(code, clientId = '9c0wff8143gq9i0', redirectUri = '') {
+  const resolvedClientId = clientId || '9c0wff8143gq9i0';
+  const resolvedRedirectUri = redirectUri || (typeof location !== 'undefined' ? `${location.origin}/auth/callback` : '');
   const verifier = sessionStorage.getItem('readover_dropbox_verifier') || '';
   const params = new URLSearchParams({
     code,
     grant_type: 'authorization_code',
-    client_id: clientId,
-    redirect_uri: redirectUri,
+    client_id: resolvedClientId,
+    redirect_uri: resolvedRedirectUri,
     code_verifier: verifier,
   });
 

@@ -501,6 +501,6 @@ export function openOpdsBrowser(app, options = {}) {
   }
   loadUrl(activeCatalog.url, activeCatalog.name);
   if (options.openAdd) {
-    setTimeout(() => showAddCatalogSheet(), 100);
+    setTimeout(() => openAddCatalogModal(), 100);
   }
 }

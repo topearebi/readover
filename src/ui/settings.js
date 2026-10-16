@@ -35,22 +35,39 @@ export function initSettings(app) {
   const tokenInput = $('token-input');
 
   /* ---- Tab Navigation ---- */
-  const tabButtons = sheet.querySelectorAll('.settings-tab');
-  const tabPanels = sheet.querySelectorAll('.settings-tab-panel');
+  const tabButtons = Array.from(sheet.querySelectorAll('.settings-tab'));
+  const tabPanels = Array.from(sheet.querySelectorAll('.settings-tab-panel'));
 
-  tabButtons.forEach((btn) => {
-    btn.onclick = () => {
-      const targetId = btn.dataset.tab;
-      tabButtons.forEach((b) => {
-        const active = b === btn;
-        b.classList.toggle('is-active', active);
-        b.setAttribute('aria-selected', active ? 'true' : 'false');
-      });
-      tabPanels.forEach((p) => {
-        const active = p.id === targetId;
-        p.hidden = !active;
-        p.classList.toggle('is-active', active);
-      });
+  function switchTab(targetId) {
+    const valid = tabPanels.some((p) => p.id === targetId);
+    const resolvedId = valid ? targetId : 'tab-sources';
+    tabButtons.forEach((b) => {
+      const active = b.dataset.tab === resolvedId;
+      b.classList.toggle('is-active', active);
+      b.setAttribute('aria-selected', active ? 'true' : 'false');
+      b.setAttribute('tabindex', active ? '0' : '-1');
+    });
+    tabPanels.forEach((p) => {
+      const active = p.id === resolvedId;
+      p.hidden = !active;
+      p.classList.toggle('is-active', active);
+    });
+  }
+
+  tabButtons.forEach((btn, idx) => {
+    btn.onclick = () => switchTab(btn.dataset.tab);
+    btn.onkeydown = (e) => {
+      let nextIdx = -1;
+      if (e.key === 'ArrowRight') nextIdx = (idx + 1) % tabButtons.length;
+      else if (e.key === 'ArrowLeft') nextIdx = (idx - 1 + tabButtons.length) % tabButtons.length;
+      else if (e.key === 'Home') nextIdx = 0;
+      else if (e.key === 'End') nextIdx = tabButtons.length - 1;
+      if (nextIdx >= 0) {
+        e.preventDefault();
+        const nextBtn = tabButtons[nextIdx];
+        switchTab(nextBtn.dataset.tab);
+        nextBtn.focus();
+      }
     };
   });
 
@@ -748,7 +765,8 @@ export function initSettings(app) {
   $('clip-shortcut-url').textContent = `${new URL('./', location.href).href}#clip?text=…&url=…`;
 
   return {
-    async open() {
+    async open(initialTab = 'tab-sources') {
+      switchTab(initialTab);
       const prefs = store.getPrefs();
       tokenInput.value = store.getToken();
       renderToken();
@@ -767,6 +785,7 @@ export function initSettings(app) {
       if (!store.getSources().length) showForm();
       await done;
     },
+    switchTab,
     refresh: renderSources,
   };
 }

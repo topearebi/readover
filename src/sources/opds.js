@@ -60,9 +60,17 @@ export function proxyUrl(targetUrl, catalog = null) {
 export async function opdsFetch(url, catalog, options = {}) {
   const headers = buildHeaders(catalog, options.headers || {});
   const fetchOpts = { ...options, headers };
+  const isLocal = typeof location !== 'undefined' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
 
   // If catalog is explicitly configured to use proxy, use proxy immediately
   if (catalog?.useProxy) {
+    if (!isLocal) {
+      try {
+        return await fetch(url, fetchOpts);
+      } catch {
+        throw new Error('CORS blocked. Remote OPDS servers require CORS headers on hosted deployments.');
+      }
+    }
     const pUrl = proxyUrl(url);
     return fetch(pUrl, fetchOpts);
   }
@@ -74,7 +82,10 @@ export async function opdsFetch(url, catalog, options = {}) {
     }
     return res;
   } catch (err) {
-    // Fallback to proxy
+    if (!isLocal) {
+      throw new Error(`Direct connection to catalog failed (${err.message}). On hosted static deployments, OPDS servers must allow CORS.`);
+    }
+    // Fallback to proxy on localhost
     const pUrl = proxyUrl(url);
     return fetch(pUrl, fetchOpts);
   }

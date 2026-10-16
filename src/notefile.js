@@ -100,7 +100,14 @@ function scalar(v) {
     const end = v.lastIndexOf("'");
     return v.slice(1, end > 0 ? end : undefined).replace(/''/g, "'");
   }
-  return v.replace(/\s+#.*$/, '').trim(); // a trailing comment
+  const clean = v.replace(/\s+#.*$/, '').trim(); // a trailing comment
+  if (/^-?\d+$/.test(clean) || /^-?\d+\.\d+$/.test(clean)) {
+    const num = Number(clean);
+    if (!Number.isNaN(num)) return num;
+  }
+  if (clean === 'true') return true;
+  if (clean === 'false') return false;
+  return clean;
 }
 
 function splitInline(s) {
