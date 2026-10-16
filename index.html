@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="referrer" content="no-referrer" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>Readover</title>
   <meta name="description" content="Your notes, highlights and books as a full-screen reading feed." />
   <meta property="og:title" content="Readover" />
   <meta property="og:description" content="Your notes, highlights and books as a full-screen reading feed." />
-  <meta name="theme-color" content="#e8ebe3" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" id="theme-color-meta" content="#e8ebe3" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#141816" media="(prefers-color-scheme: dark)" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="mobile-web-app-capable" content="yes" />
@@ -28,6 +28,11 @@
   </script>
 </head>
 <body>
+  <noscript>
+    <div style="background:#fef3c7;color:#92400e;padding:14px 20px;text-align:center;font-family:system-ui,-apple-system,sans-serif;font-size:14px;border-bottom:1px solid #fde68a;">
+      Readover is designed for modern browsers (Chrome, Safari, Firefox, Edge). JavaScript must be enabled to read and save notes.
+    </div>
+  </noscript>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <defs>
       <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.2l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17.2l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></symbol>
@@ -50,26 +55,27 @@
       <symbol id="i-cultivate" viewBox="0 0 24 24"><path d="M12 21v-8M12 13c0-3.5-2.5-5.5-6-5.5 0 4 2.5 5.5 6 5.5zM12 13c0-4 3-6.5 7-6.5 0 4.5-3 6.5-7 6.5zM5 21c2.5-.8 5-.8 7-.8s4.5 0 7 .8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
       <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" fill="none" stroke-width="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><polyline points="21 15 16 10 5 21" stroke="currentColor" fill="none" stroke-width="2"/></symbol>
       <symbol id="i-opds" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke="currentColor" fill="none" stroke-width="2"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" stroke="currentColor" fill="none" stroke-width="2"/><circle cx="12" cy="10" r="3" stroke="currentColor" fill="none" stroke-width="2"/><path d="M12 3v3M12 14v4" stroke="currentColor" stroke-width="2"/></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
     </defs>
 
   </svg>
 
-  <header class="topbar">
-    <button id="brand" class="brand" title="Shuffle again (R)">Readover</button>
+  <header class="topbar" role="banner">
+    <button id="brand" class="brand" title="Shuffle again (R)" aria-label="Readover, shuffle feed (R)">Readover</button>
     <div class="topbar-actions">
-      <button id="sync-dot" class="sync-dot" hidden data-state="idle"><span></span></button>
-      <button id="scope-btn" class="scope-chip" aria-haspopup="dialog">
+      <button id="sync-dot" class="sync-dot" hidden data-state="idle" aria-label="Sync status"><span></span></button>
+      <button id="scope-btn" class="scope-chip" aria-haspopup="dialog" aria-label="Filter reading feed">
         <span id="scope-label">Everything</span>
-        <svg class="i i-sm"><use href="#i-down"/></svg>
+        <svg class="i i-sm" aria-hidden="true"><use href="#i-down"/></svg>
       </button>
-      <button id="search-btn" class="icon-btn" title="Search notes (/)">
-        <svg class="i"><use href="#i-search"/></svg><span class="sr">Search</span>
+      <button id="search-btn" class="icon-btn" title="Search notes (/)" aria-label="Search all notes (/)">
+        <svg class="i" aria-hidden="true"><use href="#i-search"/></svg><span class="sr">Search</span>
       </button>
-      <button id="write-btn" class="icon-btn" title="New note (+ or N)">
-        <svg class="i"><use href="#i-plus"/></svg><span class="sr">New note</span>
+      <button id="write-btn" class="icon-btn" title="New note (+ or N)" aria-label="Write a new note (+ or N)">
+        <svg class="i" aria-hidden="true"><use href="#i-plus"/></svg><span class="sr">New note</span>
       </button>
-      <button id="settings-btn" class="icon-btn" title="Settings">
-        <svg class="i"><use href="#i-gear"/></svg><span class="sr">Settings</span>
+      <button id="settings-btn" class="icon-btn" title="Settings" aria-label="Open settings">
+        <svg class="i" aria-hidden="true"><use href="#i-gear"/></svg><span class="sr">Settings</span>
       </button>
     </div>
   </header>
@@ -493,6 +499,14 @@
           </div>
         </section>
 
+        <section class="settings-group" id="diagnostics-group">
+          <h3>Diagnostics &amp; System Health</h3>
+          <p class="hint">Run live verification of storage integrity, OPDS feeds, touch accessibility, multi-tab sync, and runtime stress.</p>
+          <div class="row-actions">
+            <button id="run-diagnostics-btn" type="button" class="btn btn-primary">Run System Diagnostics</button>
+          </div>
+        </section>
+
         <section class="settings-group keys">
           <h3>Keyboard</h3>
           <dl>
@@ -504,10 +518,38 @@
             <dt>N</dt><dd>New note</dd>
             <dt>Ctrl Enter</dt><dd>Save the new note</dd>
             <dt>/</dt><dd>Search notes</dd>
+            <dt>Ctrl Shift U</dt><dd>System diagnostics</dd>
             <dt>Esc</dt><dd>Close</dd>
           </dl>
         </section>
         <p class="hint version">Readover <span id="app-version"></span></p>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- In-App System Diagnostics & Runtime Stress Sheet -->
+  <dialog id="diagnostics-sheet" class="sheet sheet-tall diagnostics-sheet" aria-labelledby="diagnostics-title">
+    <div class="sheet-inner diagnostics-inner">
+      <div class="sheet-head">
+        <h2 id="diagnostics-title">System Diagnostics</h2>
+        <button id="diagnostics-close" class="icon-btn" type="button" aria-label="Close diagnostics"><svg class="i"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="diagnostics-toolbar">
+        <div class="seg diagnostics-tab-seg" role="tablist" aria-label="Diagnostic categories">
+          <button type="button" class="seg-btn is-active" id="diag-tab-core" role="tab" aria-selected="true">Core &amp; Specs</button>
+          <button type="button" class="seg-btn" id="diag-tab-stress" role="tab" aria-selected="false">Runtime &amp; Stress</button>
+        </div>
+        <div class="diagnostics-actions">
+          <button type="button" id="diag-run-all" class="btn btn-sm btn-primary">▶ Run Tests</button>
+          <button type="button" id="diag-export-report" class="btn btn-sm btn-quiet">📋 Export Report</button>
+        </div>
+      </div>
+      <div id="diagnostics-status-bar" class="diagnostics-status-bar">
+        <span id="diagnostics-summary-badge" class="badge">Ready to run</span>
+        <span id="diagnostics-time" class="hint"></span>
+      </div>
+      <div id="diagnostics-results-container" class="diagnostics-results-container" role="region" aria-live="polite">
+        <!-- Live diagnostic test results rendered here -->
       </div>
     </div>
   </dialog>

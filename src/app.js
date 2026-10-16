@@ -1139,6 +1139,11 @@ async function reloadIfOpen() {
 /* ---------------- Input ---------------- */
 
 window.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'u') {
+    e.preventDefault();
+    import('./ui/diagnostics.js').then((m) => m.openDiagnostics(app));
+    return;
+  }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.target.closest?.('input, textarea, select, [contenteditable]')) return;
   if (e.key === 'Escape') {
@@ -1344,6 +1349,12 @@ async function boot() {
   // The garden's clock: when each note last changed (in the background, cached).
   clock.fill().catch(() => {});
   navigator.storage?.persist?.().catch(() => {});
+  dataSync.onBroadcastMessage((msg) => {
+    if (msg.type === 'note-updated' || msg.type === 'sources-changed') {
+      if (app.view === 'notes') notesView.render();
+      if (app.view === 'shelf') shelf.render();
+    }
+  });
 }
 
 

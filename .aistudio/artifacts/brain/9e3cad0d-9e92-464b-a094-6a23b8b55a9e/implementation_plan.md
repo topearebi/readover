@@ -1,156 +1,171 @@
-# Implementation Plan: OPDS Catalog Integration, Deep-Linked Highlights, Agnostic Attachments & Export Suite (Revised)
+# End-to-End Test Suite, Runtime Stress Testing & Cross-Device Engineering (Revised)
 
-This plan details the architecture and implementation for four major capabilities in Readover:
-1. **OPDS Catalog Integration ("Browse Remote, Stash Local")** in Shelves with robust relative URL normalization and smart book acquisition.
-2. **PDF & Book Highlights Deep-Linking & Provenance** with deterministic locator contracts and pre-flight missing-book recovery.
-3. **Storage-Agnostic Image & Attachment Architecture** with client-side canvas WebP compression, unified composer (`compose.js`) and reader (`reader.js`) paste/drop support, unified destination routing, and dynamic Markdown rendering.
-4. **Export & Sharing Suite** with dual-format rich clipboard copy, native OS sharing, and ink-friendly `@media print` vector CSS.
+A production-grade diagnostic framework, runtime stress testing suite, WCAG 2.1 AA accessibility hardening, mobile keyboard/100dvh viewport optimization, and multi-platform storage resilience system for Readover across phones, tablets, e-ink devices, and desktop workstations.
 
 ---
 
-## User Review & Architecture Alignment
+### User Review & Critical Decisions
 
-> [!NOTE]
-> Key Architectural Rules:
-> - **OPDS Relative URL Resolution:** All extracted `href` attributes in `src/sources/opds.js` (feed links, covers, icons, acquisition binaries, facets, and search templates) are strictly normalized against the current feed URL via `new URL(href, currentFeedUrl).href`.
-> - **Unified Image Drop/Paste Support:** Image paste and drag-and-drop listeners are integrated into both the **Unified Note Composer** (`src/ui/compose.js`) and the **Note Reader/Editor** (`src/ui/reader.js`).
-> - **OPDS Catalog Placement:** In **Shelves** as a dedicated "Catalogs" section with live search and feed traversal.
-> - **Book Acquisition Flow:** Acquires directly to the configured books destination (`acquiredBooksHome`), with an inline override toggle to stash locally to "This Device".
-> - **Attachment Links:** Always formatted as clean, portable relative Markdown paths (e.g. `![](attachments/2026-10-15-slug-a1b2.webp)`), dynamically resolved by the Readover Markdown renderer from IndexedDB cache or active cloud storage (R2/S3, Dropbox, WebDAV, GitHub, or Local).
-
----
-
-## Proposed Changes
-
-### 1. OPDS Catalog Integration: "Browse Remote, Stash Local"
-- **New Module `src/sources/opds.js`**:
-  - Supports OPDS 1.2 (Atom XML / Dublin Core) and OPDS 2.0 (JSON Navigation & Acquisition feeds).
-  - Robust XML DOM parser for Atom entry elements (`<entry>`, `<link rel="http://opds-spec.org/acquisition" ...>`, `<link rel="http://opds-spec.org/image" ...>`, `<link rel="subsection" ...>`, `<link rel="search" ...>`).
-  - **Full Relative URL Normalization**:
-    ```javascript
-    function resolveUrl(href, baseUrl) {
-      if (!href) return null;
-      try {
-        return new URL(href, baseUrl).href;
-      } catch {
-        return href;
-      }
-    }
-    ```
-    Applied to all cover images, thumbnails, subsection feed links, acquisition downloads, and OpenSearch template descriptors.
-  - Extract metadata: Title, Authors, Summary, Publication Date, Categories, Covers, and EPUB/PDF acquisition links.
-  - **CORS & Auth Handling**:
-    - Direct-first `fetch(url, { headers })` for CORS-enabled Calibre-Web, Kavita, Komga, or reverse proxy setups.
-    - User-configurable **CORS Proxy URL** in Settings (Tab 1: Sources & Sync) for static deployments or strict remote instances.
-    - HTTP Basic Auth / Bearer token support per catalog.
-- **Store & Settings Additions**:
-  - `store.js`: Add `catalogs` collection in local storage / IndexedDB (`id`, `name`, `url`, `authType`, `username`, `password`, `corsProxy`).
-  - `settings.js`: Catalog manager (Add Catalog, Presets for Calibre-Web, Standard Ebooks, Feedbooks, Project Gutenberg) + "Acquired books go to" destination selector.
-- **Shelves UI (`src/ui/types.js` & `src/ui/opds-catalog.js`)**:
-  - Add a dedicated "Catalogs" section in the Shelves drawer.
-  - Interactive catalog browser: navigate hierarchical feeds, search catalog titles, view cover grids and book detail sheets.
-  - Book Detail Modal: Book cover, description, format tags (`EPUB`, `PDF`), and an **Acquire** button:
-    - Primary action: `[ Acquire ]` (immediately streams book and saves to configured `acquiredBooksHome`).
-    - Inline override: `(Saving to: Cloudflare R2 · Change)` allows one-tap switch to save only to "This Device".
-    - Stashes book metadata to `store.items` and book binary to `store.blobs` or remote destination.
+> [!IMPORTANT]
+> The following revisions and hardening rules have been incorporated into the architectural plan:
+> 1. **Environment-Aware OPDS Testing**: In-app diagnostics detect host capabilities: `/api/opds-proxy` is tested only when running against an active local Node/Express backend (`localhost` / custom backend), while static PWA and GitHub Pages environments strictly test direct CORS and user-configured external CORS proxies without reporting spurious 404 proxy errors.
+> 2. **Storage Eviction Defense & PWA Cache Health**: Diagnostic checks explicitly query `navigator.storage.persisted()` and `navigator.storage.persist()` (defending against iOS WebKit's 7-day Intelligent Tracking Prevention cache purges) alongside Service Worker cache version verification to detect and prevent "stale app shell" PWA lockups.
+> 3. **Mobile Keyboard Ergonomics (`interactive-widget=resizes-content` & `100dvh`)**: Mobile viewport meta is upgraded to `viewport-fit=cover, interactive-widget=resizes-content`, and sheet containers utilize `100dvh` so the virtual keyboard never obscures the note composer save bar, tags, or formatting controls.
+> 4. **Safe Diagnostic Keyboard Shortcut**: To avoid colliding with ChromeOS (Bookmark All Tabs: `Ctrl+Shift+D`) and macOS Safari (Add to Reading List: `Cmd+Shift+D`), the diagnostics shortcut is mapped to `Ctrl/Cmd+Shift+U` (Audit/Utility) in addition to an accessible trigger button in Settings (Tab 4).
+> 5. **Touch Target Density Balance**: Rather than artificially ballooning card and book cover dimensions to $48\times 48\text{px}$ (which damages mobile grid density), we use negative margin tap-target expansions (`pointer-events` hitboxes $\ge 44\text{px}$) that maintain compact visual elegance.
+> 6. **Comprehensive Runtime & Stress Assertions ("Never Lose a Keystroke")**:
+>    - *Storage Quota Overflow*: Gracefully handles failed blob writes with a clean `"Device storage full — reading directly without offline caching"` banner; guarantees "Clear cached books" purges `store.blobs` without touching user notes or garden items.
+>    - *Multi-Tab Synchronization*: Leverages `BroadcastChannel` and storage listeners to propagate note edits and graph updates across open tabs without requiring page reloads.
+>    - *Network Flakiness & 409 Conflicts*: Stashes unsaved drafts locally during auth expiration/revocation (HTTP 401); surfaces clean side-by-side Conflict Resolver sheets during 409 collisions.
+>    - *Memory Leak Guards*: Enforces explicit `URL.revokeObjectURL()` lifecycle hooks across all OPDS and attachment object URLs during reader unmounts.
+>    - *Hostile Path Sanitization*: Sanitizes and tests cross-platform path safety across GitHub, Dropbox (disallowing `:` and `\`), and Windows/WebDAV (disallowing `< > : " / \ | ? *`).
 
 ---
 
-### 2. PDF & Book Highlights: Deep-Linking & Provenance
-- **Highlight Locator Metadata Contract**:
-  - Define deterministic locator contracts for EPUB and PDF highlights:
-    ```markdown
-    ---
-    source_type: epub # or 'pdf'
-    book_ref: "books/the-creative-act.epub" # or SHA hash / storage path
-    book_title: "The Creative Act"
-    cfi: "epubcfi(/6/14[chapter-2]!/4/2/12,/1:0,/1:142)"
-    page: 42 # for PDF or estimated EPUB
-    chapter: "Chapter 2: Tuning In"
-    created_at: 2026-10-15T07:20:00Z
-    ---
+### 1. Overview & Core Concept
 
-    > "The artist is not the originator of ideas; the artist is a receiver."
-    — [The Creative Act, p. 42](readover://jump?book=books%2Fthe-creative-act.epub&cfi=epubcfi...)
-    ```
-- **Locator Extraction in Readers**:
-  - `src/reader/foliate-view.js`: Capture CFI range, chapter title, and surrounding context on selection highlight.
-  - `src/reader/pdf-view.js`: Capture page number, quad points/rectangles, and highlighted text on selection highlight.
-- **Deep-Link Citation Jump Handler**:
-  - Intercept citation links in `src/ui/reader.js` and `src/markdown.js`.
-  - **Pre-flight check**:
-    1. Check if `book_ref` exists in `store.items` and local `store.blobs`.
-    2. If missing on current device, display friendly modal:
-       `"Source book 'The Creative Act' is not cached on this device."`
-       `[ Download from Library / R2 ] [ Dismiss ]`
-    3. When present, seamlessly launch the EPUB or PDF viewer and seek directly to the exact CFI or page.
+- **What It Does**: Unifies automated CLI assertions and a live in-app diagnostic suite with deep runtime stress tests, WCAG 2.1 AA accessibility hardening, mobile virtual keyboard adaptation, and offline PWA reliability across Android, iOS, Windows, macOS, and Linux.
+- **Target Audience / Persona**: Readers and writers managing personal libraries across smartphones (one-handed thumb use, notches), tablets, and multi-monitor desktop environments.
+- **Key Value**: Guarantees zero lost thoughts under unstable network conditions, defends against browser storage eviction, eliminates keyboard occlusion bugs, and provides instant health verification.
 
 ---
 
-### 3. Images & Attachments: Storage-Agnostic Architecture
-- **Attachment Pipeline (`src/attachments.js`)**:
-  - **Unified Event Handling in Composer & Reader**:
-    - Listen for `paste` and `drop` events on:
-      1. `src/ui/compose.js` textarea (when creating a new note or fast capture).
-      2. `src/ui/reader.js` textarea (when editing an existing note or adding a thought).
-  - **Client-Side Canvas Compression**:
-    - Auto-scale image to max dimension 1600px maintaining aspect ratio.
-    - Export as `image/webp` with quality 0.8 (typically ~80–150 KB).
-  - **Deterministic Naming**:
-    - Pattern: `attachments/YYYY-MM-DD-${slug}-${hash.slice(0, 6)}.webp`.
-  - **Unified Destination Routing**:
-    - In Settings (Tab 2: Garden): `Attachments destination` option:
-      - Default: `"Same provider as active note"` (saves into `attachments/` folder in the note's repository/storage).
-      - Cloud Vault: `"Cloudflare R2 / S3 Bucket"` (direct upload to R2/S3 object storage, keeping Git notes pure text).
-    - Save binary via unified storage adapter: `library.putAttachment(src, path, blob)`.
-    - Cache in IndexedDB `store.blobs` for immediate offline-first access.
-    - Insert clean, portable relative Markdown into editor: `![](attachments/2026-10-15-concept-a8f1.webp)`.
-- **Markdown Interceptor & Resolver (`src/markdown.js`)**:
-  - Catch all `<img src="...">` with relative or `attachments/` paths during rendering.
-  - Resolve to IndexedDB blob cache or fetch via storage adapter.
-  - Generate temporary Object URL `URL.createObjectURL(blob)`.
-  - Track created Object URLs and revoke on view transition (`URL.revokeObjectURL`) to prevent mobile memory leaks.
+### 2. User Experience & Visual Design
+
+#### Key User Flows
+1. **Interactive Diagnostics & Runtime Stress Suite (In-App)**:
+   - Accessed via Settings (Tab 4: App & Device) or shortcut `Ctrl/Cmd+Shift+U`.
+   - Organizes tests into two distinct tabs:
+     - **Core Health & Specs**: Storage object stores, OPDS parser/proxy, reader CFI locators, canvas WebP compression, and WCAG AA contrast/ARIA audit.
+     - **Runtime & Stress Assertions**: Storage stress quota test (20MB blob allocation and cleanup), hostile path sanitizer test (10 edge-case strings), outbox integrity and offline queueing, multi-tab broadcast messaging, and Object URL leak inspection.
+   - Provides live progress badges, actionable error remediation recommendations, and an **Export Health Report** button.
+2. **Mobile Composer with Keyboard Adaptation**:
+   - Tapping "Write note" or "Make it a note" opens the composer sheet sized with `height: 100dvh; max-height: 100dvh`.
+   - As the virtual keyboard opens, `interactive-widget=resizes-content` ensures the viewport shrinks predictably.
+   - The sticky `.compose-submit-bar` remains pinned directly above the mobile keyboard with `Save note` and citation triggers immediately reachable.
+3. **PWA Standalone & Cold Offline Launch**:
+   - Launches instantly offline from Service Worker cache.
+   - Internal links (`readover://jump`, `[[WikiLink]]`) are trapped within the PWA frame rather than breaking out into new Safari/Chrome tabs.
+   - Dynamic `<meta name="theme-color">` updates ensure the OS status bar harmonizes with light/dark theme switches.
+
+#### Visual Identity & Theme
+- **Theme Palette**:
+  - Light: Canvas `#fbf9f5`, Surface `#ffffff`, Text `#1c1917` (15:1 contrast ratio), Borders `#e7e5e4`, Accent `#0284c7`.
+  - Dark: Canvas `#141816`, Surface `#1c211e`, Text `#e8ebe3` (13:1 contrast ratio), Borders `#29332e`, Accent `#38bdf8`.
+- **Typography & Proportions**:
+  - `Literata` serif for editorial reading and highlights; system geometric sans for UI controls.
+  - Tabular numerals (`tabular-nums font-mono`) for coordinates, quotas, and test metrics.
+  - Focus rings: High-contrast `2px solid var(--accent)` with `outline-offset: 2px` on `:focus-visible`.
 
 ---
 
-### 4. Export & Sharing Suite and Print CSS
-- **Rich Clipboard Copy (`navigator.clipboard.write`)**:
-  - Dual-format clipboard entry with both `text/html` and `text/plain` payloads.
-  - Fully enveloped HTML document with self-contained styles for blockquotes, italics, headings, and citations.
-  - Bypasses mobile keyboard clipboard managers (like Gboard) that truncate plain text at 20,000 characters.
-  - Preserves formatting cleanly when pasted into Substack, Medium, or Google Docs.
-- **Native OS Share Sheet (`navigator.share`)**:
-  - Integrated into note reader and card feed menus.
-  - Provides native sharing with titles, excerpts, and URLs to Signal, WhatsApp, Apple Notes, or Mail.
-- **Ink-Friendly Print / PDF Vector Export (`@media print`)**:
-  - Dedicated print styles in `src/style.css`:
-    - Strip all navigation bars, tab bars, action buttons, sheet overlays, and status footers.
-    - Optimize typography with high-contrast text and crisp image rendering.
-    - Style citation cards with delicate hairline borders and `page-break-inside: avoid;`.
-    - Automatically append URLs to external links: `a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 0.85em; opacity: 0.8; }`.
-    - Trigger via `window.print()` in reader menu and Settings export card.
+### 3. Key Product Decisions & Trade-Offs
+
+- **Decision 1: Environment-Specific OPDS Proxy Assertion**
+  - *Chosen Approach*: Check `location.hostname` in diagnostics. If `localhost` or local dev IP, test `/api/opds-proxy`. If hosted on GitHub Pages or custom domain without a backend, test direct CORS and user-configured CORS proxy settings, skipping local endpoint tests.
+  - *Why*: Eliminates false negative test failures on static PWA deployments while thoroughly testing the Node.js proxy in local/self-hosted environments.
+- **Decision 2: Mobile Viewport Virtual Keyboard Resizing**
+  - *Chosen Approach*: Set `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">` and style sheets with `100dvh`.
+  - *Why*: Solves the classic mobile keyboard occlusion problem natively in Chromium and iOS 15.4+ WebKit without brittle JavaScript resize polling.
+- **Decision 3: Keyboard Shortcut Mapping (`Ctrl/Cmd+Shift+U`)**
+  - *Chosen Approach*: Replace `Ctrl/Cmd+Shift+D` with `Ctrl/Cmd+Shift+U` and provide a visible diagnostic button in Settings.
+  - *Why*: Prevents OS-level browser shortcut conflicts on ChromeOS (Bookmark All Tabs) and macOS Safari (Reading List).
+- **Decision 4: "Never Lose a Keystroke" Local Stashing**
+  - *Chosen Approach*: On 401 auth expiration or unexpected network failure during a save, immediately stash the editor content in `localStorage('readover.draft.<key>')` and `store.outbox`, notify the user with a retry prompt, and never clear the active textarea.
+  - *Why*: In a personal knowledge system, uncommitted thoughts must never be vaporized by network or credential errors.
 
 ---
 
-## Verification Plan
+### 4. Technical Architecture & Data Strategy
 
-### Automated & Compilation Tests
-- Run `compile_applet` to verify TypeScript/JavaScript syntax and build stability.
-- Run `lint_applet` to verify no broken imports, undeclared variables, or syntax errors.
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          READOVER PLATFORM RUNTIME                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Viewport & Ergonomics:                                                      │
+│ • interactive-widget=resizes-content | 100dvh dynamic sheet sizing          │
+│ • Safe-area insets: env(safe-area-inset-top), env(safe-area-inset-bottom)   │
+│ • Tap hitboxes >= 44px via negative padding; compact visual typography      │
+└───────────────┬─────────────────────────────────────────────┬───────────────┘
+                │                                             │
+                ▼                                             ▼
+┌─────────────────────────────────────────┐   ┌───────────────────────────────┐
+│     IN-APP DIAGNOSTICS & STRESS SUITE   │   │  MULTI-DEVICE SYNC & STORAGE  │
+│        (src/ui/diagnostics.js)          │   │  • BroadcastChannel Cross-Tab │
+│ ─────────────────────────────────────── │   │  • Persistent Storage Request │
+│ Tab 1: Core System & Accessibility      │   │  • 409 Conflict Resolver Sheet│
+│ • IndexedDB 7 stores + Quota check      │   │  • Outbox Queue with Backoff  │
+│ • OPDS Parser & Host-Aware Proxy Test   │   │  • Object URL Memory Cleanup  │
+│ • Annotation Deep-Link Locator Contract │   └───────────────┬───────────────┘
+│ • Canvas WebP Compression Engine        │                   │
+│ • WCAG AA Contrast, ARIA & Focus Audit  │                   │
+│ ─────────────────────────────────────── │                   │
+│ Tab 2: Runtime & Stress Assertions      │                   │
+│ • 20MB Blob Quota Overflow Simulation   │                   │
+│ • 10-Pattern Hostile Path Sanitizer     │                   │
+│ • Outbox Serialization & Replay Check   │                   │
+│ • Multi-Tab Broadcast Message Test      │                   │
+└───────────────────┬─────────────────────┘                   │
+                    │                                         │
+                    ▼                                         ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       CORE REPOSITORY & SERVICE WORKER                      │
+│ • sw.js (readover-shell-v6, cache migration, offline link-trapping)        │
+│ • store.js & library.js (IndexedDB, fallback local storage, sanitizePath)   │
+│ • notefile.js & markdown.js (prose formatting, wikilinks, image resolver)  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
-### Manual Verification
-1. **OPDS Catalog**:
-   - Add sample OPDS catalog (e.g. Standard Ebooks or Calibre-Web feed).
-   - Test feed browsing, category pagination, search query handling, and cover loading with relative URL resolution.
-   - Test `[ Acquire ]` with default destination and verify inline override to "This Device".
-2. **Deep-Linked Highlights**:
-   - Create a highlight in an EPUB and a PDF.
-   - Verify frontmatter schema and Markdown citation link structure.
-   - Click citation link: verify pre-flight verification, missing-book prompt, and jump directly to the highlighted CFI/page.
-3. **Attachments & Image Compression**:
-   - Test paste / drop in `compose.js` and `reader.js`.
-   - Verify canvas WebP compression to ~100 KB and storage path `attachments/YYYY-MM-DD-...webp`.
-   - Verify note rendering resolves relative image path smoothly offline and online.
-4. **Export Suite & Print**:
-   - Trigger Rich Copy and paste into test receiver; verify HTML headings and blockquote styling.
-   - Test Print Dialog preview; verify chrome is completely stripped, citations have hairline borders, and URLs are printed cleanly.
+#### Diagnostic Suite Test Specifications
+1. **Storage & Persistence**:
+   - `navigator.storage.persisted()` check; request persistence if ungranted.
+   - Verify all 7 object stores exist and accept CRUD transactions.
+   - Verify `readover.lastSync`, `readover.sources`, and dirty flags.
+2. **OPDS & Network Environment**:
+   - If running locally: test `/api/opds-proxy` with Atom XML sample.
+   - If static/production: verify XML parser and check direct CORS or user proxy settings.
+   - URL resolution: verify relative links resolve cleanly against feed bases.
+3. **Cross-Tab & Sync**:
+   - Emit event over `new BroadcastChannel('readover-sync')`; verify receipt in diagnostic listener.
+4. **Stress & Error Resilience**:
+   - Storage Stress: Generate temporary 20MB test payload, test write/read/delete cycle, report quota usage.
+   - Cache Cleaner Isolation: Confirm book blob cleanup does not touch `items` or `garden` tables.
+   - Path Sanitization: Verify paths with `/`, `\`, `:`, `?`, `*`, `<`, `>`, `"`, `|`, emoji, and trailing periods produce legal, deterministic identifiers across GitHub, Dropbox, and WebDAV.
+   - Conflict Detection: Verify 409 simulation preserves baseSha and triggers merge/resolution rather than overwriting.
+
+---
+
+### 5. Implementation Steps
+
+1. **Viewport & Keyboard Adaptation (`index.html`, `src/style.css`)**:
+   - Update `<meta name="viewport">` in `index.html` to include `interactive-widget=resizes-content`.
+   - Update `.sheet`, `.sheet-tall`, `.compose-sheet`, and modal overlays in `src/style.css` to use `height: 100dvh; max-height: 100dvh;` with safe-area bottom padding.
+   - Ensure touch hitboxes have at least $44\text{px}$ effective tap areas via padding while keeping compact visual text.
+
+2. **Cross-Tab Synchronization (`src/sync.js`, `src/app.js`)**:
+   - Initialize a global `BroadcastChannel('readover-sync')` with `window.addEventListener('storage')` fallback.
+   - Broadcast `readover:note-updated`, `readover:sources-changed`, and `readover:state-updated` events across tabs so secondary windows reflect edits without a reload.
+
+3. **In-App Diagnostic & Stress Modal (`src/ui/diagnostics.js`)**:
+   - Implement the complete diagnostic runner dialog with two view modes:
+     - **Core Verification**: Storage stores, persistent storage status, host-aware OPDS parsing, annotation contracts, WebP compression, WCAG contrast & ARIA checklist.
+     - **Runtime Stress Assertions**: Storage stress quota test, cross-platform path sanitizer test, multi-tab broadcast test, outbox serialization test, and Object URL revocation audit.
+   - Bind to shortcut `Ctrl/Cmd+Shift+U` and add a button in Settings (Tab 4).
+   - Add **Export Health Report** feature generating clean Markdown and JSON reports.
+
+4. **Automated CLI Test Runner (`test-full-suite.js`)**:
+   - Expand Node.js test script to run automated headless assertions on:
+     - Scoping and insight extraction logic.
+     - Markdown frontmatter and wikilink normalization.
+     - Hostile path sanitizer matrix (Windows, Dropbox, Git illegal chars).
+     - Outbox queue serialization and retry logic.
+     - Atom XML & JSON-LD parsing algorithms.
+   - Update `package.json` to include `"test": "node test-full-suite.js"`.
+
+5. **Accessibility & PWA Hardening**:
+   - Ensure all icon buttons have explicit `aria-label`s.
+   - Set visible focus indicators (`:focus-visible`).
+   - Add `@media (prefers-reduced-motion: reduce)` rules in `src/style.css`.
+   - Add browser feature-check `<noscript>` / legacy fallback banner in `index.html`.
+   - Ensure internal links do not break out of standalone PWA window.
+   - Sync `<meta name="theme-color">` dynamically with active theme.

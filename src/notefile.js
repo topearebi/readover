@@ -212,6 +212,43 @@ export function slugify(text, max = 60) {
   return s || 'note';
 }
 
+/**
+ * Cross-platform path & filename sanitization:
+ * - Windows forbidden: < > : " / \ | ? *
+ * - Dropbox forbidden: : \ and trailing spaces/periods
+ * - Git forbidden: control characters, trailing periods, leading/trailing spaces
+ * - Reserved device names: CON, PRN, AUX, NUL, COM1-9, LPT1-9
+ */
+export function sanitizeFilename(name, fallback = 'untitled') {
+  let clean = String(name || '').trim();
+  // Strip control chars and illegal cross-platform characters
+  clean = clean.replace(/[\x00-\x1f<>:"/\\|?*]/g, '-');
+  // Remove leading/trailing dots, spaces, dashes
+  clean = clean.replace(/^[\s.-]+|[\s.-]+$/g, '');
+  // Windows reserved device names
+  const stem = clean.replace(/\.[^.]+$/, '').toUpperCase();
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(stem)) {
+    clean = `_${clean}`;
+  }
+  return clean || fallback;
+}
+
+export function isPathSafe(path) {
+  if (!path || typeof path !== 'string') return false;
+  // Check illegal characters
+  if (/[\x00-\x1f<>:"\\|?*]/.test(path)) return false;
+  // Check double slashes or directory traversal
+  if (path.includes('//') || path.includes('..') || path.startsWith('/')) return false;
+  // Check trailing periods or spaces in any segment
+  const segments = path.split('/');
+  for (const seg of segments) {
+    if (!seg || /^[\s.]|[\s.]$/.test(seg)) return false;
+    const stem = seg.replace(/\.[^.]+$/, '').toUpperCase();
+    if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(stem)) return false;
+  }
+  return true;
+}
+
 /** A typed title may start with a date: "2026-12-30 My note" → { day, title: "My note" }. */
 export function splitDatedTitle(title) {
   const t = String(title || '').trim();

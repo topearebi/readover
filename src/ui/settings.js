@@ -718,7 +718,23 @@ export function initSettings(app) {
     const { usage = 0 } = await navigator.storage.estimate();
     const persisted = (await navigator.storage.persisted?.()) || false;
     const mb = (b) => (b / 1048576 < 1024 ? `${(b / 1048576).toFixed(1)} MB` : `${(b / 1073741824).toFixed(1)} GB`);
-    info.textContent = `${mb(usage)} used${persisted ? '' : ' · the browser may clear it if space runs low'}`;
+    info.textContent = `${mb(usage)} used${persisted ? ' · Persisted storage active' : ' · Tap to request persistent storage'}`;
+    if (!persisted) {
+      info.style.cursor = 'pointer';
+      info.onclick = async () => {
+        const granted = await navigator.storage.persist?.();
+        toast(granted ? 'Storage persistence granted' : 'Browser declined persistence');
+        showStorage();
+      };
+    }
+  }
+
+  const runDiagBtn = $('run-diagnostics-btn');
+  if (runDiagBtn) {
+    runDiagBtn.onclick = async () => {
+      const { openDiagnostics } = await import('./diagnostics.js');
+      openDiagnostics(app);
+    };
   }
 
   /* ---- Clip from anywhere ---- */

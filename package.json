@@ -7,6 +7,7 @@
     "dev": "node server.js",
     "start": "node server.js",
     "build": "node -e \"console.log('Build complete')\"",
+    "test": "node test-full-suite.js",
     "lint": "node -e \"console.log('No lint errors')\""
   },
   "dependencies": {

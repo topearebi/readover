@@ -391,3 +391,40 @@ export function startAutoSync() {
   });
   window.addEventListener('online', () => syncNow({ includeSeen: false }));
 }
+
+/* ---------- Cross-Tab Synchronization (BroadcastChannel + Storage) ---------- */
+let syncChannel = null;
+try {
+  if (typeof BroadcastChannel !== 'undefined') {
+    syncChannel = new BroadcastChannel('readover-sync');
+  }
+} catch {}
+
+export function broadcastMessage(type, payload = {}) {
+  const msg = { type, payload, timestamp: Date.now() };
+  try {
+    if (syncChannel) syncChannel.postMessage(msg);
+  } catch {}
+  try {
+    localStorage.setItem('readover.crossTabPing', JSON.stringify(msg));
+  } catch {}
+}
+
+export function onBroadcastMessage(listener) {
+  const cleanups = [];
+  if (syncChannel) {
+    const handler = (e) => listener(e.data);
+    syncChannel.addEventListener('message', handler);
+    cleanups.push(() => syncChannel.removeEventListener('message', handler));
+  }
+  const storageHandler = (e) => {
+    if (e.key === 'readover.crossTabPing' && e.newValue) {
+      try {
+        listener(JSON.parse(e.newValue));
+      } catch {}
+    }
+  };
+  window.addEventListener('storage', storageHandler);
+  cleanups.push(() => window.removeEventListener('storage', storageHandler));
+  return () => cleanups.forEach((fn) => fn());
+}
