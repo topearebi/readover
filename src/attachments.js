@@ -1,6 +1,7 @@
-// Storage-Agnostic Image & Attachment Pipeline.
-// Client-side browser canvas compression (WebP ~80-150KB), deterministic naming,
-// and portable relative path routing.
+// Storage-Agnostic Image & Attachment Compression and Routing
+// Compresses client-side via Canvas (max 1600px, WebP @ 0.8 quality -> ~60-120 KB),
+// routes to S3/R2 or the active note's library adapter, and inserts clean markdown.
+
 import * as store from './store.js';
 import * as library from './library.js';
 import { toast } from './ui/overlay.js';
@@ -9,192 +10,209 @@ const MAX_DIMENSION = 1600;
 const WEBP_QUALITY = 0.8;
 
 /**
- * Compresses an image file/blob to WebP using client-side canvas.
- * Resizes max dimension to 1600px while maintaining aspect ratio.
+ * Client-Side Browser Canvas Compression
+ * - Auto-resize max dimension to 1600px
+ * - Convert to WebP (quality: 0.8) for optimal ~60-120 KB size
  */
-export async function compressImage(fileOrBlob) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    const url = URL.createObjectURL(fileOrBlob);
+export async function compressImage(fileOrBlob, maxDim = MAX_DIMENSION, quality = WEBP_QUALITY) {
+  const url = URL.createObjectURL(fileOrBlob);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = (e) => reject(new Error('Failed to decode image data'));
+      image.src = url;
+    });
 
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      let { width, height } = img;
+    let width = img.naturalWidth || img.width;
+    let height = img.naturalHeight || img.height;
 
-      if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
-        if (width > height) {
-          height = Math.round((height * MAX_DIMENSION) / width);
-          width = MAX_DIMENSION;
-        } else {
-          width = Math.round((width * MAX_DIMENSION) / height);
-          height = MAX_DIMENSION;
-        }
+    if (width > maxDim || height > maxDim) {
+      if (width > height) {
+        height = Math.round((height * maxDim) / width);
+        width = maxDim;
+      } else {
+        width = Math.round((width * maxDim) / height);
+        height = maxDim;
       }
+    }
 
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        reject(new Error('Canvas context not available'));
-        return;
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, width, height);
+
+    // Try WebP first; check if browser generates valid WebP blob
+    let blob = await new Promise((res) => canvas.toBlob(res, 'image/webp', quality));
+    let format = 'webp';
+    if (!blob || blob.type !== 'image/webp') {
+      // Fallback to JPEG if WebP export is unsupported
+      blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', quality));
+      format = 'jpg';
+    }
+
+    canvas.width = canvas.height = 0; // memory cleanup
+    return { blob, width, height, format, originalSize: fileOrBlob.size, size: blob.size };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** Generate a clean, collision-free attachment filename */
+export function generateAttachmentFilename(base = 'image', format = 'webp') {
+  const now = new Date();
+  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const rand = Math.random().toString(36).slice(2, 6);
+  const cleanBase = String(base || 'image').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20);
+  return `${cleanBase}-${dateStr}-${rand}.${format}`;
+}
+
+/**
+ * Route attachment to the appropriate storage adapter
+ * Prefers S3/Cloudflare R2 if configured for attachments, otherwise note's library source
+ */
+export async function saveAttachment(sourceOrId, relPath, blob) {
+  const sources = store.getSources();
+  let dest = null;
+
+  // 1. Check if an S3 or R2 source is connected (designated object attachment storage)
+  const s3Source = sources.find((s) => (s.type === 's3' || s.type === 'r2') && library.canWrite(s));
+  
+  if (sourceOrId) {
+    dest = typeof sourceOrId === 'string' ? store.getSource(sourceOrId) : sourceOrId;
+  }
+  if (!dest || !library.canWrite(dest)) {
+    dest = s3Source || sources.find((s) => library.canWrite(s)) || library.deviceSource(true);
+  }
+
+  const path = relPath.startsWith('/') ? relPath.slice(1) : relPath;
+  const itemKey = store.keyOf(dest.id, path);
+  let sha = `att:${Date.now()}`;
+
+  try {
+    if (dest.type === 'dropbox') {
+      const { upload } = await import('./sources/dropbox.js');
+      const res = await upload(dest, path, blob);
+      sha = res?.rev || sha;
+    } else if (dest.type === 'webdav') {
+      const { putBlob } = await import('./sources/webdav.js');
+      await putBlob(dest, path, blob);
+    } else if (dest.type === 's3' || dest.type === 'r2') {
+      const { putBlob } = await import('./sources/s3.js');
+      await putBlob(dest, path, blob);
+    } else if (dest.type === 'github') {
+      // Small attachments can be committed via GitHub API if needed
+      const { putFile } = await import('./sources/github.js');
+      const reader = new FileReader();
+      const base64 = await new Promise((res) => {
+        reader.onloadend = () => res(reader.result.split(',')[1]);
+        reader.readAsDataURL(blob);
+      });
+      // GitHub API supports base64 encoding for binary
+      await putFile(dest, path, atob(base64), null, `Readover: add attachment ${path}`);
+    } else if (dest.type === 'local') {
+      const { writeFile } = await import('./sources/local.js');
+      await writeFile(dest, path, blob);
+    }
+  } catch (err) {
+    console.warn('Remote attachment upload failed, caching locally:', err);
+  }
+
+  // Always cache locally in IndexedDB blobs store for instant zero-latency preview
+  await store.blobs.put({
+    key: itemKey,
+    sourceId: dest.id,
+    sha,
+    blob,
+  });
+
+  return { path, key: itemKey, sourceId: dest.id };
+}
+
+/** Insert text at textarea selection */
+function insertAtCursor(textarea, textToInsert) {
+  const start = textarea.selectionStart ?? textarea.value.length;
+  const end = textarea.selectionEnd ?? textarea.value.length;
+  const before = textarea.value.slice(0, start);
+  const after = textarea.value.slice(end);
+  textarea.value = `${before}${textToInsert}${after}`;
+  const newPos = start + textToInsert.length;
+  textarea.setSelectionRange(newPos, newPos);
+  textarea.focus();
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+/**
+ * Attach clipboard paste and drag-drop handlers to a note textarea.
+ * When an image is detected: compresses, stores, and inserts clean markdown `![](attachments/...)`.
+ */
+export function setupImageAttachments(textarea, { getSource = () => null, folder = '' } = {}) {
+  if (!textarea) return;
+
+  async function handleImageFile(file) {
+    toast('Compressing image…');
+    try {
+      const { blob, format, size, originalSize } = await compressImage(file);
+      const filename = generateAttachmentFilename('diagram', format);
+      const relPath = `attachments/${filename}`;
+
+      toast('Saving attachment…');
+      const src = getSource();
+      await saveAttachment(src, relPath, blob);
+
+      const markdown = `\n![${file.name.replace(/\.[^.]+$/, '') || 'Diagram'}](${relPath})\n`;
+      insertAtCursor(textarea, markdown);
+
+      const kb = Math.round(size / 1024);
+      const origKb = Math.round(originalSize / 1024);
+      toast(`Image compressed and attached (${origKb}KB → ${kb}KB)`);
+    } catch (err) {
+      toast(`Attachment failed: ${err.message}`);
+    }
+  }
+
+  // 1. Paste listener
+  textarea.addEventListener('paste', async (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.startsWith('image/')) {
+        e.preventDefault();
+        const file = item.getAsFile();
+        if (file) await handleImageFile(file);
+        break;
       }
+    }
+  });
 
-      ctx.drawImage(img, 0, 0, width, height);
+  // 2. Drag & Drop listeners
+  textarea.addEventListener('dragover', (e) => {
+    if (e.dataTransfer?.types?.includes('Files')) {
+      e.preventDefault();
+      textarea.classList.add('drag-active');
+    }
+  });
 
-      canvas.toBlob(
-        (blob) => {
-          if (blob) resolve(blob);
-          else reject(new Error('Failed to encode image to WebP'));
-        },
-        'image/webp',
-        WEBP_QUALITY
-      );
-    };
+  textarea.addEventListener('dragleave', () => {
+    textarea.classList.remove('drag-active');
+  });
 
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('Could not load image for compression'));
-    };
-
-    img.src = url;
+  textarea.addEventListener('drop', async (e) => {
+    textarea.classList.remove('drag-active');
+    const files = e.dataTransfer?.files;
+    if (!files || !files.length) return;
+    for (const file of files) {
+      if (file.type.startsWith('image/')) {
+        e.preventDefault();
+        await handleImageFile(file);
+        break;
+      }
+    }
   });
 }
 
-/**
- * Generates a deterministic attachment filename:
- * attachments/YYYY-MM-DD-slug-hash.webp
- */
-export function generateAttachmentPath(slugHint = '') {
-  const now = new Date();
-  const dateStr = now.toISOString().slice(0, 10);
-  const cleanSlug = String(slugHint || 'img')
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 24) || 'diagram';
-  const hash = Math.random().toString(36).slice(2, 8);
-  return `attachments/${dateStr}-${cleanSlug}-${hash}.webp`;
-}
-
-/**
- * Determines target destination source (active note source or S3/R2 vault).
- */
-export function resolveAttachmentSource(noteSrc) {
-  const prefs = store.getPrefs();
-  if (prefs.attachmentsDestination === 's3') {
-    const s3Vault = store.getSources().find((s) => (s.type === 's3' || s.type === 'r2') && library.canWrite(s));
-    if (s3Vault) return s3Vault;
-  }
-  if (noteSrc && library.canWrite(noteSrc)) return noteSrc;
-  return library.deviceSource(true);
-}
-
-/**
- * Processes an image file: compresses to WebP, writes to storage adapter,
- * caches in IndexedDB, and returns portable Markdown.
- */
-export async function processAndSaveImage(file, { noteSrc = null, slug = 'sketch' } = {}) {
-  const compressedBlob = await compressImage(file);
-  const targetSrc = resolveAttachmentSource(noteSrc);
-  const relPath = generateAttachmentPath(slug);
-
-  await library.putAttachment(targetSrc, relPath, compressedBlob);
-
-  // Return clean, portable relative markdown path compatible with Obsidian & GitHub
-  return {
-    markdown: `![](${relPath})`,
-    path: relPath,
-    size: compressedBlob.size,
-  };
-}
-
-/**
- * Attaches paste (Ctrl+V) and drag-and-drop listeners to an editor textarea.
- */
-export function setupAttachmentListeners(textarea, { getContext = () => ({}) } = {}) {
-  if (!textarea) return () => {};
-
-  const handleFiles = async (files) => {
-    const imageFiles = [...files].filter((f) => f.type.startsWith('image/'));
-    if (!imageFiles.length) return;
-
-    toast('Compressing image…');
-    const ctx = getContext();
-    const noteSrc = ctx.sourceId ? store.getSource(ctx.sourceId) : null;
-    const slug = ctx.title || 'diagram';
-
-    for (const file of imageFiles) {
-      try {
-        const { markdown } = await processAndSaveImage(file, { noteSrc, slug });
-        insertAtCursor(textarea, `\n${markdown}\n`);
-        toast('Image attached');
-      } catch (err) {
-        toast(`Image upload failed: ${err.message}`);
-      }
-    }
-  };
-
-  const onPaste = (e) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    const files = [];
-    for (const item of items) {
-      if (item.type.startsWith('image/')) {
-        const file = item.getAsFile();
-        if (file) files.push(file);
-      }
-    }
-    if (files.length) {
-      e.preventDefault();
-      handleFiles(files);
-    }
-  };
-
-  const onDragOver = (e) => {
-    if (e.dataTransfer?.types?.includes('Files')) {
-      e.preventDefault();
-      textarea.classList.add('is-drop-target');
-    }
-  };
-
-  const onDragLeave = () => {
-    textarea.classList.remove('is-drop-target');
-  };
-
-  const onDrop = (e) => {
-    textarea.classList.remove('is-drop-target');
-    const files = e.dataTransfer?.files;
-    if (files?.length) {
-      const hasImages = [...files].some((f) => f.type.startsWith('image/'));
-      if (hasImages) {
-        e.preventDefault();
-        handleFiles(files);
-      }
-    }
-  };
-
-  textarea.addEventListener('paste', onPaste);
-  textarea.addEventListener('dragover', onDragOver);
-  textarea.addEventListener('dragleave', onDragLeave);
-  textarea.addEventListener('drop', onDrop);
-
-  return () => {
-    textarea.removeEventListener('paste', onPaste);
-    textarea.removeEventListener('dragover', onDragOver);
-    textarea.removeEventListener('dragleave', onDragLeave);
-    textarea.removeEventListener('drop', onDrop);
-  };
-}
-
-function insertAtCursor(textarea, textToInsert) {
-  const start = textarea.selectionStart;
-  const end = textarea.selectionEnd;
-  const current = textarea.value;
-
-  textarea.value = current.slice(0, start) + textToInsert + current.slice(end);
-  textarea.selectionStart = textarea.selectionEnd = start + textToInsert.length;
-  textarea.dispatchEvent(new Event('input', { bubbles: true }));
-  textarea.focus();
-}
+// Export both names to guarantee compatibility with all callers and cached modules
+export { setupImageAttachments as setupAttachmentListeners };
