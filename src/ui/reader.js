@@ -316,6 +316,7 @@ export async function openNote(item, opts = {}) {
   }
 
   let prose = renderArticle();
+  document.body.classList.add('has-reader');
   document.body.append(root);
   scroll.focus();
 
@@ -391,6 +392,9 @@ export async function openNote(item, opts = {}) {
   const close = pushOverlay(() => {
     document.removeEventListener('selectionchange', onSelection);
     root.remove();
+    if (!document.querySelector('.reader')) {
+      document.body.classList.remove('has-reader');
+    }
   }, { element: root, opener });
   back.onclick = () => {
     if (editing && textarea.value !== text && !confirm('Discard your changes?')) return;
@@ -529,15 +533,15 @@ export async function openNote(item, opts = {}) {
       if (navigator.share) {
         navigator.share({
           title: note.title,
-          text: `${note.title}\n\n${rawText || note.body || ''}`,
+          text: `${note.title}\n\n${text || note.body || ''}`,
         }).catch(() => {});
       } else {
-        await navigator.clipboard.writeText(`${note.title}\n\n${rawText || note.body || ''}`);
+        await navigator.clipboard.writeText(`${note.title}\n\n${text || note.body || ''}`);
         toast('Copied note text to clipboard');
       }
     }
     if (choice === 'copy-publish') {
-      const md = `${note.title ? `# ${note.title}\n\n` : ''}${rawText || note.body || ''}`;
+      const md = `${note.title ? `# ${note.title}\n\n` : ''}${text || note.body || ''}`;
       const titleEscaped = (note.title || '').replace(/[&<>'"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[c]);
       const envelopedHtml = `<!DOCTYPE html>
 <html>

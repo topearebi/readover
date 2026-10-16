@@ -3240,15 +3240,34 @@ details > summary {
 @media print {
   /* Strip all application chrome, topbars, nav rails, action sheets, buttons, and footers */
   nav, .rail, .top-rail, .topbar, .tabbar, dialog, .feed-actions, .note-actions, .shelf-bar-actions,
-  button, .settings-tabs, .selection-bar, .reader-bar, .reader-tools, .connection-footer,
-  .toast, #toast, .sync-dot, .brand, .feed-meta, .source-actions, .reader-status {
+  button, .settings-tabs, .selection-bar, .reader-bar, .reader-bar *, .reader-tools, .connection-footer,
+  .toast, #toast, .sync-dot, .brand, .feed-meta, .source-actions, .reader-status,
+  .reader-grow, .reader-foot, .backlinks {
     display: none !important;
   }
-  body, html, .reader, .article-wrap, .article, .prose {
+
+  /* Suppress background views (feed, shelf, notes, etc.) when reading a note */
+  body:has(.reader) #feed,
+  body:has(.reader) .feed,
+  body:has(.reader) #shelf,
+  body:has(.reader) #notes,
+  body:has(.reader) .banner,
+  body:has(.reader) > *:not(.reader),
+  body.has-reader #feed,
+  body.has-reader .feed,
+  body.has-reader #shelf,
+  body.has-reader #notes,
+  body.has-reader .banner,
+  body.has-reader > *:not(.reader) {
+    display: none !important;
+  }
+
+  body, html {
     background: #ffffff !important;
     color: #111111 !important;
     box-shadow: none !important;
     max-width: 100% !important;
+    width: 100% !important;
     margin: 0 !important;
     padding: 0 !important;
     display: block !important;
@@ -3256,7 +3275,44 @@ details > summary {
     font-size: 11pt !important;
     line-height: 1.65 !important;
   }
-  .article-title {
+
+  .reader {
+    background: #ffffff !important;
+    color: #111111 !important;
+    box-shadow: none !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: block !important;
+    position: static !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .reader-scroll {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+
+  .reader-article, .article-wrap, .article, .prose {
+    background: transparent !important;
+    box-shadow: none !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: block !important;
+    position: static !important;
+  }
+
+  .reader-article .card-where {
+    font-size: 9pt !important;
+    color: #57534e !important;
+    margin-bottom: 6pt !important;
+  }
+
+  .reader-article .card-title, .article-title {
     font-size: 22pt !important;
     line-height: 1.2 !important;
     margin-bottom: 16pt !important;

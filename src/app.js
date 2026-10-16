@@ -706,10 +706,20 @@ const actions = {
 
   async share(card) {
     const item = card._item;
-    const title = card._note?.title || card._bookTitle || item.name;
+    const title = card._note?.title || card._bookTitle || item?.title || item?.name || 'Note';
     let text = title;
-    if (card._highlight) text = `“${card._highlight.text.replace(/[>*_=]/g, '').trim()}”\n— ${title}`;
-    else if (card._note) text = `${title}\n\n${card._note.body.replace(/[#>*_`=]/g, '').slice(0, 400).trim()}`;
+    if (card._highlight) {
+      text = `“${card._highlight.text.replace(/[>*_=]/g, '').trim()}”\n— ${title}`;
+    } else if (item && item.kind === 'note') {
+      try {
+        const full = await library.readText(item);
+        text = `${title}\n\n${full || card._note?.body || ''}`.trim();
+      } catch {
+        text = `${title}\n\n${card._note?.body || ''}`.trim();
+      }
+    } else if (card._note) {
+      text = `${title}\n\n${card._note.body || ''}`.trim();
+    }
     try {
       if (navigator.share) await navigator.share({ title, text });
       else {
