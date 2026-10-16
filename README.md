@@ -225,3 +225,102 @@ The comment is invisible when the file is viewed. It tells Readover where the qu
 - `{"book": …, "at": …}` for a book and its place (an EPUB location, or `page=N` for PDFs);
 - `{"from": "<library>|<path>"}` for a note or an export;
 - `{"url": …}` for a clip from the web. Clips also get `url:` (the plain page address) in their frontmatter, and a source line linking to the passage, such as `> — [Page title](https://…#:~:text=first%20words,last%20words)`. You can edit, rename or move these files freely; renaming in Readover keeps links to them working.
+
+---
+
+## Deployment & Production Troubleshooting Guide
+
+### 1. Static Deployment Checklist (GitHub Pages & Static Hosts)
+
+Readover is an entirely client-side, zero-backend progressive web app designed to run reliably on GitHub Pages, Cloudflare Pages, Netlify, or any static HTTP web server.
+
+- [x] **Strict Relative Paths**: All script imports, CSS, and asset links in `index.html` and `manifest.json` use relative paths (`./src/...`, `./manifest.json`, `./icons/...`). This guarantees the app functions identically whether hosted at the apex domain (`https://notes.example.com/`) or under a repository subpath (`https://username.github.io/readover/`).
+- [x] **Mandatory `.nojekyll` File**: GitHub Pages enables Jekyll processing by default. Jekyll ignores folders beginning with an underscore or dot, and can strip certain web files. The root `.nojekyll` file prevents Jekyll from interfering with static assets.
+- [x] **Single-Page Application Fallback**: The service worker intercepts navigation requests (`req.mode === 'navigate' ? './' : req`), ensuring deep links and browser refreshes resolve correctly to the app shell without 404 errors.
+
+---
+
+### 2. OPDS & Calibre Remote Server CORS Configuration
+
+When connecting Readover to self-hosted Calibre, Calibre-Web, Kavita, or remote OPDS book catalogs from a static deployment, the browser requires standard CORS (`Cross-Origin Resource Sharing`) headers to permit XML/JSON feed and blob acquisition.
+
+#### Option A: Caddy Server Reverse Proxy (Recommended)
+Add this block to your `Caddyfile` for your Calibre or OPDS catalog subdomain:
+```caddy
+opds.yourdomain.com {
+    reverse_proxy 127.0.0.1:8083
+
+    header {
+        Access-Control-Allow-Origin *
+        Access-Control-Allow-Methods "GET, OPTIONS"
+        Access-Control-Allow-Headers "Authorization, Content-Type, Accept, Range"
+        Access-Control-Expose-Headers "Content-Length, Content-Range, Content-Type"
+    }
+}
+```
+
+#### Option B: Nginx Reverse Proxy
+Add the following directives inside your Nginx `location /` block:
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8083;
+    proxy_set_header Host $host;
+
+    # CORS Headers for OPDS and EPUB streaming
+    add_header 'Access-Control-Allow-Origin' '*' always;
+    add_header 'Access-Control-Allow-Methods' 'GET, OPTIONS' always;
+    add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type, Accept, Range' always;
+    add_header 'Access-Control-Expose-Headers' 'Content-Length, Content-Range, Content-Type' always;
+
+    if ($request_method = 'OPTIONS') {
+        add_header 'Access-Control-Max-Age' 1728000;
+        add_header 'Content-Type' 'text/plain charset=UTF-8';
+        add_header 'Content-Length' 0;
+        return 204;
+    }
+}
+```
+
+#### Option C: Cloudflare R2 / AWS S3 CORS Policy
+If syncing your library directly from an S3-compatible bucket, apply the following CORS JSON configuration:
+```json
+[
+  {
+    "AllowedOrigins": ["*"],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag", "Content-Length", "Content-Type", "Content-Range"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+---
+
+### 3. Progressive Web App (PWA) & Mobile Installation Matrix
+
+Readover is fully installable across Android, iOS, iPadOS, macOS, Windows, and ChromeOS.
+
+| Platform | Recommended Browser | Installation Method | Offline Storage Persistence |
+| :--- | :--- | :--- | :--- |
+| **Android** | Chrome / Brave / Edge | Tap **Add to Home screen** or **Install app** from browser menu | Automatic quota grant, supports Share Target API for quotes |
+| **iOS / iPadOS** | Safari | Tap **Share** icon → **Add to Home Screen** | Automatically requests `navigator.storage.persist()`. Opening at least once every 7 days preserves local cache against WebKit ITP |
+| **macOS / Windows** | Chrome / Edge | Click the **Install** icon in the address bar | Full desktop standalone window, multi-window broadcast sync |
+| **ChromeOS** | Chrome | Click **Install** in address bar or launcher | Persistent local IndexedDB offline storage |
+
+---
+
+### 4. Diagnosing Stale Service Worker Cache & Startup Errors
+
+#### The Symptom: "The page loads, but is blank or click events do not respond"
+In JavaScript ES modules, a `SyntaxError` during initial script evaluation is fatal: it halts JavaScript execution before `app.js` runs any event listeners, leaving buttons unresponsive.
+
+This almost always occurs in offline-first static deployments when a Service Worker has cached an older version of one module (e.g. `attachments.js`), while the rest of the application imports a newer export from it.
+
+#### Mitigations Implemented in Readover:
+1. **Service Worker Version Bump (`readover-shell-v7`)**: Ensures existing devices immediately detect a cache mismatch and flush older cached scripts.
+2. **Interactive Update Notification Banner**: When a newer Service Worker installs in the background, a non-intrusive floating banner appears with **Update now**, allowing instant one-tap refresh.
+3. **Boot-Time Script Error Trap (`#boot-error-boundary`)**: If an unhandled syntax or network error occurs before `app.js` finishes loading, Readover intercepts it and renders a clean recovery card with a **Clear cache & reload** button.
+4. **Built-in System Diagnostics Suite**:
+   - Press **`Ctrl + Shift + U`** or **`Ctrl + Shift + D`** (or open **Settings → Run system diagnostics**).
+   - Runs live tests for IndexedDB storage health, WebKit persistence, OPDS parsing, WCAG AA compliance, and cross-tab BroadcastChannel communication.

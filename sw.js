@@ -7,7 +7,7 @@
 //   URLs include the version, so the file at a given URL never changes.
 // - GitHub API and raw files: never touched here; the app caches those itself.
 
-const SHELL_CACHE = 'readover-shell-v6';
+const SHELL_CACHE = 'readover-shell-v7';
 const VENDOR_CACHE = 'readover-vendor-v2';
 const NETWORK_TIMEOUT = 1500; // ms before falling back to the cached copy
 const SLOW_BACKOFF = 30000; // after a timeout, use the cache first for this long
@@ -25,44 +25,50 @@ const SHELL = [
   './src/feed.js',
   './src/sync.js',
   './src/outbox.js',
-  './src/ui/status.js',
-  './src/ui/setup.js',
-  './src/lib/gitsha.js',
-  './src/markdown.js',
+  './src/articles.js',
+  './src/attachments.js',
+  './src/clip.js',
+  './src/clock.js',
   './src/covers.js',
+  './src/dates.js',
+  './src/filters.js',
+  './src/garden.js',
+  './src/imports.js',
+  './src/insights.js',
+  './src/learn.js',
+  './src/markdown.js',
+  './src/notefile.js',
+  './src/notes-index.js',
+  './src/relink.js',
+  './src/lib/gitsha.js',
   './src/lib/idb.js',
   './src/lib/vendor.js',
+  './src/lib/zip.js',
+  './src/sources/dropbox.js',
   './src/sources/github.js',
   './src/sources/local.js',
   './src/sources/opds.js',
+  './src/sources/s3.js',
+  './src/sources/webdav.js',
+  './src/ui/status.js',
+  './src/ui/setup.js',
   './src/ui/overlay.js',
   './src/ui/card.js',
+  './src/ui/clip.js',
+  './src/ui/compose.js',
+  './src/ui/diagnostics.js',
+  './src/ui/growth.js',
+  './src/ui/highlight-note.js',
+  './src/ui/notes.js',
+  './src/ui/opds.js',
   './src/ui/reader.js',
   './src/ui/settings.js',
-  './src/ui/compose.js',
-  './src/ui/opds.js',
-  './src/attachments.js',
-  './src/viewers/pdf.js',
-  './src/viewers/book.js',
-  './src/imports.js',
-  './src/ui/shelf.js',
-  './src/ui/notes.js',
   './src/ui/sheet.js',
-  './src/notes-index.js',
-  './src/learn.js',
-  './src/dates.js',
-  './src/ui/highlight-note.js',
-  './src/lib/zip.js',
-  './src/notefile.js',
-  './src/insights.js',
-  './src/clip.js',
-  './src/clock.js',
-  './src/garden.js',
-  './src/ui/growth.js',
-  './src/ui/types.js',
-  './src/relink.js',
-  './src/filters.js',
+  './src/ui/shelf.js',
   './src/ui/capture.js',
+  './src/ui/types.js',
+  './src/viewers/book.js',
+  './src/viewers/pdf.js',
 ];
 const VENDOR = [
   './vendor/marked-15.0.12/marked.esm.js',
@@ -71,6 +77,12 @@ const VENDOR = [
 ];
 
 let slowUntil = 0;
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+});
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

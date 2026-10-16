@@ -25,6 +25,18 @@
       const t = (JSON.parse(localStorage.getItem('readover.prefs') || '{}').theme) || 'system';
       if (t !== 'system') document.documentElement.dataset.theme = t;
     } catch {}
+
+    // Boot-time error trap: If an unhandled syntax or module error occurs during load,
+    // display a clean recovery card instead of leaving a blank unresponsive screen.
+    window.addEventListener('error', function (e) {
+      if (!e.message && !e.error) return;
+      var errBox = document.getElementById('boot-error-boundary');
+      if (errBox) {
+        errBox.style.display = 'flex';
+        var msgEl = document.getElementById('boot-error-msg');
+        if (msgEl) msgEl.textContent = e.message || (e.error && e.error.message) || 'Module loading failed';
+      }
+    });
   </script>
 </head>
 <body>
@@ -33,6 +45,17 @@
       Readover is designed for modern browsers (Chrome, Safari, Firefox, Edge). JavaScript must be enabled to read and save notes.
     </div>
   </noscript>
+  <div id="boot-error-boundary" style="display:none;position:fixed;inset:0;background:var(--bg,#e8ebe3);color:var(--ink,#141816);z-index:999999;padding:24px;align-items:center;justify-content:center;font-family:system-ui,-apple-system,sans-serif;">
+    <div style="max-width:440px;background:var(--card,#ffffff);border:1px solid var(--border,#cfd3ca);border-radius:12px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,0.12);text-align:left;">
+      <h2 style="margin:0 0 8px 0;font-size:18px;font-weight:600;">Readover Startup Notice</h2>
+      <p style="margin:0 0 12px 0;font-size:14px;color:var(--muted,#5c6158);line-height:1.4;">The app encountered a script error while loading. This commonly happens if an older version was cached by your browser.</p>
+      <div id="boot-error-msg" style="margin:0 0 16px 0;padding:8px 12px;background:var(--bg,#f4f5f1);border-radius:6px;font-family:monospace;font-size:12px;color:#c2410c;word-break:break-all;"></div>
+      <div style="display:flex;gap:8px;">
+        <button type="button" onclick="navigator.serviceWorker && navigator.serviceWorker.getRegistrations().then(function(rs){return Promise.all(rs.map(function(r){return r.unregister();}));}).then(function(){return caches.keys();}).then(function(ks){return Promise.all(ks.map(function(k){return caches.delete(k);}));}).then(function(){location.reload(true);});" style="background:#2b6b55;color:#fff;border:none;border-radius:6px;padding:10px 16px;font-weight:500;font-size:14px;cursor:pointer;">Clear cache &amp; reload</button>
+        <button type="button" onclick="location.reload();" style="background:transparent;border:1px solid var(--border,#cfd3ca);border-radius:6px;padding:10px 16px;font-size:14px;cursor:pointer;">Reload</button>
+      </div>
+    </div>
+  </div>
   <svg width="0" height="0" style="position:absolute" aria-hidden="true">
     <defs>
       <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.2l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17.2l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/></symbol>
@@ -517,8 +540,7 @@
             <dt>R</dt><dd>Shuffle again</dd>
             <dt>N</dt><dd>New note</dd>
             <dt>Ctrl Enter</dt><dd>Save the new note</dd>
-            <dt>/</dt><dd>Search notes</dd>
-            <dt>Ctrl Shift U</dt><dd>System diagnostics</dd>
+            <dt>Ctrl Shift U / D</dt><dd>System diagnostics &amp; stress suite</dd>
             <dt>Esc</dt><dd>Close</dd>
           </dl>
         </section>
@@ -648,6 +670,16 @@
       </div>
     </form>
   </dialog>
+
+  <!-- Service Worker Update Available Notification Banner -->
+  <aside id="sw-update-banner" class="sw-update-banner" hidden aria-live="polite" role="status">
+    <div class="sw-update-content">
+      <span class="sw-update-dot" aria-hidden="true"></span>
+      <span class="sw-update-text">An update is ready for Readover</span>
+      <button type="button" id="sw-update-btn" class="sw-update-btn">Update now</button>
+      <button type="button" id="sw-dismiss-btn" class="sw-update-dismiss" aria-label="Dismiss">✕</button>
+    </div>
+  </aside>
 
   <script type="module" src="./src/app.js"></script>
 </body>

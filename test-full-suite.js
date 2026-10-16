@@ -390,5 +390,48 @@ assert.ok(css.includes('@media (prefers-reduced-motion: reduce)'), 'style.css mu
 
 console.log('✅ CSS touch targets, 100dvh viewport rules, and diagnostic styles verified.');
 
-console.log('\n🎉 ALL 8 TEST SUITES COMPLETED WITH 100% SUCCESS!\n');
+/* =========================================================================
+   Test 9: Service Worker Shell & Cache File Integrity
+   ========================================================================= */
+console.log('\n--- Test 9: Service Worker Shell Cache & Assets Integrity ---');
+
+const swContent = fs.readFileSync('./sw.js', 'utf8');
+assert.ok(swContent.includes("'readover-shell-v7'"), 'sw.js must be bumped to readover-shell-v7');
+assert.ok(swContent.includes("SKIP_WAITING"), 'sw.js must support SKIP_WAITING message');
+
+// Extract SHELL array and verify every referenced file exists on disk
+const match = swContent.match(/const SHELL = \[([\s\S]*?)\];/);
+assert.ok(match, 'sw.js must define const SHELL array');
+const fileMatches = match[1].match(/'\.\/([^']+)'/g);
+assert.ok(fileMatches && fileMatches.length > 20, 'sw.js SHELL array must contain files');
+
+for (const m of fileMatches) {
+  const relPath = m.replace(/'/g, '');
+  if (relPath === './') continue;
+  const filePath = relPath.replace(/^\.\//, '');
+  assert.ok(fs.existsSync(filePath), `File in sw.js SHELL must exist on disk: ${filePath}`);
+}
+
+console.log(`✅ All ${fileMatches.length} Service Worker shell precache assets verified to exist on disk.`);
+
+/* =========================================================================
+   Test 10: Manifest & Module Export Linkage Verification
+   ========================================================================= */
+console.log('\n--- Test 10: Web App Manifest & Module Linkage Verification ---');
+
+const manifest = JSON.parse(fs.readFileSync('./manifest.json', 'utf8'));
+assert.strictEqual(manifest.share_target?.enctype, 'application/x-www-form-urlencoded', 'manifest.json share_target must specify enctype application/x-www-form-urlencoded');
+
+// Dynamic module import check
+const opdsMod = await import('./src/sources/opds.js');
+assert.ok(typeof opdsMod.parseAtomXml === 'function', 'src/sources/opds.js must export parseAtomXml');
+assert.ok(typeof opdsMod.parseOpds1Atom === 'function', 'src/sources/opds.js must export parseOpds1Atom');
+assert.ok(typeof opdsMod.parseOpds2Json === 'function', 'src/sources/opds.js must export parseOpds2Json');
+
+const attachMod = await import('./src/attachments.js');
+assert.ok(typeof attachMod.setupImageAttachments === 'function', 'src/attachments.js must export setupImageAttachments');
+
+console.log('✅ Web App Manifest enctype and all core ES module exports verified successfully.');
+
+console.log('\n🎉 ALL 10 TEST SUITES COMPLETED WITH 100% SUCCESS!\n');
 process.exit(0);

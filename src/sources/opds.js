@@ -347,3 +347,7 @@ export function makeSafeFilename(author, title, ext = 'epub') {
   const base = cAuthor ? `${cAuthor} - ${cTitle}` : cTitle;
   return `${base.slice(0, 100)}.${ext.toLowerCase()}`;
 }
+
+// Backward and test compatibility aliases
+export const parseAtomXml = parseOpds1Atom;
+export const parseOpdsXml = parseOpds1Atom;

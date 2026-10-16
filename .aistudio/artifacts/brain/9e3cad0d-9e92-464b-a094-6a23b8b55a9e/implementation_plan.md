@@ -1,171 +1,92 @@
-# End-to-End Test Suite, Runtime Stress Testing & Cross-Device Engineering (Revised)
+# Revised Production Hardening, Module Integrity & Deployment Plan
 
-A production-grade diagnostic framework, runtime stress testing suite, WCAG 2.1 AA accessibility hardening, mobile keyboard/100dvh viewport optimization, and multi-platform storage resilience system for Readover across phones, tablets, e-ink devices, and desktop workstations.
+## 1. Upstream & Downstream Error Analysis
 
----
+### Issue A: Fatal SyntaxError in `reader.js:14` (`setupImageAttachments`)
+- **Reported Error**: `reader.js:14 Uncaught SyntaxError: The requested module '../attachments.js' does not provide an export named 'setupImageAttachments' (at reader.js:14:10)`.
+- **Root Cause & Upstream Trigger**:
+  1. `setupImageAttachments` is exported in the working tree `/src/attachments.js`.
+  2. However, the Service Worker in `sw.js` was registered with `SHELL_CACHE = 'readover-shell-v6'` and `networkFirst()` with a 1500ms timeout fallback to cache.
+  3. Previous visits cached an older version of `attachments.js` into the `readover-shell-v6` CacheStorage before `setupImageAttachments` was added.
+  4. Because the cache version was never bumped to `v7`, any client with an active Service Worker served the stale, cached `attachments.js`.
+- **Fatal Knock-on Effects (Downstream)**:
+  1. In modern JavaScript ES module loaders, static `import` declarations are verified and linked during the Module Instantiation phase *before* any script body evaluates.
+  2. An export mismatch produces a fatal `SyntaxError` that terminates the evaluation of `src/app.js` and all imported UI modules.
+  3. As a result, `boot()` never executed, event listeners (click, scroll, keyboard shortcuts) were never attached to the DOM, and cards were never rendered. The page appeared as an inert, unresponsive HTML shell.
+- **Secondary Discovered Export Mismatch**:
+  - Our automated Node ESM validation revealed that `src/ui/diagnostics.js:11` imports `parseAtomXml` from `../sources/opds.js`, but `opds.js` exported only `parseOpds1Atom`. While currently loaded dynamically on shortcut press, this would trigger an identical fatal SyntaxError when launching the diagnostics panel.
 
-### User Review & Critical Decisions
-
-> [!IMPORTANT]
-> The following revisions and hardening rules have been incorporated into the architectural plan:
-> 1. **Environment-Aware OPDS Testing**: In-app diagnostics detect host capabilities: `/api/opds-proxy` is tested only when running against an active local Node/Express backend (`localhost` / custom backend), while static PWA and GitHub Pages environments strictly test direct CORS and user-configured external CORS proxies without reporting spurious 404 proxy errors.
-> 2. **Storage Eviction Defense & PWA Cache Health**: Diagnostic checks explicitly query `navigator.storage.persisted()` and `navigator.storage.persist()` (defending against iOS WebKit's 7-day Intelligent Tracking Prevention cache purges) alongside Service Worker cache version verification to detect and prevent "stale app shell" PWA lockups.
-> 3. **Mobile Keyboard Ergonomics (`interactive-widget=resizes-content` & `100dvh`)**: Mobile viewport meta is upgraded to `viewport-fit=cover, interactive-widget=resizes-content`, and sheet containers utilize `100dvh` so the virtual keyboard never obscures the note composer save bar, tags, or formatting controls.
-> 4. **Safe Diagnostic Keyboard Shortcut**: To avoid colliding with ChromeOS (Bookmark All Tabs: `Ctrl+Shift+D`) and macOS Safari (Add to Reading List: `Cmd+Shift+D`), the diagnostics shortcut is mapped to `Ctrl/Cmd+Shift+U` (Audit/Utility) in addition to an accessible trigger button in Settings (Tab 4).
-> 5. **Touch Target Density Balance**: Rather than artificially ballooning card and book cover dimensions to $48\times 48\text{px}$ (which damages mobile grid density), we use negative margin tap-target expansions (`pointer-events` hitboxes $\ge 44\text{px}$) that maintain compact visual elegance.
-> 6. **Comprehensive Runtime & Stress Assertions ("Never Lose a Keystroke")**:
->    - *Storage Quota Overflow*: Gracefully handles failed blob writes with a clean `"Device storage full — reading directly without offline caching"` banner; guarantees "Clear cached books" purges `store.blobs` without touching user notes or garden items.
->    - *Multi-Tab Synchronization*: Leverages `BroadcastChannel` and storage listeners to propagate note edits and graph updates across open tabs without requiring page reloads.
->    - *Network Flakiness & 409 Conflicts*: Stashes unsaved drafts locally during auth expiration/revocation (HTTP 401); surfaces clean side-by-side Conflict Resolver sheets during 409 collisions.
->    - *Memory Leak Guards*: Enforces explicit `URL.revokeObjectURL()` lifecycle hooks across all OPDS and attachment object URLs during reader unmounts.
->    - *Hostile Path Sanitization*: Sanitizes and tests cross-platform path safety across GitHub, Dropbox (disallowing `:` and `\`), and Windows/WebDAV (disallowing `< > : " / \ | ? *`).
-
----
-
-### 1. Overview & Core Concept
-
-- **What It Does**: Unifies automated CLI assertions and a live in-app diagnostic suite with deep runtime stress tests, WCAG 2.1 AA accessibility hardening, mobile virtual keyboard adaptation, and offline PWA reliability across Android, iOS, Windows, macOS, and Linux.
-- **Target Audience / Persona**: Readers and writers managing personal libraries across smartphones (one-handed thumb use, notches), tablets, and multi-monitor desktop environments.
-- **Key Value**: Guarantees zero lost thoughts under unstable network conditions, defends against browser storage eviction, eliminates keyboard occlusion bugs, and provides instant health verification.
+### Issue B: Manifest `enctype` Warning
+- **Reported Warning**: `Manifest: Enctype should be set to either application/x-www-form-urlencoded or multipart/form-data. It currently defaults to application/x-www-form-urlencoded`.
+- **Root Cause**: In `manifest.json`, the `share_target` declaration defined `action: "./"` and `method: "GET"`, but omitted the explicit `enctype` field required by modern Chromium manifest parsers.
+- **Mitigation**: Add `"enctype": "application/x-www-form-urlencoded"` to `manifest.json`.
 
 ---
 
-### 2. User Experience & Visual Design
+## 2. Comprehensive Implementation Steps
 
-#### Key User Flows
-1. **Interactive Diagnostics & Runtime Stress Suite (In-App)**:
-   - Accessed via Settings (Tab 4: App & Device) or shortcut `Ctrl/Cmd+Shift+U`.
-   - Organizes tests into two distinct tabs:
-     - **Core Health & Specs**: Storage object stores, OPDS parser/proxy, reader CFI locators, canvas WebP compression, and WCAG AA contrast/ARIA audit.
-     - **Runtime & Stress Assertions**: Storage stress quota test (20MB blob allocation and cleanup), hostile path sanitizer test (10 edge-case strings), outbox integrity and offline queueing, multi-tab broadcast messaging, and Object URL leak inspection.
-   - Provides live progress badges, actionable error remediation recommendations, and an **Export Health Report** button.
-2. **Mobile Composer with Keyboard Adaptation**:
-   - Tapping "Write note" or "Make it a note" opens the composer sheet sized with `height: 100dvh; max-height: 100dvh`.
-   - As the virtual keyboard opens, `interactive-widget=resizes-content` ensures the viewport shrinks predictably.
-   - The sticky `.compose-submit-bar` remains pinned directly above the mobile keyboard with `Save note` and citation triggers immediately reachable.
-3. **PWA Standalone & Cold Offline Launch**:
-   - Launches instantly offline from Service Worker cache.
-   - Internal links (`readover://jump`, `[[WikiLink]]`) are trapped within the PWA frame rather than breaking out into new Safari/Chrome tabs.
-   - Dynamic `<meta name="theme-color">` updates ensure the OS status bar harmonizes with light/dark theme switches.
+### Step 1: Export Consistency & Upstream Module Hardening
+1. **`src/sources/opds.js`**:
+   - Export both `parseOpds1Atom` and its alias `export { parseOpds1Atom as parseAtomXml }` so all callers (`diagnostics.js`, `opds.js`, tests) resolve seamlessly without SyntaxErrors.
+2. **`src/attachments.js` & `src/ui/reader.js`**:
+   - Verify `setupImageAttachments` export and signature:
+     ```js
+     export function setupImageAttachments(textarea, { getSource = () => null, folder = '' } = {})
+     ```
+   - Ensure null-safety so if a textarea or DOM node is missing, it exits gracefully without throwing.
+3. **Automated ESM Validation Script**:
+   - Run our Node ESM import test on all 51 JavaScript files in `src/` to verify 0 SyntaxErrors and 100% export-import linkage across the dependency graph.
 
-#### Visual Identity & Theme
-- **Theme Palette**:
-  - Light: Canvas `#fbf9f5`, Surface `#ffffff`, Text `#1c1917` (15:1 contrast ratio), Borders `#e7e5e4`, Accent `#0284c7`.
-  - Dark: Canvas `#141816`, Surface `#1c211e`, Text `#e8ebe3` (13:1 contrast ratio), Borders `#29332e`, Accent `#38bdf8`.
-- **Typography & Proportions**:
-  - `Literata` serif for editorial reading and highlights; system geometric sans for UI controls.
-  - Tabular numerals (`tabular-nums font-mono`) for coordinates, quotas, and test metrics.
-  - Focus rings: High-contrast `2px solid var(--accent)` with `outline-offset: 2px` on `:focus-visible`.
+### Step 2: Manifest Hardening (`manifest.json`)
+1. Explicitly specify `"enctype": "application/x-www-form-urlencoded"` under `share_target`.
+2. Confirm relative values for `"id": "./"`, `"start_url": "./"`, and `"scope": "./"` to guarantee correct operation on GitHub Pages subpaths (e.g., `user.github.io/readover/`) and custom apex domains alike.
 
----
+### Step 3: Service Worker Cache Version Bump (`sw.js`)
+1. Bump `SHELL_CACHE` from `readover-shell-v6` to `readover-shell-v7`.
+2. Add missing application modules to the `SHELL` precache list:
+   - `./src/ui/diagnostics.js`
+   - `./src/articles.js`
+3. Verify cache purging in `activate` event: ensure all older caches (`readover-shell-v6`, `readover-shell-v5`, etc.) are purged immediately and clients are claimed via `self.clients.claim()`.
+4. Ensure `sw.js` supports the `SKIP_WAITING` message from the in-app update banner.
 
-### 3. Key Product Decisions & Trade-Offs
+### Step 4: Stale-Cache Prevention & Boot Error Boundary
+1. **Global Boot Error Boundary in `index.html`**:
+   - Add a lightweight error listener in `index.html` before the module scripts:
+     ```html
+     <script>
+       window.addEventListener('error', function(e) {
+         var banner = document.getElementById('sw-update-banner');
+         if (banner) {
+           banner.hidden = false;
+           var msg = banner.querySelector('.update-msg');
+           if (msg) msg.textContent = 'App update detected or cache refreshed. Reload to continue.';
+         }
+       }, { once: true });
+     </script>
+     ```
+   - If an unhandled module load failure or stale cache error occurs, the user immediately sees a clean, accessible banner: **"App update detected. [Reload to continue]"** instead of an unresponsive screen.
+2. **In-App Service Worker Update Banner (`src/app.js` & `index.html`)**:
+   - Detect when a new service worker is waiting (`reg.waiting`).
+   - Display a non-intrusive floating banner: **"An update to Readover is ready. [Refresh]"**.
+   - Clicking sends `{ type: 'SKIP_WAITING' }` to the waiting worker and reloads the window on `controllerchange`.
+3. **Hard Cache Flush Option in Diagnostics & Settings**:
+   - Provide a 1-click **"Clear All Caches & Reload"** button that unregisters workers, deletes all CacheStorage caches, and reloads from network.
 
-- **Decision 1: Environment-Specific OPDS Proxy Assertion**
-  - *Chosen Approach*: Check `location.hostname` in diagnostics. If `localhost` or local dev IP, test `/api/opds-proxy`. If hosted on GitHub Pages or custom domain without a backend, test direct CORS and user-configured CORS proxy settings, skipping local endpoint tests.
-  - *Why*: Eliminates false negative test failures on static PWA deployments while thoroughly testing the Node.js proxy in local/self-hosted environments.
-- **Decision 2: Mobile Viewport Virtual Keyboard Resizing**
-  - *Chosen Approach*: Set `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">` and style sheets with `100dvh`.
-  - *Why*: Solves the classic mobile keyboard occlusion problem natively in Chromium and iOS 15.4+ WebKit without brittle JavaScript resize polling.
-- **Decision 3: Keyboard Shortcut Mapping (`Ctrl/Cmd+Shift+U`)**
-  - *Chosen Approach*: Replace `Ctrl/Cmd+Shift+D` with `Ctrl/Cmd+Shift+U` and provide a visible diagnostic button in Settings.
-  - *Why*: Prevents OS-level browser shortcut conflicts on ChromeOS (Bookmark All Tabs) and macOS Safari (Reading List).
-- **Decision 4: "Never Lose a Keystroke" Local Stashing**
-  - *Chosen Approach*: On 401 auth expiration or unexpected network failure during a save, immediately stash the editor content in `localStorage('readover.draft.<key>')` and `store.outbox`, notify the user with a retry prompt, and never clear the active textarea.
-  - *Why*: In a personal knowledge system, uncommitted thoughts must never be vaporized by network or credential errors.
-
----
-
-### 4. Technical Architecture & Data Strategy
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          READOVER PLATFORM RUNTIME                          │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ Viewport & Ergonomics:                                                      │
-│ • interactive-widget=resizes-content | 100dvh dynamic sheet sizing          │
-│ • Safe-area insets: env(safe-area-inset-top), env(safe-area-inset-bottom)   │
-│ • Tap hitboxes >= 44px via negative padding; compact visual typography      │
-└───────────────┬─────────────────────────────────────────────┬───────────────┘
-                │                                             │
-                ▼                                             ▼
-┌─────────────────────────────────────────┐   ┌───────────────────────────────┐
-│     IN-APP DIAGNOSTICS & STRESS SUITE   │   │  MULTI-DEVICE SYNC & STORAGE  │
-│        (src/ui/diagnostics.js)          │   │  • BroadcastChannel Cross-Tab │
-│ ─────────────────────────────────────── │   │  • Persistent Storage Request │
-│ Tab 1: Core System & Accessibility      │   │  • 409 Conflict Resolver Sheet│
-│ • IndexedDB 7 stores + Quota check      │   │  • Outbox Queue with Backoff  │
-│ • OPDS Parser & Host-Aware Proxy Test   │   │  • Object URL Memory Cleanup  │
-│ • Annotation Deep-Link Locator Contract │   └───────────────┬───────────────┘
-│ • Canvas WebP Compression Engine        │                   │
-│ • WCAG AA Contrast, ARIA & Focus Audit  │                   │
-│ ─────────────────────────────────────── │                   │
-│ Tab 2: Runtime & Stress Assertions      │                   │
-│ • 20MB Blob Quota Overflow Simulation   │                   │
-│ • 10-Pattern Hostile Path Sanitizer     │                   │
-│ • Outbox Serialization & Replay Check   │                   │
-│ • Multi-Tab Broadcast Message Test      │                   │
-└───────────────────┬─────────────────────┘                   │
-                    │                                         │
-                    ▼                                         ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                       CORE REPOSITORY & SERVICE WORKER                      │
-│ • sw.js (readover-shell-v6, cache migration, offline link-trapping)        │
-│ • store.js & library.js (IndexedDB, fallback local storage, sanitizePath)   │
-│ • notefile.js & markdown.js (prose formatting, wikilinks, image resolver)  │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-#### Diagnostic Suite Test Specifications
-1. **Storage & Persistence**:
-   - `navigator.storage.persisted()` check; request persistence if ungranted.
-   - Verify all 7 object stores exist and accept CRUD transactions.
-   - Verify `readover.lastSync`, `readover.sources`, and dirty flags.
-2. **OPDS & Network Environment**:
-   - If running locally: test `/api/opds-proxy` with Atom XML sample.
-   - If static/production: verify XML parser and check direct CORS or user proxy settings.
-   - URL resolution: verify relative links resolve cleanly against feed bases.
-3. **Cross-Tab & Sync**:
-   - Emit event over `new BroadcastChannel('readover-sync')`; verify receipt in diagnostic listener.
-4. **Stress & Error Resilience**:
-   - Storage Stress: Generate temporary 20MB test payload, test write/read/delete cycle, report quota usage.
-   - Cache Cleaner Isolation: Confirm book blob cleanup does not touch `items` or `garden` tables.
-   - Path Sanitization: Verify paths with `/`, `\`, `:`, `?`, `*`, `<`, `>`, `"`, `|`, emoji, and trailing periods produce legal, deterministic identifiers across GitHub, Dropbox, and WebDAV.
-   - Conflict Detection: Verify 409 simulation preserves baseSha and triggers merge/resolution rather than overwriting.
+### Step 5: Static Deployment & Documentation Hardening
+1. **Repository Root Files**:
+   - Ensure `.nojekyll` exists at repo root.
+   - Verify `404.html` redirection/fallback for SPA routing on GitHub Pages.
+2. **README Documentation Update**:
+   - **Static Deployment Checklist**: Relative asset paths, `.nojekyll` requirement, SPA 404 handling.
+   - **CORS Troubleshooting Guide**: Caddy and Nginx reverse proxy configs for Calibre/OPDS servers, Cloudflare R2 / AWS S3 CORS headers.
+   - **PWA Offline & Mobile Installation Matrix**: Service Worker registration verification, clearing stale cache, iOS WebKit persistent storage, and Android Chrome standalone installation criteria.
+3. **Design Notes Compliance Audit**:
+   - Verify serene warm paper palette (`#f5f5f0` light, `#1c1c1a` dark), Literata typography, minimal UI chrome, full-screen immersive reading, and touch targets.
 
 ---
 
-### 5. Implementation Steps
-
-1. **Viewport & Keyboard Adaptation (`index.html`, `src/style.css`)**:
-   - Update `<meta name="viewport">` in `index.html` to include `interactive-widget=resizes-content`.
-   - Update `.sheet`, `.sheet-tall`, `.compose-sheet`, and modal overlays in `src/style.css` to use `height: 100dvh; max-height: 100dvh;` with safe-area bottom padding.
-   - Ensure touch hitboxes have at least $44\text{px}$ effective tap areas via padding while keeping compact visual text.
-
-2. **Cross-Tab Synchronization (`src/sync.js`, `src/app.js`)**:
-   - Initialize a global `BroadcastChannel('readover-sync')` with `window.addEventListener('storage')` fallback.
-   - Broadcast `readover:note-updated`, `readover:sources-changed`, and `readover:state-updated` events across tabs so secondary windows reflect edits without a reload.
-
-3. **In-App Diagnostic & Stress Modal (`src/ui/diagnostics.js`)**:
-   - Implement the complete diagnostic runner dialog with two view modes:
-     - **Core Verification**: Storage stores, persistent storage status, host-aware OPDS parsing, annotation contracts, WebP compression, WCAG contrast & ARIA checklist.
-     - **Runtime Stress Assertions**: Storage stress quota test, cross-platform path sanitizer test, multi-tab broadcast test, outbox serialization test, and Object URL revocation audit.
-   - Bind to shortcut `Ctrl/Cmd+Shift+U` and add a button in Settings (Tab 4).
-   - Add **Export Health Report** feature generating clean Markdown and JSON reports.
-
-4. **Automated CLI Test Runner (`test-full-suite.js`)**:
-   - Expand Node.js test script to run automated headless assertions on:
-     - Scoping and insight extraction logic.
-     - Markdown frontmatter and wikilink normalization.
-     - Hostile path sanitizer matrix (Windows, Dropbox, Git illegal chars).
-     - Outbox queue serialization and retry logic.
-     - Atom XML & JSON-LD parsing algorithms.
-   - Update `package.json` to include `"test": "node test-full-suite.js"`.
-
-5. **Accessibility & PWA Hardening**:
-   - Ensure all icon buttons have explicit `aria-label`s.
-   - Set visible focus indicators (`:focus-visible`).
-   - Add `@media (prefers-reduced-motion: reduce)` rules in `src/style.css`.
-   - Add browser feature-check `<noscript>` / legacy fallback banner in `index.html`.
-   - Ensure internal links do not break out of standalone PWA window.
-   - Sync `<meta name="theme-color">` dynamically with active theme.
+## 3. Verification & Validation Plan
+1. **Automated ESM Dependency Check**: Run Node ESM loader on all modules to ensure zero syntax errors or missing exports.
+2. **Applet Compilation**: Run `compile_applet` and `lint_applet` to verify clean build.
+3. **Manifest Validation**: Inspect `manifest.json` against web app manifest schema.
+4. **Service Worker Verification**: Test cache activation, update messaging, and offline resource availability.

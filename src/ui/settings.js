@@ -245,7 +245,8 @@ export function initSettings(app) {
     form.elements.repo.focus();
   }
 
-  form.querySelector('[data-cancel]').onclick = () => (form.hidden = true);
+  const cancelBtn = form.querySelector('[data-cancel]');
+  if (cancelBtn) cancelBtn.onclick = () => (form.hidden = true);
   form.onsubmit = async (e) => {
     e.preventDefault();
     const f = form.elements;

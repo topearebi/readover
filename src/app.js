@@ -59,7 +59,7 @@ function applyTheme() {
     else m.setAttribute('content', paper);
   });
 }
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+window.matchMedia?.('(prefers-color-scheme: dark)')?.addEventListener?.('change', applyTheme);
 
 /* ---------------- Scope ---------------- */
 
@@ -1139,7 +1139,7 @@ async function reloadIfOpen() {
 /* ---------------- Input ---------------- */
 
 window.addEventListener('keydown', (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'u') {
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key.toLowerCase() === 'u' || e.key.toLowerCase() === 'd')) {
     e.preventDefault();
     import('./ui/diagnostics.js').then((m) => m.openDiagnostics(app));
     return;
@@ -1358,10 +1358,65 @@ async function boot() {
 }
 
 
+function setupServiceWorkerUpdates(registration) {
+  function showUpdatePrompt() {
+    const banner = document.getElementById('sw-update-banner');
+    if (!banner) return;
+    banner.hidden = false;
+    banner.classList.add('is-visible');
+
+    const updateBtn = document.getElementById('sw-update-btn');
+    if (updateBtn) {
+      updateBtn.onclick = () => {
+        if (registration.waiting) {
+          registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+        } else {
+          window.location.reload();
+        }
+      };
+    }
+
+    const dismissBtn = document.getElementById('sw-dismiss-btn');
+    if (dismissBtn) {
+      dismissBtn.onclick = () => {
+        banner.classList.remove('is-visible');
+        setTimeout(() => { banner.hidden = true; }, 250);
+      };
+    }
+  }
+
+  // If a worker is already waiting in background
+  if (registration.waiting) {
+    showUpdatePrompt();
+  }
+
+  registration.addEventListener('updatefound', () => {
+    const newWorker = registration.installing;
+    if (!newWorker) return;
+    newWorker.addEventListener('statechange', () => {
+      if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+        showUpdatePrompt();
+      }
+    });
+  });
+}
+
+let swRefreshing = false;
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (swRefreshing) return;
+    swRefreshing = true;
+    window.location.reload();
+  });
+}
+
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   // updateViaCache 'none': always check sw.js itself against the server.
   navigator.serviceWorker
     .register('./sw.js', { updateViaCache: 'none' })
+    .then((reg) => {
+      setupServiceWorkerUpdates(reg);
+    })
     .catch((err) => console.warn('Service worker not registered', err));
 }
 
