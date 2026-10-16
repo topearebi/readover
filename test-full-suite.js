@@ -433,5 +433,22 @@ assert.ok(typeof attachMod.setupImageAttachments === 'function', 'src/attachment
 
 console.log('✅ Web App Manifest enctype and all core ES module exports verified successfully.');
 
-console.log('\n🎉 ALL 10 TEST SUITES COMPLETED WITH 100% SUCCESS!\n');
+/* =========================================================================
+   Test 11: Static AST Linkage & Complete ES Module Integrity Checker
+   ========================================================================= */
+console.log('\n--- Test 11: Static AST Linkage & Complete ES Module Integrity Checker ---');
+
+const { verifyAstLinkage } = await import('./test-ast-linkage.js');
+const astResult = verifyAstLinkage({ directories: ['src'], files: ['sw.js'] });
+
+if (!astResult.success) {
+  console.error('AST Linkage Errors:', astResult.errors);
+}
+assert.ok(astResult.success, `AST Linkage check failed with ${astResult.errors.length} error(s)`);
+assert.ok(astResult.totalImportsChecked > 350, 'Must check at least 350 static imports');
+assert.ok(astResult.totalDynamicImportsChecked > 20, 'Must check dynamic imports');
+
+console.log(`✅ AST Linkage Check: Verified 0 missing exports across ${astResult.filesChecked} modules (${astResult.totalImportsChecked} static imports, ${astResult.totalDynamicImportsChecked} dynamic imports).`);
+
+console.log('\n🎉 ALL 11 TEST SUITES COMPLETED WITH 100% SUCCESS!\n');
 process.exit(0);

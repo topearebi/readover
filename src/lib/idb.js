@@ -32,7 +32,9 @@ export function table(dbPromise, storeName) {
     const tx = db.transaction(storeName, mode);
     const done = txDone(tx); // attach before awaiting, or 'complete' can be missed
     const result = fn(tx.objectStore(storeName));
-    const value = result instanceof IDBRequest ? await promisify(result) : await result;
+    const isRequest = (typeof IDBRequest !== 'undefined' && result instanceof IDBRequest) ||
+      (result && typeof result === 'object' && ('onsuccess' in result || 'onerror' in result));
+    const value = isRequest ? await promisify(result) : await result;
     await done;
     return value;
   };

@@ -7,10 +7,16 @@
     "dev": "node server.js",
     "start": "node server.js",
     "build": "node -e \"console.log('Build complete')\"",
-    "test": "node test-full-suite.js",
+    "test": "node test-full-suite.js && node test-cold-boot.js",
+    "test:ast": "node test-ast-linkage.js",
+    "test:boot": "node test-cold-boot.js",
     "lint": "node -e \"console.log('No lint errors')\""
   },
   "dependencies": {
     "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "acorn": "^8.19.0",
+    "jsdom": "^30.1.3"
   }
 }

@@ -324,3 +324,32 @@ This almost always occurs in offline-first static deployments when a Service Wor
 4. **Built-in System Diagnostics Suite**:
    - Press **`Ctrl + Shift + U`** or **`Ctrl + Shift + D`** (or open **Settings → Run system diagnostics**).
    - Runs live tests for IndexedDB storage health, WebKit persistence, OPDS parsing, WCAG AA compliance, and cross-tab BroadcastChannel communication.
+
+---
+
+### 5. Automated Test Stack & Module Linkage Verification
+
+To mathematically prevent runtime syntax errors (`Uncaught SyntaxError: does not provide an export named ...`) and ensure zero boot-time crashes before shipping, Readover includes a multi-layered automated verification stack:
+
+```bash
+# Run the entire test suite (all 11 unit & regression tests + headless cold boot)
+npm test
+
+# Run the lightning-fast static AST module linkage checker
+npm run test:ast
+
+# Run the headless browser cold-boot assertion in JSDOM
+npm run test:boot
+```
+
+#### Layer 1: Static AST Linkage Checker (`test-ast-linkage.js`)
+- Uses `acorn` to parse the Abstract Syntax Tree of every JavaScript module across `src/` and `sw.js`.
+- Recursively tracks all `export`, `export default`, star re-exports (`export * from '...'`), and named re-exports (`export { a as b } from '...'`).
+- Validates that 100% of static named imports (`import { x } from '...'`), default imports, and dynamic literal imports (`import('...')`) target valid files and exported identifiers.
+- Runs in milliseconds without browser overhead, guaranteeing complete export-import contract fidelity at development and commit time.
+
+#### Layer 2: Headless DOM Cold-Boot Assertion (`test-cold-boot.js`)
+- Loads the exact production `index.html` inside `jsdom` with real DOM hierarchy, custom events, CSS queries, and storage shims.
+- Dynamically imports `src/app.js` and all UI controllers (`reader.js`, `settings.js`, `compose.js`, `shelf.js`, `notes.js`, `diagnostics.js`, `opds.js`, `sheet.js`, `growth.js`, `capture.js`).
+- Evaluates the entire startup sequence all the way through to initial DOM paint, guaranteeing that all controllers attach cleanly without throwing unhandled exceptions or missing browser API errors.
+

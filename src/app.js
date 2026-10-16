@@ -53,10 +53,11 @@ function applyTheme() {
   const { theme } = store.getPrefs();
   if (theme === 'system') delete document.documentElement.dataset.theme;
   else document.documentElement.dataset.theme = theme;
-  const paper = getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();
+  const paper = (typeof getComputedStyle === 'function' ? getComputedStyle(document.documentElement)?.getPropertyValue('--paper')?.trim() : '') || '#e8ebe3';
   document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
-    if (theme === 'system') m.setAttribute('content', m.media.includes('dark') ? '#141816' : '#e8ebe3');
-    else m.setAttribute('content', paper);
+    const media = m.getAttribute?.('media') || m.media || '';
+    if (theme === 'system') m.setAttribute('content', media.includes('dark') ? '#141816' : '#e8ebe3');
+    else m.setAttribute('content', paper || '#e8ebe3');
   });
 }
 window.matchMedia?.('(prefers-color-scheme: dark)')?.addEventListener?.('change', applyTheme);
