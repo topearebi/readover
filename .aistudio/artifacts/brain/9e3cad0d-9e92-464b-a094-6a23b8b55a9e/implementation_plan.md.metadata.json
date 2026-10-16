@@ -1,6 +1,6 @@
 {
-  "summary": "Revised implementation plan incorporating mobile virtual keyboard autocomplete cleanup, [[TargetPath|DisplayTitle]] link formatting convention, live reader DOM & connection footer synchronization on save, and cross-platform accessibility/touch compliance.",
-  "updatedAt": "2026-10-15T11:13:59.000698697Z",
+  "summary": "Revised implementation plan incorporating relative URL normalization for OPDS catalogs (covers, feeds, acquisitions) and dual composer/reader image paste & drop support into src/ui/compose.js and src/ui/reader.js.",
+  "updatedAt": "2026-10-15T14:30:07.249186980Z",
   "requestFeedback": true,
   "userFacing": true
 }

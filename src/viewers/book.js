@@ -189,8 +189,9 @@ export async function openBook(item, blob, title, opts = {}) {
     view.addAnnotation({ value: cfi }).catch(() => {});
     await saveProgress(item, { highlights });
     try {
-      const saved = await opts.onHighlight({ text: h.text, comment: h.comment, chapter: h.chapter, page: h.page, at: cfi, title, tags });
+      const saved = await opts.onHighlight({ text: h.text, comment: h.comment, chapter: h.chapter, page: h.page, at: cfi, title, tags, progress: loc.fraction != null ? Number(loc.fraction.toFixed(2)) : null });
       if (saved?.file) {
+
         h.file = saved.file;
         await saveProgress(item, { highlights });
       }

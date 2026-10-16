@@ -67,14 +67,47 @@ export function titleFromQuote(quote, words = 8) {
   return all.length > words ? `${head}…` : head || 'Untitled insight';
 }
 
-/** The Markdown body of an insight: the quote, where it's from, a hidden anchor, your thought. */
-export function insightBody({ quote, attribution = '', anchor = null, thought = '', related = [] }) {
-  const lines = String(quote).trim().split(/\r?\n/).map((l) => (l.trim() ? `> ${l.trim()}` : '>'));
-  if (attribution) lines.push('>', `> — ${attribution}`);
+/** The Markdown body of an insight: the quote, where it's from, a hidden anchor, your thought, and provenance. */
+export function insightBody({ quote, attribution = '', anchor = null, thought = '', related = [], sourceTitle = '' }) {
+  const lines = [];
+  const cleanSource = String(sourceTitle || '').replace(/[*_`]/g, '').trim();
+  const bookLink = cleanSource ? `[[${cleanSource}]]` : '';
+  const locOnly = attribution.replace(new RegExp(`^${cleanSource}[,\\s]*`, 'i'), '').trim();
+
+  // 1. Obsidian-compatible citation callout
+  if (bookLink) {
+    lines.push(`> [!quote]+ ${bookLink}${locOnly ? ` (${locOnly})` : ''}`);
+  }
+  for (const l of String(quote).trim().split(/\r?\n/)) {
+    lines.push(l.trim() ? `> ${l.trim()}` : '>');
+  }
+  if (attribution) {
+    const attr = bookLink ? `— ${bookLink}${locOnly ? `, ${locOnly}` : ''}` : `— ${attribution}`;
+    lines.push('>', `> ${attr}`);
+  }
   if (anchor) lines.push(`<!-- readover ${JSON.stringify(anchor)} -->`);
+
+  const parts = [lines.join('\n')];
   const mine = String(thought || '').trim();
-  const links = related.length ? `\n\n## Related\n\n${related.map((l) => `- ${l}`).join('\n')}` : '';
-  return `${lines.join('\n')}${mine ? `\n\n${mine}` : ''}${links}`;
+  if (mine) parts.push(mine);
+
+  // 2. Deterministic Provenance section with jump-to-source deep link
+  if (anchor?.book) {
+    const jumpUrl = `readover://open?book=${encodeURIComponent(anchor.book)}&at=${encodeURIComponent(anchor.at || '')}`;
+    const prov = [
+      '## Source & Provenance',
+      `- Source: ${bookLink || cleanSource || 'Book'}`,
+      locOnly ? `- Location: ${locOnly}` : null,
+      `- [Jump to passage in book](${jumpUrl})`,
+    ].filter(Boolean);
+    parts.push(prov.join('\n'));
+  }
+
+  if (related.length) {
+    parts.push(`## Related\n\n${related.map((l) => `- ${l}`).join('\n')}`);
+  }
+
+  return parts.join('\n\n');
 }
 
 /**
@@ -91,16 +124,27 @@ export async function createInsight({ quote, sourceTitle = '', attribution = '',
   const root = String(dest.root || '').replace(/^\/+|\/+$/g, '');
   const folder = [root, highlightsFolder()].filter(Boolean).join('/');
   const path = await newNotePath(folder, finalTitle.replace(/…$/, ''), async (p) => Boolean(await store.items.get(store.keyOf(dest.id, p))));
+
+  // Highlight Metadata Contract: ensure type: highlight and deterministic coordinates
+  const highlightMeta = {
+    ...(sourceTitle ? { source: sourceTitle, book_title: sourceTitle } : {}),
+    ...(anchor?.book ? { book_ref: anchor.book, book_format: anchor.format || (anchor.book.endsWith('.pdf') ? 'pdf' : 'epub') } : {}),
+    ...(anchor?.at ? { locator: { type: anchor.format === 'pdf' ? 'pdf_page' : 'epubcfi', cfi: anchor.at, page: anchor.page, chapter: anchor.chapter } } : {}),
+    ...meta,
+  };
+  if (!highlightMeta.type) highlightMeta.type = 'highlight';
+
   const text = newNoteText({
     title: finalTitle,
     tags,
-    extra: { ...(sourceTitle ? { source: sourceTitle } : {}), ...meta },
-    body: insightBody({ quote, attribution, anchor, thought, related }),
+    extra: highlightMeta,
+    body: insightBody({ quote, attribution, anchor, thought, related, sourceTitle }),
   });
   const item = await library.writeNote(dest, path, text, { message: `Readover: new insight ${path}` });
   bump();
   return { item, where: dest.type === 'device' ? '' : library.displayName(dest), file: `${store.sourceKey(dest)}|${path}` };
 }
+
 
 /* ---------- The inbox ---------- */
 

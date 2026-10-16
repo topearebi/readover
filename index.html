@@ -48,7 +48,10 @@
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke="currentColor" fill="none" stroke-width="2"/><path d="M16.5 16.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
       <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z" stroke="currentColor" fill="none" stroke-width="2" stroke-linejoin="round"/></symbol>
       <symbol id="i-cultivate" viewBox="0 0 24 24"><path d="M12 21v-8M12 13c0-3.5-2.5-5.5-6-5.5 0 4 2.5 5.5 6 5.5zM12 13c0-4 3-6.5 7-6.5 0 4.5-3 6.5-7 6.5zM5 21c2.5-.8 5-.8 7-.8s4.5 0 7 .8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+      <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" fill="none" stroke-width="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><polyline points="21 15 16 10 5 21" stroke="currentColor" fill="none" stroke-width="2"/></symbol>
+      <symbol id="i-opds" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke="currentColor" fill="none" stroke-width="2"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" stroke="currentColor" fill="none" stroke-width="2"/><circle cx="12" cy="10" r="3" stroke="currentColor" fill="none" stroke-width="2"/><path d="M12 3v3M12 14v4" stroke="currentColor" stroke-width="2"/></symbol>
     </defs>
+
   </svg>
 
   <header class="topbar">
@@ -123,197 +126,389 @@
         <button class="icon-btn" data-close aria-label="Close"><svg class="i"><use href="#i-close"/></svg></button>
       </div>
 
-      <section class="settings-group settings-first" id="account-group">
-        <h3>GitHub account</h3>
-        <p class="hint">One token for all your repos. Kept only on this device.</p>
-        <div class="token-row">
-          <input id="token-input" type="password" placeholder="Paste a token (github_pat_…)" autocomplete="off" aria-label="GitHub token" />
-        </div>
-        <p id="token-status" class="hint token-status"></p>
-        <details class="how">
-          <summary>How to get a token</summary>
-          <ol>
-            <li><a id="token-link" target="_blank" rel="noopener">Open GitHub's token page</a> (name and permission are filled in).</li>
-            <li>Under <b>Repository access</b>, choose <b>All repositories</b>, or just your notes and books repos.</li>
-            <li>Generate it, copy it, and paste it here.</li>
-          </ol>
-        </details>
-      </section>
+      <nav class="settings-tabs" role="tablist" aria-label="Settings categories">
+        <button type="button" class="settings-tab is-active" data-tab="tab-sources" role="tab" aria-selected="true">Sources &amp; Sync</button>
+        <button type="button" class="settings-tab" data-tab="tab-garden" role="tab" aria-selected="false">Garden</button>
+        <button type="button" class="settings-tab" data-tab="tab-reading" role="tab" aria-selected="false">Reading &amp; Export</button>
+        <button type="button" class="settings-tab" data-tab="tab-app" role="tab" aria-selected="false">App &amp; Device</button>
+      </nav>
 
-      <section class="settings-group">
-        <h3>Libraries</h3>
-        <div id="source-list" class="source-list"></div>
-        <div class="row-actions">
-          <button id="add-repo-btn" class="btn">Add a GitHub repo</button>
-          <button id="add-folder-btn" class="btn">Open a folder</button>
-          <input type="file" id="folder-input" webkitdirectory multiple hidden />
-        </div>
+      <!-- Tab 1: Sources & Sync -->
+      <div id="tab-sources" class="settings-tab-panel is-active" role="tabpanel">
+        <section class="settings-group settings-first">
+          <h3>Connected Libraries</h3>
+          <p class="hint">Your notes, books, and archives mount together across Readover.</p>
+          <div id="source-list" class="source-list"></div>
+        </section>
 
-        <form id="repo-form" class="repo-form" hidden>
-          <h3 id="repo-form-title">Add a GitHub repo</h3>
-          <input type="hidden" name="id" />
-          <label class="field">Repository
-            <input name="repo" placeholder="owner/repo or a github.com link" autocomplete="off" autocapitalize="off" spellcheck="false" required />
-          </label>
-          <details class="more-options">
-            <summary>More options</summary>
-            <div class="field-pair">
-              <label class="field">Branch
-                <input name="branch" placeholder="Default" autocapitalize="off" spellcheck="false" />
-              </label>
-              <label class="field">Only this folder
-                <input name="root" placeholder="Whole repo" autocapitalize="off" spellcheck="false" />
-              </label>
-            </div>
-            <label class="field">Skip folders
-              <input name="ignore" placeholder="templates, archive" autocapitalize="off" spellcheck="false" />
-            </label>
-            <label class="field">Name
-              <input name="name" placeholder="Repo name" />
-            </label>
-            <label class="field">Token for this repo only
-              <input name="token" type="password" placeholder="Uses your account token" autocomplete="off" />
-            </label>
-          </details>
-          <div class="row-actions">
-            <button class="btn btn-primary" type="submit">Save and sync</button>
-            <button class="btn btn-quiet" type="button" data-cancel>Cancel</button>
+        <section class="settings-group">
+          <h3>Connect a Source</h3>
+          <p class="hint">Mount cloud repositories, self-hosted WebDAV, or object storage.</p>
+          <div class="connect-sources-list">
+            <!-- Dropbox -->
+            <details class="provider-accordion" id="accordion-dropbox">
+              <summary>
+                <span>Dropbox</span>
+                <span class="source-type-pill writeable">App Folder</span>
+              </summary>
+              <div class="provider-accordion-body">
+                <p class="hint">Stores notes and books in your private <code>/Apps/Readover</code> folder.</p>
+                <div class="row-actions">
+                  <button type="button" id="dbx-auth-btn" class="btn btn-primary">Sign in with Dropbox</button>
+                </div>
+                <details class="more-options">
+                  <summary>Or enter an Access Token manually</summary>
+                  <label class="field">Access Token
+                    <input id="dbx-token-input" type="password" placeholder="sl.u.AF..." autocomplete="off" />
+                  </label>
+                  <label class="field">Custom Name (optional)
+                    <input id="dbx-name-input" placeholder="Dropbox Notes" />
+                  </label>
+                  <div class="row-actions">
+                    <button type="button" id="dbx-save-token-btn" class="btn">Save Dropbox Token</button>
+                  </div>
+                </details>
+              </div>
+            </details>
+
+            <!-- GitHub -->
+            <details class="provider-accordion" id="accordion-github">
+              <summary>
+                <span>GitHub</span>
+                <span class="source-type-pill writeable">Git Repository</span>
+              </summary>
+              <div class="provider-accordion-body">
+                <div class="token-row">
+                  <input id="token-input" type="password" placeholder="Paste account token (github_pat_…)" autocomplete="off" aria-label="GitHub token" />
+                </div>
+                <p id="token-status" class="hint token-status"></p>
+                <details class="how">
+                  <summary>How to get a token</summary>
+                  <ol>
+                    <li><a id="token-link" target="_blank" rel="noopener">Open GitHub's token page</a> (name and permission are filled in).</li>
+                    <li>Under <b>Repository access</b>, choose <b>All repositories</b>, or just your notes and books repos.</li>
+                    <li>Generate it, copy it, and paste it here.</li>
+                  </ol>
+                </details>
+
+                <div class="row-actions">
+                  <button id="add-repo-btn" class="btn">Add a GitHub repo</button>
+                </div>
+
+                <form id="repo-form" class="repo-form" hidden>
+                  <h3 id="repo-form-title">Add a GitHub repo</h3>
+                  <input type="hidden" name="id" />
+                  <label class="field">Repository
+                    <input name="repo" placeholder="owner/repo or a github.com link" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+                  </label>
+                  <details class="more-options">
+                    <summary>More options</summary>
+                    <div class="field-pair">
+                      <label class="field">Branch
+                        <input name="branch" placeholder="Default" autocapitalize="off" spellcheck="false" />
+                      </label>
+                      <label class="field">Only this folder
+                        <input name="root" placeholder="Whole repo" autocapitalize="off" spellcheck="false" />
+                      </label>
+                    </div>
+                    <label class="field">Skip folders
+                      <input name="ignore" placeholder="templates, archive" autocapitalize="off" spellcheck="false" />
+                    </label>
+                    <label class="field">Name
+                      <input name="name" placeholder="Repo name" />
+                    </label>
+                    <label class="field">Token for this repo only
+                      <input name="token" type="password" placeholder="Uses your account token" autocomplete="off" />
+                    </label>
+                  </details>
+                  <div class="row-actions">
+                    <button class="btn btn-primary" type="submit">Save and sync</button>
+                    <button class="btn btn-quiet" type="button" data-cancel>Cancel</button>
+                  </div>
+                </form>
+              </div>
+            </details>
+
+            <!-- WebDAV -->
+            <details class="provider-accordion" id="accordion-webdav">
+              <summary>
+                <span>WebDAV</span>
+                <span class="source-type-pill writeable">Nextcloud / Koofr</span>
+              </summary>
+              <div class="provider-accordion-body">
+                <p class="hint">Sync directly with self-hosted or cloud WebDAV servers via HTTPS.</p>
+                <div class="provider-presets">
+                  <span class="hint">Presets:</span>
+                  <button type="button" class="preset-chip" data-dav-preset="nextcloud">Nextcloud</button>
+                  <button type="button" class="preset-chip" data-dav-preset="koofr">Koofr</button>
+                  <button type="button" class="preset-chip" data-dav-preset="custom">Custom</button>
+                </div>
+                <form id="webdav-form" class="repo-form">
+                  <input type="hidden" name="id" />
+                  <label class="field">Server URL
+                    <input name="url" placeholder="https://cloud.example.com/remote.php/dav/files/user/Notes" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+                  </label>
+                  <div class="field-pair">
+                    <label class="field">Username
+                      <input name="username" placeholder="Username" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+                    </label>
+                    <label class="field">Password or App Token
+                      <input name="password" type="password" placeholder="App password" autocomplete="off" required />
+                    </label>
+                  </div>
+                  <label class="field">Library Name (optional)
+                    <input name="name" placeholder="Nextcloud Vault" />
+                  </label>
+                  <p class="hint" style="font-size:0.75rem;">Note: Your WebDAV server must allow CORS for browser access. (Nextcloud users: enable the CORS app or reverse proxy header).</p>
+                  <div class="row-actions">
+                    <button class="btn btn-primary" type="submit" id="webdav-save-btn">Connect WebDAV</button>
+                    <button class="btn btn-quiet" type="button" data-dav-cancel>Cancel</button>
+                  </div>
+                </form>
+              </div>
+            </details>
+
+            <!-- S3 / Cloudflare R2 -->
+            <details class="provider-accordion" id="accordion-s3">
+              <summary>
+                <span>Cloudflare R2 &amp; AWS S3</span>
+                <span class="source-type-pill">Books &amp; Media Vault</span>
+              </summary>
+              <div class="provider-accordion-body">
+                <p class="hint">Dedicated object storage for heavy EPUBs, PDFs, and book archives without repo bloat.</p>
+                <div class="provider-presets">
+                  <span class="hint">Presets:</span>
+                  <button type="button" class="preset-chip" data-s3-preset="r2">Cloudflare R2</button>
+                  <button type="button" class="preset-chip" data-s3-preset="s3">AWS S3</button>
+                </div>
+                <form id="s3-form" class="repo-form">
+                  <input type="hidden" name="id" />
+                  <label class="field">Endpoint URL
+                    <input name="endpoint" placeholder="https://<accountid>.r2.cloudflarestorage.com" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+                  </label>
+                  <div class="field-pair">
+                    <label class="field">Bucket Name
+                      <input name="bucket" placeholder="my-readover-books" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+                    </label>
+                    <label class="field">Region
+                      <input name="region" placeholder="auto or us-east-1" value="auto" autocomplete="off" autocapitalize="off" spellcheck="false" />
+                    </label>
+                  </div>
+                  <div class="field-pair">
+                    <label class="field">Access Key ID
+                      <input name="accessKeyId" placeholder="Access Key" autocomplete="off" autocapitalize="off" spellcheck="false" required />
+                    </label>
+                    <label class="field">Secret Access Key
+                      <input name="secretAccessKey" type="password" placeholder="Secret Key" autocomplete="off" required />
+                    </label>
+                  </div>
+                  <label class="field">Library Name (optional)
+                    <input name="name" placeholder="R2 Book Vault" />
+                  </label>
+                  <p class="hint" style="font-size:0.75rem;">Make sure your bucket CORS policy allows GET, PUT, and HEAD from web browsers.</p>
+                  <div class="row-actions">
+                    <button class="btn btn-primary" type="submit" id="s3-save-btn">Connect S3/R2 Bucket</button>
+                    <button class="btn btn-quiet" type="button" data-s3-cancel>Cancel</button>
+                  </div>
+                </form>
+              </div>
+            </details>
+
+            <!-- Local Folder -->
+            <details class="provider-accordion" id="accordion-local">
+              <summary>
+                <span>Local Folder</span>
+                <span class="source-type-pill writeable">Device Storage</span>
+              </summary>
+              <div class="provider-accordion-body">
+                <p class="hint">Open a folder directly on your device (Chrome/Edge desktop) or import files.</p>
+                <div class="row-actions">
+                  <button type="button" id="add-folder-btn" class="btn">Open a folder</button>
+                  <input type="file" id="folder-input" webkitdirectory multiple hidden />
+                </div>
+              </div>
+            </details>
           </div>
-        </form>
-      </section>
+        <!-- OPDS Catalogs Section -->
+        <section class="settings-group" id="opds-catalogs-group">
+          <div class="group-header-row">
+            <div>
+              <h3>Remote OPDS Catalogs</h3>
+              <p class="hint">Browse on-demand catalogs and stash books locally (Standard Ebooks, Calibre, Kavita).</p>
+            </div>
+            <button type="button" id="open-opds-from-settings" class="btn btn-sm btn-primary">Browse Catalogs</button>
+          </div>
+          <div id="settings-opds-list" class="opds-catalogs-list"></div>
+        </section>
 
-      <section class="settings-group" id="sync-group">
-        <h3>Sync</h3>
-        <label class="field">Keep favourites and progress in
-          <select id="data-home-select"></select>
-        </label>
-        <p id="sync-info" class="hint"></p>
-        <div id="outbox-list"></div>
-        <div class="row-actions">
-          <button id="sync-now-btn" class="btn">Sync now</button>
-        </div>
-      </section>
+        <!-- Sync & State Storage -->
+        <section class="settings-group" id="sync-group">
 
-      <section class="settings-group" id="notes-group">
-        <h3>Your notes</h3>
-        <div class="field-pair">
-          <label class="field">New notes go to
-            <select id="hl-home-select"></select>
+          <h3>Sync &amp; State Storage</h3>
+          <p class="hint">Where favorites, reading progress, and garden health metadata are stored (<code>.readover/</code>).</p>
+          <label class="field">Keep favourites and progress in
+            <select id="data-home-select"></select>
           </label>
-          <label class="field">Highlights go to
-            <input id="hl-folder-input" list="hl-folder-list" placeholder="Top level" autocapitalize="off" spellcheck="false" />
-            <datalist id="hl-folder-list"></datalist>
+          <p id="sync-info" class="hint"></p>
+          <div id="outbox-list"></div>
+          <div class="row-actions">
+            <button id="sync-now-btn" class="btn">Sync now</button>
+          </div>
+        </section>
+      </div>
+
+      <!-- Tab 2: Garden -->
+      <div id="tab-garden" class="settings-tab-panel" role="tabpanel" hidden>
+        <section class="settings-group settings-first" id="notes-group">
+          <h3>Note Destinations</h3>
+          <p class="hint">Assign clear destination roles to your connected libraries.</p>
+          <div class="field-pair">
+            <label class="field">New notes go to
+              <select id="hl-home-select"></select>
+            </label>
+            <label class="field">Highlights folder
+              <input id="hl-folder-input" list="hl-folder-list" placeholder="zettelkasten" autocapitalize="off" spellcheck="false" />
+              <datalist id="hl-folder-list"></datalist>
+            </label>
+          </div>
+        </section>
+
+        <section class="settings-group">
+          <details class="how organise" open>
+            <summary>Organising your notes</summary>
+            <ul>
+              <li><b>Types are folders.</b> Each top-level folder is a type (Journal, Essays, Highlights…), and its subfolders belong to it. Notes at the top level are Unsorted. No folders at all works too.</li>
+              <li><b>New notes</b> are named by date and title, e.g. <code>2026-10-11-on-habits.md</code>, or the first words when there's no title. Readover adds a little frontmatter (title, date, tags) that any Markdown app can read.</li>
+              <li><b>Status:</b> a note is in progress until you mark it done (<code>status: done</code>). Done notes rest: they don't wilt.</li>
+              <li><b>Highlights</b> you save from books, notes and clips go to the folder above.</li>
+              <li><b>Archive</b> holds pruned notes. It isn't a type.</li>
+              <li><b>Renaming:</b> rename or move notes in Readover (a note's ⋯ menu) to keep links working: links to it are updated in the same commit. Renamed elsewhere, links by the old file name stop working.</li>
+            </ul>
+          </details>
+
+          <details class="how organise" style="margin-top:12px;">
+            <summary>How the garden works</summary>
+            <ul>
+              <li><b>Stages:</b> Seed (no thoughts or links yet), Sprout (a thought or a link), Sapling (2+ thoughts and 2+ links), Tree (5+ links).</li>
+              <li><b>A thought</b> is your own words in a note, plus each dated entry under <code>## Thoughts</code>. Links count both ways.</li>
+              <li><b>Health</b> comes from when the note last changed: healthy, then thirsty, then wilting. Seeds wilt after a month, sprouts after 3 months, saplings after a year, trees after 2 years.</li>
+              <li>The thirstier a note, the more often it comes up. <b>Water</b> adds a thought, <b>Graft</b> adds a link, <b>Prune</b> moves it to Archive (and <b>Replant</b> brings it back).</li>
+              <li>Moving or renaming notes outside Readover can restart their clock.</li>
+            </ul>
+          </details>
+        </section>
+      </div>
+
+      <!-- Tab 3: Reading & Export -->
+      <div id="tab-reading" class="settings-tab-panel" role="tabpanel" hidden>
+        <section class="settings-group settings-first">
+          <h3>Appearance &amp; Habits</h3>
+          <label class="field">Theme
+            <select id="theme-select">
+              <option value="system">Match device</option>
+              <option value="light">Light</option>
+              <option value="dark">Dark</option>
+            </select>
           </label>
-        </div>
-        <details class="how organise">
-          <summary>Organising your notes</summary>
-          <ul>
-            <li><b>Types are folders.</b> Each top-level folder is a type (Journal, Essays, Highlights…), and its subfolders belong to it. Notes at the top level are Unsorted. No folders at all works too.</li>
-            <li><b>New notes</b> are named by date and title, e.g. <code>2026-10-11-on-habits.md</code>, or the first words when there's no title. Readover adds a little frontmatter (title, date, tags) that any Markdown app can read.</li>
-            <li><b>Status:</b> a note is in progress until you mark it done (<code>status: done</code>). Done notes rest: they don't wilt.</li>
-            <li><b>Highlights</b> you save from books, notes and clips go to the folder above.</li>
-            <li><b>Archive</b> holds pruned notes. It isn't a type.</li>
-            <li><b>Renaming:</b> rename or move notes in Readover (a note's ⋯ menu) to keep links working: links to it are updated in the same commit. Renamed elsewhere, links by the old file name stop working.</li>
-          </ul>
-        </details>
-        <details class="how organise">
-          <summary>How the garden works</summary>
-          <ul>
-            <li><b>Stages:</b> Seed (no thoughts or links yet), Sprout (a thought or a link), Sapling (2+ thoughts and 2+ links), Tree (5+ links).</li>
-            <li><b>A thought</b> is your own words in a note, plus each dated entry under <code>## Thoughts</code>. Links count both ways.</li>
-            <li><b>Health</b> comes from when the note last changed: healthy, then thirsty, then wilting. Seeds wilt after a month, sprouts after 3 months, saplings after a year, trees after 2 years.</li>
-            <li>The thirstier a note, the more often it comes up. <b>Water</b> adds a thought, <b>Graft</b> adds a link, <b>Prune</b> moves it to Archive (and <b>Replant</b> brings it back).</li>
-            <li>Moving or renaming notes outside Readover can restart their clock.</li>
-          </ul>
-        </details>
-      </section>
+          <label class="field">Notes with highlights
+            <select id="mix-select">
+              <option value="0.8">Usually show one highlight</option>
+              <option value="0.5">Sometimes show one highlight</option>
+              <option value="0">Always show the whole note</option>
+            </select>
+          </label>
+          <label class="field">Suggest a break
+            <select id="break-select">
+              <option value="0">Never</option>
+              <option value="20">After 20 cards</option>
+              <option value="40">After 40 cards</option>
+            </select>
+          </label>
+        </section>
 
-      <section class="settings-group">
-        <h3>Reading</h3>
-        <label class="field">Theme
-          <select id="theme-select">
-            <option value="system">Match device</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
-        <label class="field">Notes with highlights
-          <select id="mix-select">
-            <option value="0.8">Usually show one highlight</option>
-            <option value="0.5">Sometimes show one highlight</option>
-            <option value="0">Always show the whole note</option>
-          </select>
-        </label>
-        <label class="field">Suggest a break
-          <select id="break-select">
-            <option value="0">Never</option>
-            <option value="20">After 20 cards</option>
-            <option value="40">After 40 cards</option>
-          </select>
-        </label>
-      </section>
+        <section class="settings-group">
+          <h3>Export &amp; Sharing</h3>
+          <p class="hint">Three avenues to publish, share, and preserve your thoughts beyond Readover.</p>
+          <div class="export-card-grid">
+            <div class="export-action-card">
+              <h4>Share via OS <button type="button" id="export-share-test-btn" class="btn" style="padding:4px 8px;font-size:0.75rem;">Test</button></h4>
+              <p>Uses your phone or computer's native share sheet to send notes directly to WhatsApp, Signal, Mail, or Notes.</p>
+            </div>
+            <div class="export-action-card">
+              <h4>Copy for Publishing <button type="button" id="export-copy-test-btn" class="btn" style="padding:4px 8px;font-size:0.75rem;">Sample Copy</button></h4>
+              <p>Copies dual-format rich text (formatted HTML + Markdown) to paste cleanly into Substack, Medium, or Google Docs without quotation truncation.</p>
+            </div>
+            <div class="export-action-card">
+              <h4>Print / Vector PDF <button type="button" id="export-print-btn" class="btn" style="padding:4px 8px;font-size:0.75rem;">Print Dialog</button></h4>
+              <p>Clean, ink-friendly vector PDF via the browser’s native print dialog with citation footers and typography intact.</p>
+            </div>
+          </div>
+        </section>
+      </div>
 
-      <section class="settings-group" id="learn-group">
-        <h3>Feed learning</h3>
-        <label class="check"><input type="checkbox" id="learn-toggle" /> Show more of what I read, less of what I skip</label>
-        <div id="learn-summary" class="learn-summary"></div>
-        <div class="row-actions">
-          <button id="learn-reset" class="btn btn-quiet">Start fresh</button>
-        </div>
-      </section>
+      <!-- Tab 4: App & Device -->
+      <div id="tab-app" class="settings-tab-panel" role="tabpanel" hidden>
+        <section class="settings-group settings-first" id="clip-group">
+          <h3>Clip from anywhere</h3>
+          <p class="hint">A clip is a quote, where it’s from, and your thought. It’s saved like any new note.</p>
+          <details class="how">
+            <summary>On a computer</summary>
+            <p class="hint">Drag this to your bookmarks bar. Select text on a page, then click it.</p>
+            <p><a id="clip-bookmarklet" class="btn" href="#">Clip to Readover</a></p>
+          </details>
+          <details class="how">
+            <summary>On Android</summary>
+            <p class="hint">Add Readover to your home screen. Then select text in any app and choose <b>Share → Readover</b>.</p>
+          </details>
+          <details class="how">
+            <summary>On iPhone or iPad</summary>
+            <p class="hint">Make a Shortcut once, in the Shortcuts app:</p>
+            <ol>
+              <li>New shortcut. In its settings (ⓘ), turn on <b>Show in Share Sheet</b> and accept <b>URLs</b> and <b>Safari web pages</b>.</li>
+              <li>Add <b>Get Clipboard</b>, then <b>URL Encode</b> it.</li>
+              <li>Add <b>URL Encode</b> on the <b>Shortcut Input</b> (the page).</li>
+              <li>Add <b>Open URLs</b> with: <code id="clip-shortcut-url"></code>, putting the encoded clipboard after <code>text=</code> and the encoded page after <code>url=</code>.</li>
+              <li>Name it <b>Readover</b>.</li>
+            </ol>
+            <p class="hint">To clip: select text, tap <b>Copy</b>, then <b>Share → Readover</b>.</p>
+          </details>
+          <p class="hint">Anywhere: copy a passage, then tap the pen and <b>Paste a quote</b>.</p>
+        </section>
 
+        <section class="settings-group" id="learn-group">
+          <h3>Feed learning</h3>
+          <label class="check"><input type="checkbox" id="learn-toggle" /> Show more of what I read, less of what I skip</label>
+          <div id="learn-summary" class="learn-summary"></div>
+          <div class="row-actions">
+            <button id="learn-reset" class="btn btn-quiet">Start fresh</button>
+          </div>
+        </section>
 
-      <section class="settings-group" id="clip-group">
-        <h3>Clip from anywhere</h3>
-        <p class="hint">A clip is a quote, where it’s from, and your thought. It’s saved like any new note.</p>
-        <details class="how">
-          <summary>On a computer</summary>
-          <p class="hint">Drag this to your bookmarks bar. Select text on a page, then click it.</p>
-          <p><a id="clip-bookmarklet" class="btn" href="#">Clip to Readover</a></p>
-        </details>
-        <details class="how">
-          <summary>On Android</summary>
-          <p class="hint">Add Readover to your home screen. Then select text in any app and choose <b>Share → Readover</b>.</p>
-        </details>
-        <details class="how">
-          <summary>On iPhone or iPad</summary>
-          <p class="hint">Make a Shortcut once, in the Shortcuts app:</p>
-          <ol>
-            <li>New shortcut. In its settings (ⓘ), turn on <b>Show in Share Sheet</b> and accept <b>URLs</b> and <b>Safari web pages</b>.</li>
-            <li>Add <b>Get Clipboard</b>, then <b>URL Encode</b> it.</li>
-            <li>Add <b>URL Encode</b> on the <b>Shortcut Input</b> (the page).</li>
-            <li>Add <b>Open URLs</b> with: <code id="clip-shortcut-url"></code>, putting the encoded clipboard after <code>text=</code> and the encoded page after <code>url=</code>.</li>
-            <li>Name it <b>Readover</b>.</li>
-          </ol>
-          <p class="hint">To clip: select text, tap <b>Copy</b>, then <b>Share → Readover</b>.</p>
-        </details>
-        <p class="hint">Anywhere: copy a passage, then tap the pen and <b>Paste a quote</b>.</p>
-      </section>
+        <section class="settings-group">
+          <h3>This device</h3>
+          <p id="storage-info" class="hint">Checking…</p>
+          <div class="row-actions">
+            <button id="clear-books-btn" class="btn">Remove downloaded books</button>
+            <button id="reset-seen-btn" class="btn">Forget what I've seen</button>
+          </div>
+        </section>
 
-      <section class="settings-group">
-        <h3>This device</h3>
-        <p id="storage-info" class="hint">Checking…</p>
-        <div class="row-actions">
-          <button id="clear-books-btn" class="btn">Remove downloaded books</button>
-          <button id="reset-seen-btn" class="btn">Forget what I've seen</button>
-        </div>
-      </section>
-
-      <section class="settings-group keys">
-        <h3>Keyboard</h3>
-        <dl>
-          <dt>↓ ↑ or J K</dt><dd>Next, previous</dd>
-          <dt>Enter</dt><dd>Open</dd>
-          <dt>S</dt><dd>Favourite</dd>
-          <dt>X</dt><dd>Hide</dd>
-          <dt>R</dt><dd>Shuffle again</dd>
-          <dt>N</dt><dd>New note</dd>
-          <dt>Ctrl Enter</dt><dd>Save the new note</dd>
-          <dt>/</dt><dd>Search notes</dd>
-          <dt>Esc</dt><dd>Close</dd>
-        </dl>
-      </section>
-      <p class="hint version">Readover <span id="app-version"></span></p>
+        <section class="settings-group keys">
+          <h3>Keyboard</h3>
+          <dl>
+            <dt>↓ ↑ or J K</dt><dd>Next, previous</dd>
+            <dt>Enter</dt><dd>Open</dd>
+            <dt>S</dt><dd>Favourite</dd>
+            <dt>X</dt><dd>Hide</dd>
+            <dt>R</dt><dd>Shuffle again</dd>
+            <dt>N</dt><dd>New note</dd>
+            <dt>Ctrl Enter</dt><dd>Save the new note</dd>
+            <dt>/</dt><dd>Search notes</dd>
+            <dt>Esc</dt><dd>Close</dd>
+          </dl>
+        </section>
+        <p class="hint version">Readover <span id="app-version"></span></p>
+      </div>
     </div>
   </dialog>
 
@@ -376,7 +571,10 @@
         <button type="button" id="compose-paste" class="btn compose-paste">“ Paste a quote</button>
         <button type="button" id="compose-include-citation" class="btn compose-include-citation" title="Browse and insert citations from your highlights folder"><svg class="i i-sm"><use href="#i-search"/></svg> “ Include citation…</button>
         <button type="button" id="compose-link-note" class="btn compose-link-note" title="Insert a link to another note"><svg class="i i-sm"><use href="#i-open"/></svg> [[ ]] Link</button>
+        <button type="button" id="compose-attach-image" class="btn compose-attach-image" title="Attach and compress an image (WebP)"><svg class="i i-sm"><use href="#i-image"/></svg> Image</button>
+        <input type="file" id="compose-image-input" accept="image/*" hidden />
       </div>
+
       <label class="field"><span>Title <span class="field-opt">optional</span></span>
         <input name="title" placeholder="Left empty, the first words are used" />
       </label>

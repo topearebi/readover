@@ -228,8 +228,9 @@ export async function openPdf(item, blob, title, opts = {}) {
     const slot = slots[sel.page - 1];
     if (rendered.has(sel.page)) paintHighlights(slot);
     try {
-      const saved = await opts.onHighlight({ text: h.text, comment: h.comment, chapter: '', page: String(sel.page), at: `page=${sel.page}`, title, tags });
+      const saved = await opts.onHighlight({ text: h.text, comment: h.comment, chapter: '', page: String(sel.page), at: `page=${sel.page}`, title, tags, progress: (sel.page / total).toFixed(2) });
       if (saved?.file) {
+
         h.file = saved.file;
         await saveProgress(item, { highlights });
       }

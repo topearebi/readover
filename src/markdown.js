@@ -166,12 +166,34 @@ export function parseNote(raw, path) {
     body: main,
     html: isPlain ? `<pre class="plain">${escapeHtml(main)}</pre>` : renderMarkdown(main),
     words,
+
     minutes: Math.max(1, Math.round(words / 220)),
     highlights: isPlain ? [] : extractHighlights(withAnchors),
+    anchor: extractNoteAnchor(withAnchors, meta),
     tags: parseTags(meta.tags, main),
     ownWords: ownWords(main),
   };
 }
+
+function extractNoteAnchor(text, meta) {
+  for (const line of text.split(/\r?\n/)) {
+    const m = ANCHOR_RE.exec(line);
+    if (m) {
+      try { return JSON.parse(m[1]); } catch {}
+    }
+  }
+  if (meta.book_ref) {
+    return {
+      book: meta.book_ref,
+      format: meta.book_format || (meta.book_ref.endsWith('.pdf') ? 'pdf' : 'epub'),
+      at: meta.locator?.cfi || (meta.locator?.page ? `page=${meta.locator.page}` : ''),
+      page: meta.locator?.page,
+      chapter: meta.locator?.chapter,
+    };
+  }
+  return null;
+}
+
 
 function parseTags(metaTags, body) {
   const tags = new Set();

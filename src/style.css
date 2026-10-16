@@ -3032,3 +3032,582 @@ details > summary {
 .discard-btn {
   margin-right: 4px;
 }
+
+/* ---------- Settings 4-Tab Workstation ---------- */
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: color-mix(in srgb, var(--paper) 80%, var(--line));
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  margin-bottom: 20px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.settings-tabs::-webkit-scrollbar {
+  display: none;
+}
+.settings-tab {
+  flex: 1;
+  min-width: max-content;
+  padding: 8px 12px;
+  border: 0;
+  background: none;
+  border-radius: 7px;
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.settings-tab:hover {
+  color: var(--ink);
+}
+.settings-tab.is-active {
+  background: var(--card);
+  color: var(--ink);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+.settings-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.settings-tab-panel[hidden] {
+  display: none !important;
+}
+
+/* Connect Source Cards & Accordions */
+.connect-sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+.provider-accordion {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+.provider-accordion[open] {
+  border-color: var(--action);
+}
+.provider-accordion summary {
+  padding: 12px 14px;
+  font-weight: 600;
+  font-size: 0.9375rem;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.provider-accordion summary::marker {
+  color: var(--muted);
+}
+.provider-accordion-body {
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.provider-presets {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.preset-chip {
+  padding: 3px 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--ink);
+}
+.preset-chip:hover {
+  border-color: var(--action);
+  color: var(--action);
+}
+.source-type-pill {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--card) 60%, var(--line));
+  color: var(--muted);
+  font-weight: 600;
+}
+.source-type-pill.writeable {
+  background: color-mix(in srgb, #16a34a 12%, transparent);
+  color: #15803d;
+}
+.source-type-pill.readonly {
+  background: color-mix(in srgb, #ca8a04 15%, transparent);
+  color: #a16207;
+}
+
+/* Export & Publishing Section */
+.export-card-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin-top: 8px;
+}
+.export-action-card {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.export-action-card h4 {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.export-action-card p {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+/* Ink-friendly vector print styles */
+@media print {
+  /* Strip all application chrome, topbars, nav rails, action sheets, buttons, and footers */
+  nav, .rail, .top-rail, .topbar, .tabbar, dialog, .feed-actions, .note-actions, .shelf-bar-actions,
+  button, .settings-tabs, .selection-bar, .reader-bar, .reader-tools, .connection-footer,
+  .toast, #toast, .sync-dot, .brand, .feed-meta, .source-actions, .reader-status {
+    display: none !important;
+  }
+  body, html, .reader, .article-wrap, .article, .prose {
+    background: #ffffff !important;
+    color: #111111 !important;
+    box-shadow: none !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: block !important;
+    position: static !important;
+    font-size: 11pt !important;
+    line-height: 1.65 !important;
+  }
+  .article-title {
+    font-size: 22pt !important;
+    line-height: 1.2 !important;
+    margin-bottom: 16pt !important;
+    color: #000000 !important;
+  }
+  /* Style citation cards with high-contrast, ink-friendly hairline borders & page-break guards */
+  figure.citation-card, .citation-callout, blockquote {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    border: 1px solid #78716c !important;
+    background: #fafaf9 !important;
+    padding: 10pt 14pt !important;
+    margin: 14pt 0 !important;
+    border-radius: 4pt !important;
+  }
+  /* Automatically print URLs alongside external citations */
+  a[href^="http"]::after {
+    content: " (" attr(href) ")" !important;
+    font-size: 0.82em !important;
+    color: #57534e !important;
+    word-break: break-all !important;
+  }
+  img {
+    max-width: 100% !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    image-rendering: auto !important;
+  }
+}
+
+/* Shelf Catalogs Grid ("Browse Remote, Stash Local") */
+.shelf-catalogs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+  margin-bottom: 24px;
+}
+.shelf-catalog-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--bg-card, #ffffff);
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 10px;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+  color: inherit;
+  font: inherit;
+}
+.shelf-catalog-card:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent, #0284c7);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.05);
+}
+.shelf-catalog-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.shelf-catalog-add .shelf-catalog-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg-soft, #f1f5f9);
+  color: var(--accent, #0284c7);
+  font-weight: 700;
+  font-size: 1.25rem;
+}
+.shelf-catalog-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.shelf-catalog-info b {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--fg, #0f172a);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.shelf-catalog-info small {
+  font-size: 0.8rem;
+  color: var(--fg-muted, #64748b);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ==========================================================================
+   OPDS Catalog Browser ("Browse Remote, Stash Local")
+   ========================================================================== */
+
+.opds-browser-sheet {
+  max-width: 960px;
+}
+.opds-browser-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 24px;
+}
+.opds-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+.opds-head-title {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.opds-head-title h2 {
+  margin: 0;
+  font-size: 1.25rem;
+  letter-spacing: -0.01em;
+}
+.opds-catalog-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.opds-catalog-select {
+  font-size: 0.875rem;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+}
+.opds-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.opds-crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 0.875rem;
+}
+.crumb-btn {
+  background: none;
+  border: 0;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.crumb-btn:hover {
+  color: var(--ink);
+  background: var(--line);
+}
+.crumb-sep {
+  color: var(--muted);
+  user-select: none;
+}
+.opds-search-input {
+  max-width: 280px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  background: var(--card);
+  color: var(--ink);
+}
+.opds-status {
+  margin: 0;
+  font-size: 0.8125rem;
+}
+
+/* Subsections Grid */
+.opds-subsections-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+.opds-cat-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.12s, border-color 0.12s;
+}
+.opds-cat-card:hover {
+  border-color: var(--ink);
+  transform: translateY(-1px);
+}
+.opds-cat-icon {
+  font-size: 1.25rem;
+}
+.opds-cat-info {
+  display: flex;
+  flex-direction: column;
+}
+.opds-cat-info b {
+  font-size: 0.875rem;
+  color: var(--ink);
+}
+.opds-cat-info small {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* Books Grid */
+.opds-books-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+.opds-book-card {
+  display: flex;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.opds-book-card:hover {
+  border-color: var(--ink);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06);
+}
+.opds-book-cover {
+  width: 72px;
+  min-width: 72px;
+  height: 108px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.opds-book-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.opds-book-fallback-cover {
+  font-size: 0.6875rem;
+  color: var(--muted);
+  padding: 6px;
+  word-break: break-word;
+}
+.opds-book-details {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.opds-book-title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.opds-book-author {
+  margin: 2px 0 6px 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.opds-book-summary {
+  margin: 0 0 10px 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.opds-book-actions {
+  margin-top: auto;
+}
+.opds-in-lib {
+  background: color-mix(in srgb, #16a34a 12%, transparent);
+  color: #15803d;
+  font-weight: 600;
+}
+.opds-pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px 0;
+}
+.opds-presets-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+/* Shelf Topbar & OPDS launcher */
+.shelf-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.shelf-heading-main {
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin: 0;
+}
+.shelf-opds-btn {
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: 1px solid var(--line);
+  padding: 6px 14px;
+  border-radius: 999px;
+  transition: all 0.15s ease;
+}
+.shelf-opds-btn:hover {
+  background: var(--card);
+  border-color: var(--ink);
+}
+
+/* ==========================================================================
+   Highlight Deep-Linking & Provenance Action Button
+   ========================================================================== */
+
+.citation-jump-wrap {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  display: flex;
+  justify-content: flex-end;
+}
+.btn-jump-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  font-size: 0.8125rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--action) 40%, var(--line));
+  background: color-mix(in srgb, var(--action) 6%, var(--card));
+  color: var(--action);
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+.btn-jump-source:hover {
+  background: color-mix(in srgb, var(--action) 14%, var(--card));
+  transform: translateY(-1px);
+}
+.btn-jump-source b {
+  font-weight: 600;
+}
+.btn-jump-source small {
+  opacity: 0.8;
+}
+.btn-jump-source .jump-arrow {
+  font-weight: 700;
+}
+
+/* ==========================================================================
+   Image Attachments Drag & Drop and Upload
+   ========================================================================== */
+
+textarea.drag-active {
+  border-color: var(--action) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--action) 20%, transparent) !important;
+  background: color-mix(in srgb, var(--action) 3%, var(--card)) !important;
+}
+.compose-attach-image {
+  gap: 5px;
+}
+

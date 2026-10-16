@@ -3,6 +3,9 @@
 import * as store from './store.js';
 import * as github from './sources/github.js';
 import * as local from './sources/local.js';
+import * as dropbox from './sources/dropbox.js';
+import * as webdav from './sources/webdav.js';
+import * as s3 from './sources/s3.js';
 import * as outbox from './outbox.js';
 
 const { items, content, state, thumbs, progress, blobs, keyOf } = store;
@@ -59,7 +62,14 @@ export function deviceSource(create = false) {
   return src;
 }
 
-const adapter = (src) => (src.type === 'github' ? github : src.type === 'device' ? device : local);
+const adapter = (src) => {
+  if (src.type === 'github') return github;
+  if (src.type === 'dropbox') return dropbox;
+  if (src.type === 'webdav') return webdav;
+  if (src.type === 's3' || src.type === 'r2') return s3;
+  if (src.type === 'device') return device;
+  return local;
+};
 
 export function canWrite(src) {
   return src ? adapter(src).canWrite(src) : false;
@@ -67,7 +77,18 @@ export function canWrite(src) {
 
 export function displayName(src) {
   if (src.type === 'device') return 'This device';
-  return src.name || (src.type === 'github' ? `${src.owner}/${src.repo}` : 'Folder');
+  if (src.name) return src.name;
+  if (src.type === 'github') return `${src.owner}/${src.repo}`;
+  if (src.type === 'dropbox') return 'Dropbox (/Apps/Readover)';
+  if (src.type === 'webdav') {
+    try {
+      return `WebDAV (${new URL(src.url).hostname})`;
+    } catch {
+      return 'WebDAV';
+    }
+  }
+  if (src.type === 's3' || src.type === 'r2') return `${src.bucket} (${src.type === 'r2' ? 'R2' : 'S3'})`;
+  return 'Folder';
 }
 
 function toItem(src, f) {
@@ -92,6 +113,15 @@ export async function sync(src, onProgress = () => {}) {
   if (src.type === 'github') {
     onProgress(`Checking ${label}…`);
     files = await github.listFiles(src);
+  } else if (src.type === 'dropbox') {
+    onProgress(`Checking Dropbox…`);
+    files = await dropbox.listFiles(src);
+  } else if (src.type === 'webdav') {
+    onProgress(`Scanning WebDAV…`);
+    files = await webdav.listFiles(src, acceptFor(src), onProgress);
+  } else if (src.type === 's3' || src.type === 'r2') {
+    onProgress(`Listing S3/R2 bucket…`);
+    files = await s3.listFiles(src, acceptFor(src), onProgress);
   } else if (src.mode === 'handle') {
     onProgress(`Scanning ${label}…`);
     files = await local.listFiles(src, acceptFor(src));
@@ -171,7 +201,7 @@ export async function readText(item) {
   }
 }
 
-/** Books from GitHub are cached by sha so they open offline and don't re-download. */
+/** Books and media from cloud sources are cached by sha so they open offline and don't re-download. */
 export async function readBlob(item) {
   const src = store.getSource(item.sourceId);
   if (!src) throw new Error('This source was removed.');
@@ -182,7 +212,7 @@ export async function readBlob(item) {
   }
   const cached = await blobs.get(item.key);
   if (cached && cached.sha === item.sha) return cached.blob;
-  const blob = await github.readBlob(src, item, type);
+  const blob = await adapter(src).readBlob(src, item, type);
   blobs.put({ key: item.key, sourceId: item.sourceId, sha: item.sha, blob }).catch(() => {});
   return blob;
 }
@@ -201,10 +231,116 @@ export async function readRelative(item, relPath) {
   }
   const path = parts.join('/');
   const src = store.getSource(item.sourceId);
-  if (src.type === 'device') throw new Error('Images are not stored on this device.');
-  const fake = { key: keyOf(item.sourceId, path), sourceId: item.sourceId, path, folder: '', sha: null };
+
+  // 1. Check local IndexedDB cache first
+  const directKey = keyOf(item.sourceId, path);
+  const cached = await blobs.get(directKey);
+  if (cached?.blob) return cached.blob;
+
+  // 2. Check on-device blob cache
+  const deviceCached = await blobs.get(keyOf(DEVICE_ID, path));
+  if (deviceCached?.blob) return deviceCached.blob;
+
+  // 3. Check any configured S3 / R2 attachment vaults
+  const s3Sources = store.getSources().filter((s) => s.type === 's3' || s.type === 'r2');
+  for (const s3Src of s3Sources) {
+    const s3Key = keyOf(s3Src.id, path);
+    const s3Cached = await blobs.get(s3Key);
+    if (s3Cached?.blob) return s3Cached.blob;
+    try {
+      const b = await s3.readBlob(s3Src, { path }, '');
+      if (b) {
+        blobs.put({ key: s3Key, sourceId: s3Src.id, sha: `att:${Date.now()}`, blob: b }).catch(() => {});
+        return b;
+      }
+    } catch {}
+  }
+
+  if (!src || src.type === 'device') throw new Error('Attachment not found locally.');
+  const fake = { key: directKey, sourceId: item.sourceId, path, folder: '', sha: null };
   if (src.type === 'github') return github.readBlob(src, fake);
+  if (src.type === 'dropbox') return dropbox.readBlob(src, fake);
+  if (src.type === 'webdav') return webdav.readBlob(src, fake);
+  if (src.type === 's3' || src.type === 'r2') return s3.readBlob(src, fake);
   return local.readFile(src, fake);
+}
+
+/**
+ * Saves an attachment (compressed WebP image/sketch) to the appropriate vault
+ * and caches in IndexedDB for instant offline-first rendering.
+ */
+export async function putAttachment(src, attachmentPath, blob) {
+  const cleanPath = attachmentPath.replace(/^\/+/, '');
+  const key = keyOf(src.id, cleanPath);
+
+  // Always cache locally in IndexedDB first
+  await blobs.put({ key, sourceId: src.id, sha: `att:${Date.now()}`, blob });
+
+  if (src.type === 'device') {
+    return { key, path: cleanPath, sourceId: src.id };
+  }
+  if (src.type === 's3' || src.type === 'r2') {
+    await s3.putFile(src, cleanPath, blob);
+  } else if (src.type === 'dropbox') {
+    await dropbox.putFile(src, cleanPath, blob);
+  } else if (src.type === 'webdav') {
+    await webdav.putFile(src, cleanPath, blob);
+  } else if (src.type === 'local') {
+    await local.writeBlob(src, cleanPath, blob);
+  }
+  return { key, path: cleanPath, sourceId: src.id };
+}
+
+/**
+ * Saves a book acquired from an OPDS catalog to the user's destination library.
+ * Stashes metadata into items and binary into blobs and target storage provider.
+ */
+export async function saveAcquiredBook(targetSrc, filename, blob, meta = {}) {
+  const parts = filename.split('/');
+  const name = parts.pop();
+  const folder = parts.join('/');
+  const kind = kindOf(name) || 'epub';
+  const sha = `opds:${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const key = keyOf(targetSrc.id, filename);
+
+  const item = {
+    key,
+    sourceId: targetSrc.id,
+    path: filename,
+    folder,
+    name,
+    kind,
+    sha,
+    addedAt: Date.now(),
+  };
+
+  await items.put(item);
+  await blobs.put({ key, sourceId: targetSrc.id, sha, blob });
+
+  if (meta.title || meta.authors?.length) {
+    await thumbs.put({
+      key,
+      sourceId: targetSrc.id,
+      sha,
+      title: meta.title || name.replace(/\.[^.]+$/, ''),
+      author: Array.isArray(meta.authors) ? meta.authors.join(', ') : meta.authors || '',
+      blob: meta.coverBlob || null,
+    });
+  }
+
+  // Upload to remote storage if connected
+  if (targetSrc.type === 's3' || targetSrc.type === 'r2') {
+    s3.putFile(targetSrc, filename, blob).catch((err) => console.warn('Could not upload book to S3', err));
+  } else if (targetSrc.type === 'dropbox') {
+    dropbox.putFile(targetSrc, filename, blob).catch((err) => console.warn('Could not upload book to Dropbox', err));
+  } else if (targetSrc.type === 'webdav') {
+    webdav.putFile(targetSrc, filename, blob).catch((err) => console.warn('Could not upload book to WebDAV', err));
+  } else if (targetSrc.type === 'local') {
+    local.writeBlob(targetSrc, filename, blob).catch((err) => console.warn('Could not write book to local folder', err));
+  }
+
+  window.dispatchEvent(new CustomEvent('readover:progress'));
+  return item;
 }
 
 /* ---------------- Writing ---------------- */
@@ -220,16 +356,28 @@ async function upsertText(src, path, text, sha) {
 }
 
 /**
- * Save a note. GitHub: shown locally at once, committed by the save queue.
- * Local folder: written straight to disk.
+ * Save a note. GitHub: committed by save queue.
+ * Cloud/Local: written to provider directly and cached locally.
  */
 export async function writeNote(src, path, text, { message } = {}) {
-  if (!canWrite(src)) throw new Error(`"${displayName(src)}" is read-only. Add a GitHub token to edit.`);
+  if (!canWrite(src)) throw new Error(`"${displayName(src)}" is read-only. Check credentials in Settings.`);
   if (src.type === 'github') {
     const exists = await items.get(keyOf(src.id, path));
     return outbox.queueWrite(src, path, text, message || `Readover: ${exists ? 'edit' : 'add'} ${path}`);
   }
   if (src.type === 'device') return upsertText(src, path, text, `dev:${Date.now()}`);
+  if (src.type === 'dropbox') {
+    const sha = await dropbox.putFile(src, path, text);
+    return upsertText(src, path, text, sha);
+  }
+  if (src.type === 'webdav') {
+    const sha = await webdav.putFile(src, path, text);
+    return upsertText(src, path, text, sha);
+  }
+  if (src.type === 's3' || src.type === 'r2') {
+    const sha = await s3.putFile(src, path, text);
+    return upsertText(src, path, text, sha);
+  }
   return upsertText(src, path, text, await local.writeText(src, path, text));
 }
 
@@ -242,7 +390,23 @@ export async function appendToFile(src, path, header, block, message) {
     const text = `${(cur ?? header).replace(/\s*$/, '')}\n\n${block.trim()}\n`;
     return upsertText(src, path, text, `dev:${Date.now()}`);
   }
-  const text = `${((await local.getText(src, path)) ?? header).replace(/\s*$/, '')}\n\n${block.trim()}\n`;
+  let cur;
+  try {
+    cur = await adapter(src).readText(src, { path });
+  } catch {}
+  const text = `${(cur ?? header).replace(/\s*$/, '')}\n\n${block.trim()}\n`;
+  if (src.type === 'dropbox') {
+    const sha = await dropbox.putFile(src, path, text);
+    return upsertText(src, path, text, sha);
+  }
+  if (src.type === 'webdav') {
+    const sha = await webdav.putFile(src, path, text);
+    return upsertText(src, path, text, sha);
+  }
+  if (src.type === 's3' || src.type === 'r2') {
+    const sha = await s3.putFile(src, path, text);
+    return upsertText(src, path, text, sha);
+  }
   return upsertText(src, path, text, await local.writeText(src, path, text));
 }
 

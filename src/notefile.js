@@ -38,15 +38,28 @@ function parseYaml(src) {
     const key = kv[1].replace(/^["']|["']$/g, '').trim().toLowerCase();
     const rest = (kv[2] || '').trim();
     if (!rest || /^#/.test(rest)) {
-      // Either a block list or an empty value.
+      // Block list, nested mapping, or empty value.
       const items = [];
-      while (i + 1 < lines.length && (/^\s*-(\s|$)/.test(lines[i + 1]) || (!lines[i + 1].trim() && /^\s*-/.test(lines[i + 2] || '')))) {
-        i++;
-        if (!lines[i].trim()) continue;
-        const v = scalar(lines[i].replace(/^\s*-\s?/, ''));
-        if (v !== '') items.push(v);
+      const subObj = {};
+      let isObj = false;
+      while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) {
+        const nextLine = lines[i + 1];
+        if (/^\s*-\s?/.test(nextLine)) {
+          i++;
+          const v = scalar(nextLine.replace(/^\s*-\s?/, ''));
+          if (v !== '') items.push(v);
+        } else {
+          const subKv = /^\s+([a-zA-Z0-9_-]+)\s*:\s*(.*)$/.exec(nextLine);
+          if (subKv) {
+            i++;
+            isObj = true;
+            subObj[subKv[1].toLowerCase()] = scalar(subKv[2]);
+          } else {
+            break;
+          }
+        }
       }
-      meta[key] = items.length ? items : '';
+      meta[key] = isObj ? subObj : (items.length ? items : '');
     } else if (/^[|>][+-]?$/.test(rest)) {
       // Block text: the indented lines that follow.
       const out = [];
@@ -129,11 +142,24 @@ const BARE_KEYS = new Set(['date']); // dates stay unquoted, so Jekyll reads the
 
 /** Frontmatter text for an object (keys in the given order; empty values skipped). */
 export function buildFrontmatter(obj) {
-  const lines = Object.entries(obj)
-    .filter(([, v]) => v !== undefined && v !== null && !(typeof v === 'string' && v === ''))
-    .map(([k, v]) => `${k}: ${yamlValue(v, { bare: BARE_KEYS.has(k) })}`);
+  const lines = [];
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined || v === null || (typeof v === 'string' && v === '')) continue;
+    if (typeof v === 'object' && !Array.isArray(v)) {
+      const sub = Object.entries(v).filter(([, sv]) => sv !== undefined && sv !== null && sv !== '');
+      if (sub.length) {
+        lines.push(`${k}:`);
+        for (const [sk, sv] of sub) {
+          lines.push(`  ${sk}: ${yamlValue(sv)}`);
+        }
+      }
+    } else {
+      lines.push(`${k}: ${yamlValue(v, { bare: BARE_KEYS.has(k) })}`);
+    }
+  }
   return `---\n${lines.join('\n')}\n---\n`;
 }
+
 
 /**
  * Change some frontmatter keys, leaving the rest of the file exactly as it was.

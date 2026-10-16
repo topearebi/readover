@@ -22,6 +22,7 @@ import { entries as indexEntries, resolve } from '../notes-index.js';
 import { libraryTypes } from './types.js';
 import { sheet as openCustomSheet } from './sheet.js';
 import { pickNote, linkFor } from './reader.js';
+import { setupAttachmentListeners } from '../attachments.js';
 
 const NEW_TYPE = '\u0000new';
 const STATUS_KEY = 'readover.statusByFolder';
@@ -632,6 +633,13 @@ export function initCompose(app) {
         dismissAutocomplete();
       }
     }, 180);
+  });
+
+  setupAttachmentListeners(f.body, {
+    getContext: () => ({
+      sourceId: f.source.value,
+      title: f.title.value.trim() || 'diagram',
+    }),
   });
 
   /* ---------- Unified Form Submit (New & Existing Notes) ---------- */

@@ -92,6 +92,20 @@ export async function writeText(src, path, text) {
   return `fs:${file.size}:${file.lastModified}`;
 }
 
+export async function writeBlob(src, path, blob) {
+  if (src.mode !== 'handle') {
+    await blobs.put({ key: keyOf(src.id, path), sourceId: src.id, blob });
+    return `fs:${blob.size || 0}:${Date.now()}`;
+  }
+  if (!(await requestPermission(src, true))) throw new Error('Write access to the folder was not granted.');
+  const fh = await fileHandleFor(src, path, true);
+  const w = await fh.createWritable();
+  await w.write(blob);
+  await w.close();
+  const file = await fh.getFile();
+  return `fs:${file.size}:${file.lastModified}`;
+}
+
 export async function getText(src, path) {
   try {
     return await (await fileHandleFor(src, path)).getFile().then((f) => f.text());

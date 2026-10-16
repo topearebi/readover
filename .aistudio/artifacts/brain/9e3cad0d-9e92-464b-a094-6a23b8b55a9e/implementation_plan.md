@@ -1,191 +1,156 @@
-# Implementation Plan: Intent-Aware Citations, Unified Note Editor & Feed Action Fix (Revised)
+# Implementation Plan: OPDS Catalog Integration, Deep-Linked Highlights, Agnostic Attachments & Export Suite (Revised)
 
-## Overview
-Resolve the feed view action button crash, implement an intent-aware citation recommendation engine with a dynamic dual-state picker UI, and unify note creation and note editing into a single full-featured editor sheet. Incorporates robust cross-platform accessibility, mobile keyboard handling, consistent `[[TargetPath|DisplayTitle]]` wiki link formatting, and instant reader DOM & connection graph re-synchronization on save.
-
----
-
-### User Review & Critical Decisions
-
-> [!IMPORTANT]
-> The following architectural decisions and usability constraints are incorporated into this revision:
-> - **Mobile & Virtual Keyboard Autocomplete Cleanup**: The inline `[[` autocomplete popup will be cleanly unmounted whenever the user presses Escape, taps outside the popup/textarea, scrolls the container, or backspaces past the double brackets. On mobile (iOS / Android), the popup will position safely without clipping or obscuring the virtual keyboard and active line.
-> - **Consistent `[[TargetPath|DisplayTitle]]` Link Syntax**: Align all link insertions across both the header `[[ ]]` button and inline autocomplete with the citation callout convention. If a note's file path or filename differs from its display title, insert `[[TargetPath|DisplayTitle]]` (and simple `[[TargetPath]]` when identical), ensuring robust index resolution, graph integrity, and human-readable prose.
-> - **Reader View Real-Time Live Sync**: When an existing note is saved from the unified editor sheet, `presets.onSaved(item, newText)` immediately re-renders the reader's article DOM, transforms citation cards, and re-executes `showConnections(conn)`. New citations and reciprocal links appear in the footer immediately without requiring a full reload or view exit.
-> - **Unified Editor Experience**: Note creation and note editing share a single full-featured editor sheet in `src/ui/compose.js` supporting folder/type selection, growth status, tags, title, body, citations, and wiki links.
-> - **Weighted Intent Citation Scoring**: The citation picker ranks candidate highlights on open using a weighted composite of direct tag overlap and two-hop graph neighbors: $\text{Score} = (3 \times \text{tag overlap}) + (4 \times \text{1-hop neighbor}) + (2 \times \text{2-hop bridge neighbor})$.
-> - **Feed Action Bug Fix**: Declares `title` safely in `actions.cardMenu(card)` (`src/app.js:558`) before triggering the context menu.
+This plan details the architecture and implementation for four major capabilities in Readover:
+1. **OPDS Catalog Integration ("Browse Remote, Stash Local")** in Shelves with robust relative URL normalization and smart book acquisition.
+2. **PDF & Book Highlights Deep-Linking & Provenance** with deterministic locator contracts and pre-flight missing-book recovery.
+3. **Storage-Agnostic Image & Attachment Architecture** with client-side canvas WebP compression, unified composer (`compose.js`) and reader (`reader.js`) paste/drop support, unified destination routing, and dynamic Markdown rendering.
+4. **Export & Sharing Suite** with dual-format rich clipboard copy, native OS sharing, and ink-friendly `@media print` vector CSS.
 
 ---
 
-## 1. Overview & Core Concept
+## User Review & Architecture Alignment
 
-Readover is designed for distraction-free reading, thoughtful note cultivation, and relational knowledge management across devices. 
-
-This refactor addresses critical usability gaps and broken workflows:
-1. **Feed Action Button Fix**: Corrects `actions.cardMenu` in `src/app.js` by defining `title` safely from note metadata, fixing the unhandled `ReferenceError`.
-2. **Intent-Aware Citation Engine**: When opening "Include citation", the system extracts a lightweight Draft Signature (`[[WikiLinks]]` and `#tags`) in memory. Using high-performance in-memory Set operations (<5ms), it surfaces the top 3–5 candidate highlights in the user's configured Highlights folder.
-3. **Dynamic Dual-State Picker UI**: An empty search input presents the top scored contextual citations and 2-hop bridge notes. As soon as the user types, it seamlessly transitions into standard fuzzy search.
-4. **Unified Note Editor Sheet with Robust Mobile Ergonomics**: Unifies note creation and editing so that existing notes enjoy full access to note type, status, tags, citations, and wiki links. Includes mobile-tested autocomplete cleanup, `[[TargetPath|DisplayTitle]]` formatting, and immediate reader connection graph updates.
-
----
-
-## 2. User Experience & Visual Design
-
-### Key User Flows
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                       Unified Editor Experience                             │
-│                                                                             │
-│  [New Note (+)]  or  [Edit Note (reader editBtn / feed cardMenu)]           │
-│         │                                                                   │
-│         ▼                                                                   │
-│  ┌───────────────────────────────────────────────────────────────────────┐  │
-│  │ Unified Editor Sheet (Title, Folder/Type, Status, Tags)               │  │
-│  │ ┌───────────────────────────────────────────────────────────────────┐ │  │
-│  │ │ Toolbar: [“ Include citation]  [ [[ ]] Link ]  [Save / Done]       │ │  │
-│  │ ├───────────────────────────────────────────────────────────────────┤ │  │
-│  │ │ Textarea with typing [[ trigger                                  │ │  │
-│  │ │  ┌──────────────────────────────────────────────┐                 │ │  │
-│  │ │  │ Floating Autocomplete (Dismisses on tap/esc) │                 │ │  │
-│  │ │  │ Inserts [[TargetPath|DisplayTitle]]          │                 │ │  │
-│  │ │  └──────────────────────────────────────────────┘                 │ │  │
-│  │ └───────────────────────────────────────────────────────────────────┘ │  │
-│  └───────────────────────────────────────────────────────────────────────┘  │
-│         │                                                                   │
-│         ├─────────► Tap "“ Include citation"                                │
-│         │           ▼                                                       │
-│         │     ┌────────────────────────────────────────────────────────┐    │
-│         │     │ Dual-State Picker Modal:                               │    │
-│         │     │ State A (Clean input): Top 3-5 Intent Suggestions      │    │
-│         │     │   - "Bridge via [[Habit Loop]]"                        │    │
-│         │     │   - "Shared tags: #productivity"                       │    │
-│         │     │ State B (Typing query): Instant fuzzy filter           │    │
-│         │     └────────────────────────────────────────────────────────┘    │
-│         │                                                                   │
-│         └─────────► Save Note:                                              │
-│                       ├── Updates note file via writeNote(...)              │
-│                       ├── Runs reciprocal link graph sync                   │
-│                       └── If opened from Reader: presets.onSaved(...)       │
-│                             ├── Updates article DOM & citation cards       │
-│                             └── Re-runs showConnections() live              │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Visual & Accessibility Guidelines
-
-- **Touch & Mobile Targets**:
-  - All interactive buttons in the editor toolbar, autocomplete list, and citation cards have a minimum touch target size of $44\text{px} \times 44\text{px}$.
-  - Autocomplete popup uses `max-height: 240px`, high-contrast text (`color: var(--fg)`), and scroll locking prevention so mobile keyboards don't get trapped.
-- **Clean Anti-Slop Visual Hierarchy**:
-  - Autocomplete and citation suggestions use clean hairline dividers, unboxed metadata (`·` separator), and distinct typography instead of generic rounded pills.
-  - Visible focus indicators on active list options for keyboard navigation (`ArrowUp`, `ArrowDown`, `Enter`, `Escape`).
+> [!NOTE]
+> Key Architectural Rules:
+> - **OPDS Relative URL Resolution:** All extracted `href` attributes in `src/sources/opds.js` (feed links, covers, icons, acquisition binaries, facets, and search templates) are strictly normalized against the current feed URL via `new URL(href, currentFeedUrl).href`.
+> - **Unified Image Drop/Paste Support:** Image paste and drag-and-drop listeners are integrated into both the **Unified Note Composer** (`src/ui/compose.js`) and the **Note Reader/Editor** (`src/ui/reader.js`).
+> - **OPDS Catalog Placement:** In **Shelves** as a dedicated "Catalogs" section with live search and feed traversal.
+> - **Book Acquisition Flow:** Acquires directly to the configured books destination (`acquiredBooksHome`), with an inline override toggle to stash locally to "This Device".
+> - **Attachment Links:** Always formatted as clean, portable relative Markdown paths (e.g. `![](attachments/2026-10-15-slug-a1b2.webp)`), dynamically resolved by the Readover Markdown renderer from IndexedDB cache or active cloud storage (R2/S3, Dropbox, WebDAV, GitHub, or Local).
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
+## Proposed Changes
 
-- **Decision 1: Autocomplete Event Lifecycle & Cleanup**
-  - *Chosen Approach*: Bind window-level `pointerdown`, `keydown` (`Escape`, `Tab`), and editor `input` listeners when the autocomplete popup opens. If the user taps anywhere outside the popup, presses Escape, or deletes the trigger characters, immediately destroy and remove the popup DOM node.
-  - *Why*: Prevents orphan popups from obscuring the viewport or typing area on Android and iOS virtual keyboards.
-  - *Alternatives Considered*: Native `<datalist>` was rejected because it doesn't support rich item titles and custom `[[ ]]` replacement ranges.
-
-- **Decision 2: Link Insertion Syntax (`[[TargetPath|DisplayTitle]]`)**
-  - *Chosen Approach*: Compute the target path and compare it to the display title. If `clean(item.title) !== clean(cleanPath)`, format as `[[${cleanPath}|${item.title}]]`; otherwise `[[${cleanPath}]]`.
-  - *Why*: Guarantees Obsidian interop and exact graph index resolution in `notes-index.js`, while keeping the rendered prose natural and readable.
-  - *Alternatives Considered*: Storing only title or only file path causes broken links when notes are moved or when filenames are prefixed with dates.
-
-- **Decision 3: Reader Live Synchronization on Save**
-  - *Chosen Approach*: Pass `onSaved: (updatedItem, updatedText) => { ... }` from `reader.js` to `app.compose(...)`. The callback updates `item`, parses new frontmatter and body, calls `renderArticle()`, transforms citation cards, and re-invokes `showConnections(conn)`.
-  - *Why*: Delivers instant feedback when a user cites another note or adds tags, without losing scroll position or closing the reader sheet.
-
----
-
-## 4. Technical Architecture & Component Strategy
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                            System Architecture                              │
-│                                                                             │
-│   src/app.js (Feed Rail & Router)                                           │
-│     ├── Fix: actions.cardMenu defines title safely                          │
-│     └── actions.editNote(card) -> app.compose({ existingItem: item, ... }) │
-│                                                                             │
-│   src/ui/reader.js (Reader View)                                            │
-│     └── editBtn.onclick -> app.compose({                                   │
-│           existingItem: item,                                               │
-│           onSaved: async (savedItem, text) => {                             │
-│             // Live DOM & Connection Footer Re-render                       │
-│             item = savedItem;                                               │
-│             prose = renderArticle();                                        │
-│             const conn = await connections(item, text);                     │
-│             showConnections(conn);                                          │
-│           }                                                                 │
-│         })                                                                  │
-│                                                                             │
-│   src/ui/compose.js (Unified Full-Featured Editor Sheet)                    │
-│     ├── State: creates new note OR updates existing note                    │
-│     ├── Toolbar:                                                            │
-│     │     ├── "“ Include citation" (intent-aware dynamic picker)            │
-│     │     └── "[[ ]] Link" header button                                    │
-│     ├── Inline Autocomplete Engine:                                         │
-│     │     ├── Listens for [[ typing trigger                                │
-│     │     ├── Mobile cleanup (Escape, outside tap, delete)                  │
-│     │     └── Inserts [[TargetPath|DisplayTitle]]                           │
-│     └── Intent-Aware Citation Engine:                                       │
-│           ├── extractDraftSignature(text)                                   │
-│           ├── scoreCandidates(candidates, draftSig, graphIndex)             │
-│           └── Dual-State Picker (Suggested bridge notes vs. fuzzy search)   │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### File-by-File Implementation Plan
-
-1. **`src/app.js`**:
-   - In `actions.cardMenu(card)`: Define `const title = card._note?.title || item.title || item.path?.split('/').pop()?.replace(/\.md$/i, '') || 'Note';` prior to calling `menu(title, menuActions)`.
-   - Update `actions.editNote(card)` to delegate to `app.compose({ existingItem: card._item, card })`.
-
-2. **`src/ui/reader.js`**:
-   - Update `editBtn.onclick` to call `app.compose(...)` with `existingItem: item`, pre-filling folder, status, tags, title, and body.
-   - In `onSaved`: update local note state, call `renderArticle()`, re-run `transformCitationCards()`, query `connections(item, text)`, and call `showConnections(conn)` to live-update the reciprocal footer.
-
-3. **`src/ui/compose.js`**:
-   - **Unified Note Editing Mode**:
-     - Accept `presets.existingItem`: set form title to "Edit note", submit label to "Save changes", and populate folder, status, tags, title, and body.
-     - On submit of existing note: save via `writeNote(...)`, handle reciprocal backlinks for newly cited items, notify `readover:notes-changed`, and call `presets.onSaved?.(item, text)`.
-   - **`[[ ]]` Header Button**:
-     - Add `compose-link-note` button to composer toolbar.
-     - Tapping opens note selector and inserts formatted `[[TargetPath|DisplayTitle]]` at cursor.
-   - **Inline `[[` Autocomplete with Mobile Cleanup**:
-     - Listen for `input` / `keyup` on `f.body`. When cursor is preceded by `[[` and not yet closed by `]]`, display floating autocomplete popup.
-     - Format selected item as `[[TargetPath|DisplayTitle]]` (or `[[TargetPath]]` if title matches).
-     - **Cleanup handlers**: Dismiss popup cleanly on `Escape`, `Tab`, outside touch/click (`pointerdown`), backspace before `[[`, or editor blur.
-   - **Intent-Aware Citation Recommender**:
-     - Function `extractDraftSignature(text)`: Collects Set of `[[...]]` links and Set of `#tag` tokens from current draft.
-     - Function `scoreCandidateNotes(...)`: Retrieves candidate notes in configured highlights folder (`highlightsFolder()`). Calculates weighted score based on draft tags and 1-hop / 2-hop graph neighbors.
-     - **Dynamic Dual-State Picker UI**: Displays top 3–5 scored contextual citations when search input is empty; switches instantly to fuzzy search on keystroke.
-
-4. **`src/style.css`**:
-   - Styling for the inline `[[` autocomplete dropdown: clean elevated card, responsive positioning, subtle active highlight, and safe z-index layering above sheet containers.
-   - Styling for the dual-state citation suggestions banner in the citation picker.
+### 1. OPDS Catalog Integration: "Browse Remote, Stash Local"
+- **New Module `src/sources/opds.js`**:
+  - Supports OPDS 1.2 (Atom XML / Dublin Core) and OPDS 2.0 (JSON Navigation & Acquisition feeds).
+  - Robust XML DOM parser for Atom entry elements (`<entry>`, `<link rel="http://opds-spec.org/acquisition" ...>`, `<link rel="http://opds-spec.org/image" ...>`, `<link rel="subsection" ...>`, `<link rel="search" ...>`).
+  - **Full Relative URL Normalization**:
+    ```javascript
+    function resolveUrl(href, baseUrl) {
+      if (!href) return null;
+      try {
+        return new URL(href, baseUrl).href;
+      } catch {
+        return href;
+      }
+    }
+    ```
+    Applied to all cover images, thumbnails, subsection feed links, acquisition downloads, and OpenSearch template descriptors.
+  - Extract metadata: Title, Authors, Summary, Publication Date, Categories, Covers, and EPUB/PDF acquisition links.
+  - **CORS & Auth Handling**:
+    - Direct-first `fetch(url, { headers })` for CORS-enabled Calibre-Web, Kavita, Komga, or reverse proxy setups.
+    - User-configurable **CORS Proxy URL** in Settings (Tab 1: Sources & Sync) for static deployments or strict remote instances.
+    - HTTP Basic Auth / Bearer token support per catalog.
+- **Store & Settings Additions**:
+  - `store.js`: Add `catalogs` collection in local storage / IndexedDB (`id`, `name`, `url`, `authType`, `username`, `password`, `corsProxy`).
+  - `settings.js`: Catalog manager (Add Catalog, Presets for Calibre-Web, Standard Ebooks, Feedbooks, Project Gutenberg) + "Acquired books go to" destination selector.
+- **Shelves UI (`src/ui/types.js` & `src/ui/opds-catalog.js`)**:
+  - Add a dedicated "Catalogs" section in the Shelves drawer.
+  - Interactive catalog browser: navigate hierarchical feeds, search catalog titles, view cover grids and book detail sheets.
+  - Book Detail Modal: Book cover, description, format tags (`EPUB`, `PDF`), and an **Acquire** button:
+    - Primary action: `[ Acquire ]` (immediately streams book and saves to configured `acquiredBooksHome`).
+    - Inline override: `(Saving to: Cloudflare R2 · Change)` allows one-tap switch to save only to "This Device".
+    - Stashes book metadata to `store.items` and book binary to `store.blobs` or remote destination.
 
 ---
 
-## 5. Verification Plan
+### 2. PDF & Book Highlights: Deep-Linking & Provenance
+- **Highlight Locator Metadata Contract**:
+  - Define deterministic locator contracts for EPUB and PDF highlights:
+    ```markdown
+    ---
+    source_type: epub # or 'pdf'
+    book_ref: "books/the-creative-act.epub" # or SHA hash / storage path
+    book_title: "The Creative Act"
+    cfi: "epubcfi(/6/14[chapter-2]!/4/2/12,/1:0,/1:142)"
+    page: 42 # for PDF or estimated EPUB
+    chapter: "Chapter 2: Tuning In"
+    created_at: 2026-10-15T07:20:00Z
+    ---
 
-1. [x] **Feed View Action Button Verification**:
-   - Fixed undefined variable crash (`title`) in `actions.cardMenu(card)`. Card context menu opens and functions cleanly.
-2. [x] **Intent-Aware Citation Picker**:
-   - Sub-5ms Draft Signature extraction inspects active draft in memory.
-   - 2-hop bridge notes and tag overlap scoring dynamically ranks candidate citations from the configured highlights folder.
-   - Dual-state picker provides clean search input on open with top 3–5 contextual suggestions, instantly collapsing into fuzzy search on keystroke.
-3. [x] **Unified Editor & Live Reader Sync**:
-   - `compose.open({ existingItem })` unifies note creation and note editing into one full-featured sheet.
-   - Reader "Edit" and Feed "Edit note" open the unified editor with folder/type, status, tags, title, and body pre-populated.
-   - `presets.onSaved` immediately updates reader DOM, re-transforms citation cards, and re-executes `showConnections(conn)`.
-4. [x] **Autocomplete & Link Convention**:
-   - Header `[[ ]] Link` button and typing `[[` autocomplete inserted using `[[TargetPath|DisplayTitle]]` (or `[[TargetPath]]` when path matches title).
-   - Clean unmounting on Escape, Tab, outside tap/touch, and backspacing past brackets for mobile and desktop ergonomics.
-5. [x] **Compilation & Linting**:
-   - `compile_applet` passed and dev server running cleanly on port 3000.
+    > "The artist is not the originator of ideas; the artist is a receiver."
+    — [The Creative Act, p. 42](readover://jump?book=books%2Fthe-creative-act.epub&cfi=epubcfi...)
+    ```
+- **Locator Extraction in Readers**:
+  - `src/reader/foliate-view.js`: Capture CFI range, chapter title, and surrounding context on selection highlight.
+  - `src/reader/pdf-view.js`: Capture page number, quad points/rectangles, and highlighted text on selection highlight.
+- **Deep-Link Citation Jump Handler**:
+  - Intercept citation links in `src/ui/reader.js` and `src/markdown.js`.
+  - **Pre-flight check**:
+    1. Check if `book_ref` exists in `store.items` and local `store.blobs`.
+    2. If missing on current device, display friendly modal:
+       `"Source book 'The Creative Act' is not cached on this device."`
+       `[ Download from Library / R2 ] [ Dismiss ]`
+    3. When present, seamlessly launch the EPUB or PDF viewer and seek directly to the exact CFI or page.
+
+---
+
+### 3. Images & Attachments: Storage-Agnostic Architecture
+- **Attachment Pipeline (`src/attachments.js`)**:
+  - **Unified Event Handling in Composer & Reader**:
+    - Listen for `paste` and `drop` events on:
+      1. `src/ui/compose.js` textarea (when creating a new note or fast capture).
+      2. `src/ui/reader.js` textarea (when editing an existing note or adding a thought).
+  - **Client-Side Canvas Compression**:
+    - Auto-scale image to max dimension 1600px maintaining aspect ratio.
+    - Export as `image/webp` with quality 0.8 (typically ~80–150 KB).
+  - **Deterministic Naming**:
+    - Pattern: `attachments/YYYY-MM-DD-${slug}-${hash.slice(0, 6)}.webp`.
+  - **Unified Destination Routing**:
+    - In Settings (Tab 2: Garden): `Attachments destination` option:
+      - Default: `"Same provider as active note"` (saves into `attachments/` folder in the note's repository/storage).
+      - Cloud Vault: `"Cloudflare R2 / S3 Bucket"` (direct upload to R2/S3 object storage, keeping Git notes pure text).
+    - Save binary via unified storage adapter: `library.putAttachment(src, path, blob)`.
+    - Cache in IndexedDB `store.blobs` for immediate offline-first access.
+    - Insert clean, portable relative Markdown into editor: `![](attachments/2026-10-15-concept-a8f1.webp)`.
+- **Markdown Interceptor & Resolver (`src/markdown.js`)**:
+  - Catch all `<img src="...">` with relative or `attachments/` paths during rendering.
+  - Resolve to IndexedDB blob cache or fetch via storage adapter.
+  - Generate temporary Object URL `URL.createObjectURL(blob)`.
+  - Track created Object URLs and revoke on view transition (`URL.revokeObjectURL`) to prevent mobile memory leaks.
+
+---
+
+### 4. Export & Sharing Suite and Print CSS
+- **Rich Clipboard Copy (`navigator.clipboard.write`)**:
+  - Dual-format clipboard entry with both `text/html` and `text/plain` payloads.
+  - Fully enveloped HTML document with self-contained styles for blockquotes, italics, headings, and citations.
+  - Bypasses mobile keyboard clipboard managers (like Gboard) that truncate plain text at 20,000 characters.
+  - Preserves formatting cleanly when pasted into Substack, Medium, or Google Docs.
+- **Native OS Share Sheet (`navigator.share`)**:
+  - Integrated into note reader and card feed menus.
+  - Provides native sharing with titles, excerpts, and URLs to Signal, WhatsApp, Apple Notes, or Mail.
+- **Ink-Friendly Print / PDF Vector Export (`@media print`)**:
+  - Dedicated print styles in `src/style.css`:
+    - Strip all navigation bars, tab bars, action buttons, sheet overlays, and status footers.
+    - Optimize typography with high-contrast text and crisp image rendering.
+    - Style citation cards with delicate hairline borders and `page-break-inside: avoid;`.
+    - Automatically append URLs to external links: `a[href^="http"]::after { content: " (" attr(href) ")"; font-size: 0.85em; opacity: 0.8; }`.
+    - Trigger via `window.print()` in reader menu and Settings export card.
+
+---
+
+## Verification Plan
+
+### Automated & Compilation Tests
+- Run `compile_applet` to verify TypeScript/JavaScript syntax and build stability.
+- Run `lint_applet` to verify no broken imports, undeclared variables, or syntax errors.
+
+### Manual Verification
+1. **OPDS Catalog**:
+   - Add sample OPDS catalog (e.g. Standard Ebooks or Calibre-Web feed).
+   - Test feed browsing, category pagination, search query handling, and cover loading with relative URL resolution.
+   - Test `[ Acquire ]` with default destination and verify inline override to "This Device".
+2. **Deep-Linked Highlights**:
+   - Create a highlight in an EPUB and a PDF.
+   - Verify frontmatter schema and Markdown citation link structure.
+   - Click citation link: verify pre-flight verification, missing-book prompt, and jump directly to the highlighted CFI/page.
+3. **Attachments & Image Compression**:
+   - Test paste / drop in `compose.js` and `reader.js`.
+   - Verify canvas WebP compression to ~100 KB and storage path `attachments/YYYY-MM-DD-...webp`.
+   - Verify note rendering resolves relative image path smoothly offline and online.
+4. **Export Suite & Print**:
+   - Trigger Rich Copy and paste into test receiver; verify HTML headings and blockquote styling.
+   - Test Print Dialog preview; verify chrome is completely stripped, citations have hairline borders, and URLs are printed cleanly.

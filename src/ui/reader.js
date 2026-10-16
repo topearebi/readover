@@ -11,6 +11,7 @@ import { wikiLink, updateFrontmatter } from '../notefile.js';
 import { growthOf, isArchived } from '../garden.js';
 import { growthTag, openGrowthSheet } from './growth.js';
 import { askNote } from './highlight-note.js';
+import { setupImageAttachments } from '../attachments.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const linkName = (item) => item.path.split('/').pop().replace(/\.(md|markdown|txt)$/i, '');
@@ -36,7 +37,8 @@ export function addToSection(text, heading, block) {
  * Transforms Obsidian citation callouts ([!quote], [!cite]) or blockquotes with source
  * attribution links into bounded, styled evidence cards with distinct typography and direct links.
  */
-function transformCitationCards(root) {
+function transformCitationCards(root, noteAnchor = null, noteMeta = null) {
+
   const bqs = [...root.querySelectorAll('blockquote')];
   for (const bq of bqs) {
     if (bq.closest('.citation-card')) continue;
@@ -116,9 +118,28 @@ function transformCitationCards(root) {
       card.appendChild(meta);
     }
 
+    // Provenance Jump-to-Source action
+    const bookRef = noteAnchor?.book || noteMeta?.book_ref;
+    if (bookRef) {
+      const bookAt = noteAnchor?.at || noteMeta?.locator?.cfi || (noteMeta?.locator?.page ? `page=${noteMeta.locator.page}` : '');
+      const bookTitle = noteMeta?.book_title || targetTitle || 'Book';
+      const locDetail = noteMeta?.locator?.page ? `p. ${noteMeta.locator.page}` : (noteAnchor?.chapter || '');
+      const jumpRow = document.createElement('div');
+      jumpRow.className = 'citation-jump-wrap';
+      const jumpBtn = document.createElement('button');
+      jumpBtn.type = 'button';
+      jumpBtn.className = 'btn btn-sm btn-jump-source';
+      jumpBtn.setAttribute('data-book', bookRef);
+      jumpBtn.setAttribute('data-at', bookAt);
+      jumpBtn.innerHTML = `<span class="jump-icon" aria-hidden="true">📖</span> Jump to passage in <b>${bookTitle}</b>${locDetail ? ` <small>(${locDetail})</small>` : ''} <span class="jump-arrow" aria-hidden="true">↗</span>`;
+      jumpRow.appendChild(jumpBtn);
+      card.appendChild(jumpRow);
+    }
+
     bq.replaceWith(card);
   }
 }
+
 
 /**
  * @param item  the note
@@ -164,7 +185,7 @@ export async function openNote(item, opts = {}) {
       .catch(() => {});
     prose.innerHTML = note.html;
     resolveImages(prose, item);
-    transformCitationCards(prose);
+    transformCitationCards(prose, note.anchor, note.meta);
     const crumbs = item.folder ? item.folder.split('/') : [];
     const linked = el('section', { class: 'backlinks', hidden: true });
     const article = el(
@@ -312,8 +333,30 @@ export async function openNote(item, opts = {}) {
     }
   }
 
-  // Links to other notes open in Readover.
+  // Links and Jump-to-source in Readover.
   scroll.addEventListener('click', async (e) => {
+    // 1. Jump-to-source action button or deep link
+    const jumpBtn = e.target.closest('.btn-jump-source, a[href^="readover://open"]');
+    if (jumpBtn) {
+      e.preventDefault();
+      let bookRef = jumpBtn.dataset.book;
+      let at = jumpBtn.dataset.at;
+      if (!bookRef && jumpBtn.getAttribute('href')) {
+        try {
+          const u = new URL(jumpBtn.getAttribute('href'));
+          bookRef = u.searchParams.get('book');
+          at = u.searchParams.get('at');
+        } catch {}
+      }
+      if (bookRef && opts.openBookRef) {
+        opts.openBookRef(bookRef, at);
+      } else {
+        toast("Unable to open book locator from this note");
+      }
+      return;
+    }
+
+    // 2. Links to other notes
     const wiki = e.target.closest('[data-wikilink]');
     const a = e.target.closest('a[href]');
     let target = null;
@@ -333,6 +376,7 @@ export async function openNote(item, opts = {}) {
     if (found) opts.openItem?.(found);
     else toast(`There's no note called “${target}” yet`, opts.createNote ? { label: 'Create it', run: () => opts.createNote(target.split('/').pop().replace(/\.md$/i, '')) } : null);
   });
+
   scroll.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target.matches?.('[data-wikilink]')) e.target.click();
   });
@@ -416,7 +460,9 @@ export async function openNote(item, opts = {}) {
         editing = true;
         textarea = el('textarea', { spellcheck: 'true', 'aria-label': 'Note source' });
         textarea.value = text;
+        setupImageAttachments(textarea, { getSource: () => src, folder: item.folder });
         scroll.replaceChildren(el('div', { class: 'editor' }, textarea));
+
         textarea.addEventListener('input', () => fitEditor(textarea, scroll));
         fitEditor(textarea, scroll);
         editBtn.textContent = 'Save';
@@ -462,6 +508,11 @@ export async function openNote(item, opts = {}) {
     if (writable && !editing && opts.replant && archived) actions.push({ id: 'replant', label: 'Replant', icon: 'feed' });
     if (writable && !editing) actions.push({ id: 'move', label: 'Rename or move', icon: 'feed' });
     if (githubUrl()) actions.push({ id: 'github', label: 'View on GitHub', icon: 'share' });
+    if (!editing) {
+      actions.push({ id: 'share', label: 'Share via OS', icon: 'share' });
+      actions.push({ id: 'copy-publish', label: 'Copy for Publishing', icon: 'pen' });
+      actions.push({ id: 'print', label: 'Print / Save PDF', icon: 'open' });
+    }
     if (writable && !editing) actions.push({ id: 'delete', label: 'Delete', icon: 'close', danger: true });
     if (!actions.length) {
       toast(`“${displayName(src)}” is read-only`);
@@ -474,6 +525,59 @@ export async function openNote(item, opts = {}) {
     if (choice === 'prune') prune();
     if (choice === 'replant') replant();
     if (choice === 'github') window.open(githubUrl(), '_blank', 'noopener');
+    if (choice === 'share') {
+      if (navigator.share) {
+        navigator.share({
+          title: note.title,
+          text: `${note.title}\n\n${rawText || note.body || ''}`,
+        }).catch(() => {});
+      } else {
+        await navigator.clipboard.writeText(`${note.title}\n\n${rawText || note.body || ''}`);
+        toast('Copied note text to clipboard');
+      }
+    }
+    if (choice === 'copy-publish') {
+      const md = `${note.title ? `# ${note.title}\n\n` : ''}${rawText || note.body || ''}`;
+      const titleEscaped = (note.title || '').replace(/[&<>'"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[c]);
+      const envelopedHtml = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${titleEscaped}</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Georgia, serif; line-height: 1.65; color: #1c1917; max-width: 720px; margin: 0 auto; padding: 2rem 1rem; }
+h1, h2, h3 { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-weight: 700; color: #0c0a09; }
+h1 { font-size: 2rem; margin-bottom: 1.5rem; }
+blockquote { border-left: 3px solid #78716c; margin: 1.5em 0; padding: 0.5em 0 0.5em 1.25em; font-style: italic; color: #44403c; background: #fafaf9; }
+figure.citation-card { border: 1px solid #d6d3d1; border-radius: 8px; padding: 1rem 1.25rem; margin: 1.5rem 0; background: #fafaf9; }
+.citation-card-head { font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.05em; color: #78716c; margin-bottom: 0.5rem; }
+img { max-width: 100%; height: auto; border-radius: 6px; }
+a { color: #0284c7; text-decoration: underline; }
+p { margin-bottom: 1.2em; }
+</style>
+</head>
+<body>
+${note.title ? `<h1>${titleEscaped}</h1>` : ''}
+${prose.innerHTML}
+</body>
+</html>`;
+      try {
+        const blobHtml = new Blob([envelopedHtml], { type: 'text/html' });
+        const blobText = new Blob([md], { type: 'text/plain' });
+        const clipItem = new ClipboardItem({
+          'text/html': blobHtml,
+          'text/plain': blobText,
+        });
+        await navigator.clipboard.write([clipItem]);
+        toast('Copied rich text + Markdown for publishing');
+      } catch {
+        await navigator.clipboard.writeText(md);
+        toast('Copied Markdown note to clipboard');
+      }
+    }
+    if (choice === 'print') {
+      window.print();
+    }
     if (choice === 'delete') remove();
   };
 

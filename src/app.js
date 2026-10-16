@@ -741,15 +741,15 @@ const actions = {
     await openBookItem(item, card._bookTitle);
   },
 
-  /** A highlight card saved from a book: open the book at that passage. */
+  /** A highlight card saved from a book: open the book at that passage with pre-flight check. */
   async openAt(card, at) {
     haptic(6);
     const item = await resolveBookRef(at.book);
     if (!item) {
-      toast("That book isn't in your libraries on this device, so here's the note instead");
-      return actions.open(card);
+      promptMissingBook(at.book, { card, at });
+      return;
     }
-    await openBookItem(item, null, at.at);
+    await openBookItem(item, null, at.at, { card, at });
   },
 };
 
@@ -791,6 +791,14 @@ async function openNoteItem(item, { card = null, highlight = null, section = '',
         hydrateCard(card);
       },
       openItem: (other) => openNoteItem(other),
+      openBookRef: async (bookRef, at) => {
+        const bookItem = await resolveBookRef(bookRef);
+        if (!bookItem) {
+          promptMissingBook(bookRef, { at });
+          return;
+        }
+        await openBookItem(bookItem, null, at, { at });
+      },
       createNote: (title) => compose.open({ sourceId: item.sourceId, folder: item.folder, title }),
       makeInsight: (note, sel) => insightFromNote(item, note, sel),
       prune: (title) => pruneItem(item, title),
@@ -800,6 +808,7 @@ async function openNoteItem(item, { card = null, highlight = null, section = '',
     toast(err.message);
   }
 }
+
 
 /** Search notes from anywhere in the app (feed header, keyboard shortcut /). */
 async function searchNotesDialog() {
@@ -870,15 +879,81 @@ async function searchNotesDialog() {
 
 /** "gh:owner/repo|path" (as stored in highlight anchors) → this device's item. */
 async function resolveBookRef(ref) {
+  if (!ref) return null;
   const i = ref.indexOf('|');
-  const src = store.getSources().find((s) => store.sourceKey(s) === ref.slice(0, i));
-  return src ? store.items.get(store.keyOf(src.id, ref.slice(i + 1))) : null;
+  if (i > 0) {
+    const src = store.getSources().find((s) => store.sourceKey(s) === ref.slice(0, i));
+    if (src) {
+      const it = await store.items.get(store.keyOf(src.id, ref.slice(i + 1)));
+      if (it) return it;
+    }
+  }
+  // Check by file path or name across all local sources
+  const targetPath = i > 0 ? ref.slice(i + 1) : ref;
+  const allItems = await store.items.all();
+  return (
+    allItems.find(
+      (it) =>
+        it.kind !== 'note' &&
+        (it.path === targetPath || it.path.endsWith(`/${targetPath}`) || it.name === targetPath)
+    ) || null
+  );
 }
 
-async function openBookItem(item, knownTitle, at) {
+/** Pre-flight missing book prompt */
+async function promptMissingBook(bookRef, { card = null, at = null, item = null } = {}) {
+  const { sheet } = await import('./ui/sheet.js');
+  const bookName = (item?.name || String(bookRef || '').split('|').pop().split('/').pop() || 'Source book').replace(/\.[^.]+$/, '');
+
+  const msg = el(
+    'div',
+    { class: 'missing-book-prompt' },
+    el('p', { class: 'hint' }, `“${bookName}” is not currently stored or downloaded on this device.`),
+    el('p', { class: 'hint', style: 'margin-top:8px;' }, 'You can connect your storage source to sync it, or browse remote OPDS catalogs to acquire it.')
+  );
+
+  const actionsRow = el('div', { class: 'row-actions', style: 'margin-top:16px;' });
+  const opdsBtn = el('button', { type: 'button', class: 'btn btn-primary', value: 'opds' }, '🌐 Browse Catalogs / OPDS');
+  const syncBtn = el('button', { type: 'button', class: 'btn btn-quiet', value: 'settings' }, '⚙ Settings & Sync');
+  actionsRow.append(opdsBtn, syncBtn);
+  if (card) {
+    const noteBtn = el('button', { type: 'button', class: 'btn btn-quiet', value: 'note' }, 'Read Note Instead');
+    actionsRow.append(noteBtn);
+  }
+
+  const { value } = await sheet({
+    title: 'Source book not downloaded',
+    fields: [msg, actionsRow],
+    submit: false,
+    cancel: 'Dismiss',
+  });
+
+  if (value === 'opds') {
+    const { openOpdsBrowser } = await import('./ui/opds.js');
+    openOpdsBrowser(app);
+  } else if (value === 'settings') {
+    settings.open();
+  } else if (value === 'note' && card) {
+    actions.open(card);
+  }
+}
+
+async function openBookItem(item, knownTitle, at, jumpOpts = {}) {
   toast('Opening…');
+  let blob = (await store.blobs.get(item.key))?.blob;
+  if (!blob) {
+    try {
+      blob = await library.readBlob(item);
+    } catch (readErr) {
+      promptMissingBook(item.path, { item, at, ...jumpOpts });
+      return;
+    }
+  }
+  if (!blob) {
+    promptMissingBook(item.path, { item, at, ...jumpOpts });
+    return;
+  }
   try {
-    const blob = await library.readBlob(item);
     const title = knownTitle || (await store.thumbs.get(item.key))?.title || item.name.replace(/\.[^.]+$/, '');
     const onHighlight = (h) => saveBookHighlight(item, title, h);
     if (item.kind === 'pdf') {
@@ -895,18 +970,43 @@ async function openBookItem(item, knownTitle, at) {
 }
 
 /** A passage selected in a book or PDF becomes an insight note (see insights.js). */
-async function saveBookHighlight(item, bookTitle, { text, comment, chapter, page, at, title, tags = '' }) {
+async function saveBookHighlight(item, bookTitle, { text, comment = '', chapter = '', page = '', at = '', title = '', tags = '', progress = null }) {
   const where = [chapter, page ? `p. ${page}` : ''].filter(Boolean).join(', ');
+  const src = store.getSource(item.sourceId);
+  const bookRef = `${store.sourceKey(src)}|${item.path}`;
+  const isPdf = item.kind === 'pdf' || item.path.endsWith('.pdf');
+
   return insights.createInsight({
     quote: text,
     title,
     tags,
     sourceTitle: bookTitle,
     attribution: [bookTitle, where].filter(Boolean).join(', '),
-    anchor: { book: `${store.sourceKey(store.getSource(item.sourceId))}|${item.path}`, at },
+    anchor: {
+      book: bookRef,
+      format: isPdf ? 'pdf' : 'epub',
+      at,
+      page: page || (isPdf ? String(at).replace(/^page=/, '') : ''),
+      chapter: chapter || '',
+      progress: progress != null ? Number(progress) : null,
+    },
+    meta: {
+      type: 'highlight',
+      book_title: bookTitle,
+      book_ref: bookRef,
+      book_format: isPdf ? 'pdf' : 'epub',
+      locator: {
+        type: isPdf ? 'pdf_page' : 'epubcfi',
+        cfi: isPdf ? undefined : at,
+        page: page ? Number(page) || page : (isPdf ? parseInt(String(at).replace(/^page=/, ''), 10) : undefined),
+        chapter: chapter || undefined,
+        progress: progress != null ? Number(progress) : undefined,
+      },
+    },
     thought: comment,
   });
 }
+
 
 /**
  * Text selected in a note (or one highlight of an export) becomes an insight.

@@ -460,8 +460,9 @@ function renderError(card, item, err) {
   );
 }
 
-/** Notes often embed images with relative paths; load them from the same source. */
+/** Notes often embed images with relative paths or attachments/; load them from local/cloud storage. */
 export function resolveImages(container, item) {
+  const objectUrls = [];
   container.querySelectorAll('img').forEach(async (img) => {
     const src = img.getAttribute('src') || '';
     if (/^(https?:|\/\/)/i.test(src)) {
@@ -475,11 +476,21 @@ export function resolveImages(container, item) {
     img.removeAttribute('src');
     try {
       const blob = await readRelative(item, src.split('#')[0].split('?')[0]);
-      img.src = URL.createObjectURL(blob);
+      const objUrl = URL.createObjectURL(blob);
+      objectUrls.push(objUrl);
+      img.src = objUrl;
     } catch {
       img.alt = img.alt || src;
     }
   });
+
+  return () => {
+    for (const u of objectUrls) {
+      try {
+        URL.revokeObjectURL(u);
+      } catch {}
+    }
+  };
 }
 
 export { escapeHtml };
