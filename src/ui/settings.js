@@ -11,10 +11,11 @@ import { openSheet, el, toast } from './overlay.js';
 import * as dataSync from '../sync.js';
 import * as outbox from '../outbox.js';
 import * as learn from '../learn.js';
-import { newNotesHome, notesHome, booksHome, booksFolder, highlightsFolder, attachmentsFolder } from '../insights.js';
+import { newNotesHome, notesHome, notesFolder, booksHome, booksFolder, highlightsFolder, attachmentsFolder } from '../insights.js';
 import { libraryTypes } from './types.js';
 import { bookmarkletCode } from '../clip.js';
 import { TOKEN_URL } from './setup.js';
+import { VERSION } from '../version.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -29,11 +30,41 @@ export function lastSyncText(id) {
   return `Synced ${Math.round(hrs / 24)} days ago`;
 }
 
+export function cleanPath(val) {
+  return (val || '').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+}
+
+export function cleanUrl(val) {
+  return (val || '').trim().replace(/\/+$/, '');
+}
+
+export function formatDropboxLabel(d) {
+  if (!d) return 'Dropbox';
+  const name = (d.name || '').trim();
+  if (name) {
+    return name.startsWith('Dropbox') ? name : `Dropbox (${name})`;
+  }
+  return 'Dropbox';
+}
+
+export function formatS3Label(s) {
+  if (!s) return 'S3 / R2';
+  const name = (s.name || s.bucket || '').trim();
+  return name ? `S3 / R2 (${name})` : 'S3 / R2 Vault';
+}
+
+let activeEditSourceFn = null;
+export function openEditSource(src) {
+  if (activeEditSourceFn) return activeEditSourceFn(src);
+}
+
 /** @param app { syncSource(src), addFolder(), reimport(src), sourcesChanged(), applyTheme() } */
 export function initSettings(app) {
   const sheet = $('settings-sheet');
   const form = $('repo-form');
   const tokenInput = $('token-input');
+  const appVerEl = $('app-version');
+  if (appVerEl) appVerEl.textContent = VERSION;
 
   /* ---- Tab Navigation ---- */
   const tabButtons = Array.from(sheet.querySelectorAll('.settings-tab'));
@@ -125,7 +156,7 @@ export function initSettings(app) {
         };
         if (src.type === 'local' && src.mode === 'import') add('Re-import', () => app.reimport(src));
         else add('Refresh', () => app.syncSource(src, { userGesture: true }).then(renderSources));
-        if (src.type === 'github') add('Edit', () => showForm(src));
+        add('Edit', () => openEditSource(src), 'edit-source-btn');
         add('Remove', async () => {
           if (!confirm(`Remove "${displayName(src)}" from Readover? Your remote files aren't touched.`)) return;
           await store.removeSource(src.id);
@@ -199,12 +230,214 @@ export function initSettings(app) {
       renderSources();
       renderHighlightHome();
     };
+    const edit = el('button', { class: 'edit-source-btn' }, 'Edit');
+    edit.onclick = () => openEditSource(src);
     if (n) actions.append(move, download);
-    actions.append(del);
-    return el('div', { class: 'source' }, el('div', { class: 'source-name' }, 'On this device'), detail, actions);
+    actions.append(edit, del);
+    return el('div', { class: 'source' }, el('div', { class: 'source-name' }, displayName(src)), detail, actions);
   }
 
+  /* ---- Dedicated Edit Source Modal ---- */
+  function doOpenEditSource(src) {
+    if (!src) return;
+    const dialog = $('edit-source-sheet');
+    const editForm = $('edit-source-form');
+    if (!dialog || !editForm) return;
 
+    $('edit-source-id').value = src.id;
+    $('edit-source-type').value = src.type;
+    $('edit-source-title').textContent = `Edit ${displayName(src)}`;
+    $('edit-source-name').value = src.name || displayName(src) || '';
+
+    const rootWrap = $('edit-source-root-wrap');
+    const rootInput = $('edit-source-root');
+    const urlWrap = $('edit-source-url-wrap');
+    const urlInput = $('edit-source-url');
+    const branchWrap = $('edit-source-branch-wrap');
+    const branchInput = $('edit-source-branch');
+    const ignoreInput = $('edit-source-ignore');
+    const s3Wrap = $('edit-source-s3-wrap');
+    const endpointInput = $('edit-source-endpoint');
+    const bucketInput = $('edit-source-bucket');
+    const regionInput = $('edit-source-region');
+    const accessKeyInput = $('edit-source-accesskey');
+    const usernameWrap = $('edit-source-username-wrap');
+    const usernameInput = $('edit-source-username');
+    const credWrap = $('edit-source-credential-wrap');
+    const credInput = $('edit-source-credential');
+    const credLabel = $('edit-source-credential-label');
+    const credHint = $('edit-source-cred-hint');
+    const credToggle = $('edit-source-cred-toggle');
+
+    // Reset password visibility state to masked
+    if (credInput) {
+      credInput.type = 'password';
+      credInput.value = '';
+    }
+    const toggleUse = credToggle?.querySelector('use');
+    if (toggleUse) toggleUse.setAttribute('href', '#i-eye');
+    credToggle?.setAttribute('aria-pressed', 'false');
+
+    if (src.type === 'github') {
+      if (rootWrap) rootWrap.hidden = false;
+      if (rootInput) rootInput.value = src.root || '';
+      if (urlWrap) urlWrap.hidden = true;
+      if (branchWrap) branchWrap.hidden = false;
+      if (branchInput) branchInput.value = src.branch || '';
+      if (ignoreInput) ignoreInput.value = src.ignore || '';
+      if (s3Wrap) s3Wrap.hidden = true;
+      if (usernameWrap) usernameWrap.hidden = true;
+      if (credWrap) credWrap.hidden = false;
+      if (credLabel) credLabel.textContent = 'GitHub Access Token';
+      if (credInput) {
+        credInput.placeholder = src.token ? '••••••••  (leave blank to keep current)' : 'Optional personal token';
+        credInput.value = src.token || '';
+      }
+      if (credHint) credHint.textContent = 'Token is saved locally on this device.';
+    } else if (src.type === 'dropbox') {
+      if (rootWrap) rootWrap.hidden = false;
+      if (rootInput) rootInput.value = src.root || '';
+      if (urlWrap) urlWrap.hidden = true;
+      if (branchWrap) branchWrap.hidden = true;
+      if (s3Wrap) s3Wrap.hidden = true;
+      if (usernameWrap) usernameWrap.hidden = true;
+      if (credWrap) credWrap.hidden = false;
+      if (credLabel) credLabel.textContent = 'Dropbox Access Token';
+      if (credInput) {
+        credInput.placeholder = src.token ? '••••••••  (leave blank to keep current)' : 'Dropbox access token';
+        credInput.value = src.token || '';
+      }
+      if (credHint) credHint.textContent = 'OAuth or personal token with read/write access.';
+    } else if (src.type === 'webdav') {
+      if (rootWrap) rootWrap.hidden = true;
+      if (urlWrap) urlWrap.hidden = false;
+      if (urlInput) urlInput.value = src.url || '';
+      if (branchWrap) branchWrap.hidden = true;
+      if (s3Wrap) s3Wrap.hidden = true;
+      if (usernameWrap) usernameWrap.hidden = false;
+      if (usernameInput) usernameInput.value = src.username || '';
+      if (credWrap) credWrap.hidden = false;
+      if (credLabel) credLabel.textContent = 'WebDAV Password / App Password';
+      if (credInput) {
+        credInput.placeholder = src.password ? '••••••••  (leave blank to keep current)' : 'WebDAV password';
+        credInput.value = src.password || '';
+      }
+      if (credHint) credHint.textContent = 'Basic auth credentials sent directly over HTTPS.';
+    } else if (src.type === 's3' || src.type === 'r2') {
+      if (rootWrap) rootWrap.hidden = false;
+      if (rootInput) rootInput.value = src.root || '';
+      if (urlWrap) urlWrap.hidden = true;
+      if (branchWrap) branchWrap.hidden = true;
+      if (s3Wrap) s3Wrap.hidden = false;
+      if (endpointInput) endpointInput.value = src.endpoint || '';
+      if (bucketInput) bucketInput.value = src.bucket || '';
+      if (regionInput) regionInput.value = src.region || 'auto';
+      if (accessKeyInput) accessKeyInput.value = src.accessKeyId || '';
+      if (usernameWrap) usernameWrap.hidden = true;
+      if (credWrap) credWrap.hidden = false;
+      if (credLabel) credLabel.textContent = 'Secret Access Key';
+      if (credInput) {
+        credInput.placeholder = src.secretAccessKey ? '••••••••  (leave blank to keep current)' : 'AWS / R2 Secret Access Key';
+        credInput.value = src.secretAccessKey || '';
+      }
+      if (credHint) credHint.textContent = 'Used for client-side AWS SigV4 signatures.';
+    } else if (src.type === 'local') {
+      if (rootWrap) rootWrap.hidden = false;
+      if (rootInput) rootInput.value = src.root || '';
+      if (urlWrap) urlWrap.hidden = true;
+      if (branchWrap) branchWrap.hidden = true;
+      if (s3Wrap) s3Wrap.hidden = true;
+      if (usernameWrap) usernameWrap.hidden = true;
+      if (credWrap) credWrap.hidden = true;
+    } else {
+      if (rootWrap) rootWrap.hidden = true;
+      if (urlWrap) urlWrap.hidden = true;
+      if (branchWrap) branchWrap.hidden = true;
+      if (s3Wrap) s3Wrap.hidden = true;
+      if (usernameWrap) usernameWrap.hidden = true;
+      if (credWrap) credWrap.hidden = true;
+    }
+
+    editForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const saveBtn = $('edit-source-save-btn');
+      if (saveBtn) saveBtn.disabled = true;
+
+      try {
+        const patch = {
+          name: $('edit-source-name')?.value.trim() || undefined,
+        };
+
+        if (src.type === 'github') {
+          patch.root = cleanPath(rootInput?.value);
+          patch.branch = branchInput?.value.trim() || 'main';
+          patch.ignore = ignoreInput?.value.trim() || '';
+          const tokenVal = credInput?.value.trim();
+          if (tokenVal) patch.token = tokenVal;
+          else if (!credInput?.placeholder.includes('keep current')) patch.token = '';
+        } else if (src.type === 'dropbox') {
+          patch.root = cleanPath(rootInput?.value);
+          const tokenVal = credInput?.value.trim();
+          if (tokenVal) patch.token = tokenVal;
+          else if (!credInput?.placeholder.includes('keep current')) patch.token = '';
+        } else if (src.type === 'webdav') {
+          patch.url = cleanUrl(urlInput?.value);
+          patch.username = usernameInput?.value.trim() || '';
+          const passVal = credInput?.value.trim();
+          if (passVal) patch.password = passVal;
+          else if (!credInput?.placeholder.includes('keep current')) patch.password = '';
+        } else if (src.type === 's3' || src.type === 'r2') {
+          patch.endpoint = cleanUrl(endpointInput?.value);
+          patch.bucket = bucketInput?.value.trim() || '';
+          patch.region = regionInput?.value.trim() || 'auto';
+          patch.root = cleanPath(rootInput?.value);
+          patch.accessKeyId = accessKeyInput?.value.trim() || '';
+          const secVal = credInput?.value.trim();
+          if (secVal) patch.secretAccessKey = secVal;
+          else if (!credInput?.placeholder.includes('keep current')) patch.secretAccessKey = '';
+        } else if (src.type === 'local') {
+          patch.root = cleanPath(rootInput?.value);
+        }
+
+        const updated = store.updateSource(src.id, patch);
+
+        if (typeof dialog.close === 'function') dialog.close();
+
+        app.sourcesChanged?.();
+        await renderSources();
+        renderHighlightHome();
+        renderSync();
+        toast(`Updated "${displayName(updated)}"`);
+      } catch (err) {
+        toast(`Could not update source: ${err.message}`);
+      } finally {
+        if (saveBtn) saveBtn.disabled = false;
+      }
+    };
+
+    openSheet(dialog);
+  }
+
+  activeEditSourceFn = doOpenEditSource;
+
+  const editCredInput = $('edit-source-credential');
+  const editCredToggle = $('edit-source-cred-toggle');
+  if (editCredToggle && editCredInput) {
+    editCredToggle.onclick = () => {
+      const isPass = editCredInput.type === 'password';
+      editCredInput.type = isPass ? 'text' : 'password';
+      const toggleUse = editCredToggle.querySelector('use');
+      if (toggleUse) toggleUse.setAttribute('href', isPass ? '#i-hide' : '#i-eye');
+      editCredToggle.setAttribute('aria-pressed', isPass ? 'true' : 'false');
+    };
+  }
+  const editCancelBtn = $('edit-source-cancel-btn');
+  const editSourceSheet = $('edit-source-sheet');
+  if (editCancelBtn && editSourceSheet) {
+    editCancelBtn.onclick = () => {
+      if (typeof editSourceSheet.close === 'function') editSourceSheet.close();
+    };
+  }
 
   /* ---- GitHub Form ---- */
   function showForm(src = null) {
@@ -602,15 +835,66 @@ export function initSettings(app) {
     const sel = $('hl-home-select');
     const writable = store.getSources().filter((s) => s.type !== 'device' && canWriteSrc(s));
     const home = notesHome();
-    sel.replaceChildren(
-      ...writable.map((s) => el('option', { value: s.id }, displayName(s))),
-      el('option', { value: 'device' }, 'This device')
-    );
-    sel.value = home.id;
-    $('hl-folder-input').value = highlightsFolder();
+    if (sel) {
+      sel.replaceChildren(
+        ...writable.map((s) => el('option', { value: s.id }, displayName(s))),
+        el('option', { value: 'device' }, 'This device')
+      );
+      sel.value = home.id;
+    }
+
+    const notesFolderInput = $('notes-folder-input');
+    if (notesFolderInput) {
+      notesFolderInput.value = notesFolder();
+    }
+
+    const hlFolderInput = $('hl-folder-input');
+    if (hlFolderInput) {
+      hlFolderInput.value = highlightsFolder();
+    }
+
+    function updateNotesHierarchyHint() {
+      const hintEl = $('notes-hierarchy-hint');
+      if (!hintEl) return;
+      const base = (notesFolderInput ? notesFolderInput.value : notesFolder()).trim().replace(/^\/+|\/+$/g, '');
+      const hl = (hlFolderInput ? hlFolderInput.value : highlightsFolder()).trim().replace(/^\/+|\/+$/g, '') || 'Highlights';
+      const notesExample = base ? `${base}/{type}/...` : `{type}/... (root)`;
+      const hlExample = base ? `${base}/${hl}/...` : `${hl}/...`;
+      hintEl.textContent = `Notes: ${notesExample} • Highlights: ${hlExample}`;
+    }
+
+    if (notesFolderInput) {
+      notesFolderInput.oninput = () => updateNotesHierarchyHint();
+      notesFolderInput.onchange = (e) => {
+        const val = e.target.value.trim().replace(/^\/+|\/+$/g, '');
+        store.setPrefs({ notesFolder: val });
+        updateNotesHierarchyHint();
+        toast('Notes base folder updated');
+      };
+    }
+
+    if (hlFolderInput) {
+      hlFolderInput.oninput = () => updateNotesHierarchyHint();
+      hlFolderInput.onchange = (e) => {
+        const val = e.target.value.trim().replace(/^\/+|\/+$/g, '') || 'Highlights';
+        store.setPrefs({ highlightsFolder: val });
+        updateNotesHierarchyHint();
+        toast('Highlights folder updated');
+      };
+    }
+
+    if (sel) {
+      sel.onchange = (e) => {
+        store.setPrefs({ notesHome: e.target.value, newNotesHome: e.target.value });
+        updateNotesHierarchyHint();
+      };
+    }
+
+    updateNotesHierarchyHint();
+
     store.items
       .all()
-      .then((all) => $('hl-folder-list').replaceChildren(...libraryTypes(all, home).map((t) => el('option', { value: t }))))
+      .then((all) => $('hl-folder-list')?.replaceChildren(...libraryTypes(all, home, notesFolder()).map((t) => el('option', { value: t }))))
       .catch(() => {});
 
     // Books & Monographs Destination
@@ -649,17 +933,40 @@ export function initSettings(app) {
 
     // Attachments folder input
     const attFolderInput = $('attachments-folder-input');
+    const attSel = $('attachments-dest-select');
+
+    function updateAttachmentsDestHint() {
+      const hintEl = $('attachments-dest-hint');
+      if (!hintEl) return;
+      const dest = attSel?.value || 'same-as-note';
+      const folder = (attFolderInput?.value || attachmentsFolder() || 'attachments').trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '') || 'attachments';
+
+      let targetLabel = 'Same library as note';
+      if (dest === 'dropbox') {
+        const dbx = store.getSources().find((s) => s.type === 'dropbox' && canWriteSrc(s));
+        targetLabel = dbx ? formatDropboxLabel(dbx) : 'Dropbox';
+      } else if (dest === 's3' || dest === 'r2') {
+        const s3 = store.getSources().find((s) => (s.type === 's3' || s.type === 'r2') && canWriteSrc(s));
+        targetLabel = s3 ? formatS3Label(s3) : 'S3 / R2 Vault';
+      } else if (dest === 'device') {
+        targetLabel = 'This device';
+      }
+
+      hintEl.textContent = `Images will be stored in ${targetLabel} / ${folder} /`;
+    }
+
     if (attFolderInput) {
       attFolderInput.value = attachmentsFolder();
+      attFolderInput.oninput = () => updateAttachmentsDestHint();
       attFolderInput.onchange = (e) => {
-        const val = e.target.value.trim().replace(/^\/+|\/+$/g, '') || 'attachments';
+        const val = e.target.value.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '') || 'attachments';
         store.setPrefs({ attachmentsFolder: val });
+        updateAttachmentsDestHint();
         toast('Attachments folder updated');
       };
     }
 
     // Attachments & Media Destination
-    const attSel = $('attachments-dest-select');
     if (attSel) {
       const prefs = store.getPrefs();
       const currentDest = prefs.attachmentsVault || prefs.attachmentsDestination || 'same-as-note';
@@ -668,23 +975,23 @@ export function initSettings(app) {
       ];
       const s3Sources = store.getSources().filter((s) => (s.type === 's3' || s.type === 'r2') && canWriteSrc(s));
       for (const s of s3Sources) {
-        options.push(el('option', { value: 's3' }, `Dedicated Cloudflare R2 / S3 Vault (${displayName(s)})`));
+        options.push(el('option', { value: 's3' }, formatS3Label(s)));
       }
       const dbxSources = store.getSources().filter((s) => s.type === 'dropbox' && canWriteSrc(s));
       for (const d of dbxSources) {
-        options.push(el('option', { value: 'dropbox' }, `Dedicated Dropbox /${attachmentsFolder()}/ (${displayName(d)})`));
+        options.push(el('option', { value: 'dropbox' }, formatDropboxLabel(d)));
       }
       options.push(el('option', { value: 'device' }, 'This device only'));
       attSel.replaceChildren(...options);
       attSel.value = currentDest === 'note-provider' ? 'same-as-note' : currentDest;
       attSel.onchange = (e) => {
         store.setPrefs({ attachmentsVault: e.target.value, attachmentsDestination: e.target.value === 'same-as-note' ? 'note-provider' : e.target.value });
+        updateAttachmentsDestHint();
         toast('Attachment destination updated');
       };
+      updateAttachmentsDestHint();
     }
   }
-  $('hl-home-select').onchange = (e) => store.setPrefs({ notesHome: e.target.value, newNotesHome: e.target.value });
-  $('hl-folder-input').onchange = (e) => store.setPrefs({ highlightsFolder: e.target.value.trim().replace(/^\/+|\/+$/g, '') });
 
   /* ---- Reading Tab: Appearance & Habits ---- */
   $('theme-select').onchange = (e) => {
@@ -832,6 +1139,8 @@ export function initSettings(app) {
   return {
     async open(initialTab = 'tab-sources') {
       switchTab(initialTab);
+      const appVer = $('app-version');
+      if (appVer) appVer.textContent = VERSION;
       const prefs = store.getPrefs();
       tokenInput.value = store.getToken();
       renderToken();
@@ -852,5 +1161,7 @@ export function initSettings(app) {
     },
     switchTab,
     refresh: renderSources,
+    renderHighlightHome,
+    openEditSource: doOpenEditSource,
   };
 }

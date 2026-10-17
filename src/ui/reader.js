@@ -162,7 +162,7 @@ export async function openNote(item, opts = {}) {
   const linkBtn = el('button', { class: 'btn btn-quiet', hidden: true, title: 'Insert a link to another note' }, '[[ ]]');
   const saveBtn = el('button', { class: 'btn btn-primary save-btn', hidden: true, title: 'Save changes' }, 'Save');
   const moreBtn = el('button', { class: 'icon-btn', 'aria-label': 'More', title: 'More' }, '⋯');
-  const back = el('button', { class: 'icon-btn', 'aria-label': 'Back' }, icon('back'));
+  const back = el('button', { class: 'icon-btn', 'aria-label': 'Back (Hold to return to Feed)', title: 'Back (Hold to return to Feed)' }, icon('back'));
   const status = el('span', { class: 'status' });
   const titleEl = el('span', { class: 'title' }, note.title);
   const bar = el('div', { class: 'reader-bar' }, back, titleEl, status, star, linkBtn, discardBtn, saveBtn, moreBtn);
@@ -344,6 +344,8 @@ export async function openNote(item, opts = {}) {
 
   prose = renderArticle();
   document.body.classList.add('has-reader');
+  const tabbar = document.querySelector('.tabbar');
+  if (tabbar) tabbar.setAttribute('aria-hidden', 'true');
   document.body.append(root);
 
   if (opts.stagingBanner) {
@@ -426,13 +428,68 @@ export async function openNote(item, opts = {}) {
     document.removeEventListener('selectionchange', onSelection);
     root.remove();
     if (!document.querySelector('.reader')) {
-      document.body.classList.remove('has-reader');
+      document.body.classList.remove('has-reader', 'has-book-reader');
+      const tabbar = document.querySelector('.tabbar');
+      if (tabbar) tabbar.removeAttribute('aria-hidden');
     }
   }, { element: root, opener });
-  back.onclick = () => {
-    if (editing && textarea.value !== text && !confirm('Discard your changes?')) return;
+
+  let holdTimer = null;
+  let didHold = false;
+  let pressTime = 0;
+
+  const startHold = (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    didHold = false;
+    pressTime = Date.now();
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      didHold = true;
+      closeAll();
+    }, 400);
+  };
+
+  const clearHold = () => {
+    clearTimeout(holdTimer);
+  };
+
+  back.addEventListener('pointerdown', startHold);
+  back.addEventListener('pointerup', clearHold);
+  back.addEventListener('pointercancel', clearHold);
+  back.addEventListener('pointerleave', clearHold);
+  back.addEventListener('mousedown', startHold);
+  back.addEventListener('mouseup', clearHold);
+  back.addEventListener('touchstart', startHold, { passive: true });
+  back.addEventListener('touchend', clearHold);
+
+  back.onclick = (e) => {
+    clearTimeout(holdTimer);
+    if (didHold) {
+      didHold = false;
+      return;
+    }
+    if (pressTime && Date.now() - pressTime >= 400) {
+      pressTime = 0;
+      closeAll();
+      return;
+    }
+    pressTime = 0;
+    if (editing && textarea?.value !== text && !confirm('Discard your changes?')) return;
     close();
   };
+
+  root.addEventListener('keydown', (e) => {
+    if (e.target.closest?.('input, textarea, select')) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeAll();
+    } else if ((e.metaKey || e.ctrlKey) && e.key === 'Home') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeAll();
+    }
+  });
 
   star.onclick = async () => {
     starred = !starred;

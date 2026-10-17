@@ -1,6 +1,8 @@
 // WebDAV source adapter for Readover (Nextcloud, Koofr, Infomaniak, Box, self-hosted).
 // Works directly in browser fetch() with Basic Auth over HTTPS.
 
+import { validateBinaryPayload, verifyRemoteSize } from '../utils/binary.js';
+
 export const canWrite = (src) => Boolean(src.url && src.username && src.password);
 
 function authHeaders(src) {
@@ -201,24 +203,49 @@ export async function putFile(src, path, textOrBlob) {
     await ensureDir(src, parts.join('/'));
   }
 
-  const isBinary = !(typeof textOrBlob === 'string');
+  const isString = typeof textOrBlob === 'string';
+  const { body, size: expectedSize } = isString
+    ? { body: textOrBlob, size: new TextEncoder().encode(textOrBlob).byteLength }
+    : await validateBinaryPayload(textOrBlob);
+
   const fileUrl = `${baseUrl}/${encodeURI(cleanPath)}`;
   const res = await fetch(fileUrl, {
     method: 'PUT',
     headers: {
       ...authHeaders(src),
-      'Content-Type': isBinary ? 'application/octet-stream' : 'text/markdown; charset=utf-8',
+      'Content-Type': isString ? 'text/markdown; charset=utf-8' : 'application/octet-stream',
+      'Content-Length': String(expectedSize),
     },
-    body: textOrBlob,
+    body,
   });
 
   if (!res.ok) {
     throw new Error(`WebDAV save failed (${res.status})`);
   }
 
+  // Verification Contract: Verify remote file size via HEAD
+  try {
+    const headRes = await fetch(fileUrl, {
+      method: 'HEAD',
+      headers: authHeaders(src),
+    });
+    if (headRes.ok) {
+      const remoteSizeHeader = headRes.headers.get('content-length');
+      if (remoteSizeHeader !== null) {
+        verifyRemoteSize({ expectedSize, remoteSize: Number(remoteSizeHeader), provider: 'WebDAV' });
+      }
+    }
+  } catch (verifyErr) {
+    if (verifyErr.message && verifyErr.message.includes('Upload failed')) {
+      throw verifyErr;
+    }
+  }
+
   const etag = res.headers.get('ETag') || '';
   return etag.replace(/"/g, '') || `rev:${Date.now()}`;
 }
+
+export const putBlob = putFile;
 
 export async function deleteFile(src, path) {
   const baseUrl = cleanUrl(src.url);

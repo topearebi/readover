@@ -87,6 +87,7 @@
       <symbol id="i-scope" viewBox="0 0 24 24"><use href="#i-observatory"/></symbol>
       <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8m0 0V3m0 5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16m0 0v5m0-5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="i-book" viewBox="0 0 24 24"><use href="#i-open"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
     </defs>
 
   </svg>
@@ -430,18 +431,21 @@
           <p class="hint">Assign clear destination roles to your connected libraries and vaults for notes, books, and attachments.</p>
 
           <div class="destinations-grid">
-            <div class="destination-card">
+            <div class="destination-card" id="notes-destination-card">
               <h4>Notes &amp; Garden Home</h4>
-              <div class="field-pair">
-                <label class="field">New notes go to
+              <div class="field-trio">
+                <label class="field">Primary library
                   <select id="hl-home-select"></select>
                 </label>
-                <label class="field">Highlights folder
+                <label class="field">Notes base folder
+                  <input id="notes-folder-input" placeholder="e.g. notes (leave empty for root)" autocapitalize="off" spellcheck="false" />
+                </label>
+                <label class="field">Highlights / extracts folder
                   <input id="hl-folder-input" list="hl-folder-list" placeholder="Highlights" autocapitalize="off" spellcheck="false" />
                   <datalist id="hl-folder-list"></datalist>
                 </label>
               </div>
-              <p class="hint" style="font-size: 0.8rem; margin: 0.5rem 0 0 0;">Vault for authored notes and subfolder for literature extracts / highlights (default: <code>Highlights</code>).</p>
+              <p class="hint" id="notes-hierarchy-hint" style="font-size: 0.8rem; margin: 0.5rem 0 0 0;">Vault for authored notes and subfolder for literature extracts / highlights (default: <code>Highlights</code>).</p>
             </div>
 
             <div class="destination-card">
@@ -467,7 +471,7 @@
                   <input id="attachments-folder-input" placeholder="attachments" autocapitalize="off" spellcheck="false" />
                 </label>
               </div>
-              <p class="hint" style="font-size: 0.8rem; margin: 0.5rem 0 0 0;">Choose whether image attachments live alongside your notes or in a dedicated vault (e.g. Cloudflare R2 / S3 or Dropbox) and their subfolder (default: <code>attachments</code>).</p>
+              <p class="hint" id="attachments-dest-hint" style="font-size: 0.8rem; margin: 0.5rem 0 0 0;">Choose whether image attachments live alongside your notes or in a dedicated vault (e.g. Cloudflare R2 / S3 or Dropbox) and their subfolder (default: <code>attachments</code>).</p>
             </div>
           </div>
         </section>
@@ -621,6 +625,94 @@
         </section>
         <p class="hint version">Readover <span id="app-version"></span></p>
       </div>
+    </div>
+  </dialog>
+
+  <!-- Edit Connected Library Sheet -->
+  <dialog id="edit-source-sheet" class="sheet sheet-tall edit-source-sheet" aria-labelledby="edit-source-title">
+    <div class="sheet-inner">
+      <div class="sheet-head">
+        <h2 id="edit-source-title">Edit Library</h2>
+        <button id="edit-source-close" class="icon-btn" type="button" aria-label="Close" data-close><svg class="i"><use href="#i-close"/></svg></button>
+      </div>
+      <form id="edit-source-form" class="edit-source-form">
+        <input type="hidden" id="edit-source-id" name="id" />
+        <input type="hidden" id="edit-source-type" name="type" />
+
+        <div class="edit-source-field-group">
+          <label class="field" for="edit-source-name">Display Name
+            <input id="edit-source-name" name="name" placeholder="Library display name" autocomplete="off" required />
+          </label>
+        </div>
+
+        <!-- Target Subfolder / Root Path -->
+        <div class="edit-source-field-group" id="edit-source-root-wrap">
+          <label class="field" for="edit-source-root">Root Path / Target Subfolder
+            <input id="edit-source-root" name="root" placeholder="e.g. notes or research (leave empty for root)" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          </label>
+          <p class="hint" id="edit-source-root-hint">Subfolder path inside this storage library. Leading and trailing slashes are sanitized automatically.</p>
+        </div>
+
+        <!-- Provider Specific Fields (Dynamically revealed per source type) -->
+        <div class="edit-source-field-group" id="edit-source-url-wrap" hidden>
+          <label class="field" for="edit-source-url">Server URL
+            <input id="edit-source-url" name="url" placeholder="https://cloud.example.com/remote.php/dav/files/user/Notes" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          </label>
+        </div>
+
+        <div class="edit-source-field-group" id="edit-source-branch-wrap" hidden>
+          <div class="field-pair">
+            <label class="field" for="edit-source-branch">Branch
+              <input id="edit-source-branch" name="branch" placeholder="main" autocomplete="off" autocapitalize="off" spellcheck="false" />
+            </label>
+            <label class="field" for="edit-source-ignore">Skip Folders
+              <input id="edit-source-ignore" name="ignore" placeholder="templates, archive" autocomplete="off" autocapitalize="off" spellcheck="false" />
+            </label>
+          </div>
+        </div>
+
+        <div class="edit-source-field-group" id="edit-source-s3-wrap" hidden>
+          <div class="field-pair">
+            <label class="field" for="edit-source-endpoint">Endpoint URL
+              <input id="edit-source-endpoint" name="endpoint" placeholder="https://s3.us-east-1.amazonaws.com" autocomplete="off" autocapitalize="off" spellcheck="false" />
+            </label>
+            <label class="field" for="edit-source-bucket">Bucket
+              <input id="edit-source-bucket" name="bucket" placeholder="bucket-name" autocomplete="off" autocapitalize="off" spellcheck="false" />
+            </label>
+          </div>
+          <div class="field-pair">
+            <label class="field" for="edit-source-region">Region
+              <input id="edit-source-region" name="region" placeholder="auto or us-east-1" autocomplete="off" autocapitalize="off" spellcheck="false" />
+            </label>
+            <label class="field" for="edit-source-accesskey">Access Key ID
+              <input id="edit-source-accesskey" name="accessKeyId" placeholder="Access Key ID" autocomplete="off" autocapitalize="off" spellcheck="false" />
+            </label>
+          </div>
+        </div>
+
+        <div class="edit-source-field-group" id="edit-source-username-wrap" hidden>
+          <label class="field" for="edit-source-username">Username
+            <input id="edit-source-username" name="username" placeholder="Username" autocomplete="off" autocapitalize="off" spellcheck="false" />
+          </label>
+        </div>
+
+        <!-- Masked Credentials Field with Visibility Toggle -->
+        <div class="edit-source-field-group" id="edit-source-credential-wrap">
+          <label class="field" for="edit-source-credential" id="edit-source-credential-label">Access Token / Password</label>
+          <div class="password-input-wrap">
+            <input id="edit-source-credential" name="credential" type="password" placeholder="Leave empty to keep existing credential" autocomplete="off" autocapitalize="off" spellcheck="false" />
+            <button type="button" class="password-toggle-btn icon-btn" id="edit-source-cred-toggle" aria-label="Toggle credential visibility" title="Show/hide credential">
+              <svg class="i i-sm" aria-hidden="true"><use href="#i-eye"/></svg>
+            </button>
+          </div>
+          <p class="hint" id="edit-source-cred-hint">Credentials are stored locally in your browser's private storage.</p>
+        </div>
+
+        <div class="row-actions edit-source-actions">
+          <button type="submit" class="btn btn-primary" id="edit-source-save-btn">Save Changes</button>
+          <button type="button" class="btn btn-quiet" data-close id="edit-source-cancel-btn">Cancel</button>
+        </div>
+      </form>
     </div>
   </dialog>
 
@@ -787,7 +879,7 @@
   <aside id="sw-update-banner" class="sw-update-banner" hidden aria-live="polite" role="status">
     <div class="sw-update-content">
       <span class="sw-update-dot" aria-hidden="true"></span>
-      <span class="sw-update-text">An update is ready for Readover</span>
+      <span class="sw-update-text">An update to Readover <span id="sw-update-version"></span> is ready</span>
       <button type="button" id="sw-update-btn" class="sw-update-btn">Update now</button>
       <button type="button" id="sw-dismiss-btn" class="sw-update-dismiss" aria-label="Dismiss">✕</button>
     </div>

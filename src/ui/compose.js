@@ -18,7 +18,7 @@ import {
   resolveTitle,
   typeOf,
 } from '../notefile.js';
-import { newNotesHome, inboxState, highlightsFolder } from '../insights.js';
+import { newNotesHome, inboxState, highlightsFolder, notesFolder } from '../insights.js';
 import { entries as indexEntries, resolve } from '../notes-index.js';
 import { libraryTypes } from './types.js';
 import { sheet as openCustomSheet } from './sheet.js';
@@ -44,6 +44,12 @@ const rememberStatus = (folder, status) => {
     localStorage.setItem(STATUS_KEY, JSON.stringify(all));
   } catch {}
 };
+
+export function rootOf(src) {
+  const r = clean(src?.root);
+  const n = clean(notesFolder());
+  return [r, n].filter(Boolean).join('/');
+}
 
 let singletonController = null;
 
@@ -112,7 +118,6 @@ export function initCompose(app) {
     if (!id || id === DEVICE_ID) return deviceSource(false) || { id: DEVICE_ID, type: 'device', root: '' };
     return store.getSource(id) || deviceSource(false) || { id: DEVICE_ID, type: 'device', root: '' };
   };
-  const rootOf = (src) => clean(src?.root);
 
   // Auto-resize textarea to fit content and avoid double scrollbars
   function autoResize() {
@@ -128,7 +133,8 @@ export function initCompose(app) {
       crumbSrc.textContent = currentSourceId === DEVICE_ID ? 'This device' : (displayName(src) || 'Library');
     }
     const cleanF = clean(currentFolder);
-    const folderDisplay = cleanF ? cleanF.split('/').pop() : 'Unsorted';
+    const r = rootOf(src);
+    const folderDisplay = (!cleanF || cleanF === r) ? 'Unsorted' : (cleanF.split('/').pop() || 'Unsorted');
     if (crumbFolder) {
       crumbFolder.textContent = folderDisplay;
     }
@@ -227,7 +233,7 @@ export function initCompose(app) {
     let folderSelect = null;
     function refreshFolderOptions(forSrc) {
       const r = rootOf(forSrc);
-      const types = libraryTypes(allItems, forSrc);
+      const types = libraryTypes(allItems, forSrc, notesFolder());
       const opts = [
         el('option', { value: r }, 'Unsorted'),
         ...types.map((t) => el('option', { value: [r, t].filter(Boolean).join('/') }, t)),
@@ -436,7 +442,7 @@ export function initCompose(app) {
       if (!item) return false;
       const f = clean(item.folder).toLowerCase();
       if (hlFolder) {
-        return f === hlFolder || f.startsWith(`${hlFolder}/`);
+        return f === hlFolder || f.startsWith(`${hlFolder}/`) || f.endsWith(`/${hlFolder}`) || f.includes(`/${hlFolder}/`);
       }
       return item.path.toLowerCase().includes('highlight') || item.kind === 'highlight';
     };
@@ -1023,7 +1029,7 @@ export function initCompose(app) {
           }
         }
         currentSourceId = targetSourceId && validIds.has(targetSourceId) ? targetSourceId : DEVICE_ID;
-        currentFolder = presets.folder != null ? clean(presets.folder) : '';
+        currentFolder = presets.folder != null ? clean(presets.folder) : rootOf(srcOf(currentSourceId));
         currentStatus = presets.status ?? lastStatus(currentFolder);
         currentTags = Array.isArray(presets.tags) ? presets.tags.join(', ') : presets.tags || '';
 

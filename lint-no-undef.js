@@ -31,7 +31,7 @@ const KNOWN_GLOBALS = new Set([
   'performance', 'crypto', 'Response', 'Request', 'Headers', 'FormData', 'Image',
   'Audio', 'getComputedStyle', 'CSS', 'CanvasRenderingContext2D', 'OffscreenCanvas',
   'btoa', 'atob', 'confirm', 'alert', 'prompt', 'matchMedia', 'BroadcastChannel',
-  'ClipboardItem', 'removeEventListener', 'addEventListener',
+  'ClipboardItem', 'removeEventListener', 'addEventListener', 'ReadableStream',
 
   // Service Worker Globals
   'caches', 'self', 'importScripts', 'clients', 'skipWaiting', 'registration',

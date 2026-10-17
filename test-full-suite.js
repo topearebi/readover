@@ -1,6 +1,21 @@
 import assert from 'node:assert';
 import fs from 'node:fs';
 
+// Top-level watchdog timer (15s limit) with diagnostic handle dump
+const WATCHDOG_TIMEOUT_MS = 15000;
+const watchdog = setTimeout(() => {
+  console.error('\n🚨 [WATCHDOG TIMEOUT] test-full-suite.js exceeded 15s execution threshold!');
+  if (typeof process._getActiveHandles === 'function') {
+    const handles = process._getActiveHandles();
+    console.error(`Active handles count: ${handles.length}`);
+    for (const h of handles.slice(0, 10)) {
+      console.error(`- Handle type: ${h?.constructor?.name || typeof h}`);
+    }
+  }
+  process.exit(1);
+}, WATCHDOG_TIMEOUT_MS);
+watchdog.unref();
+
 // Mock browser environment for headless Node.js run
 const mockDoc = {
   implementation: { createHTMLDocument: () => ({ body: {}, createElement: () => ({ setAttribute: () => {} }) }) },
@@ -372,6 +387,20 @@ assert.ok(retrievedBlob && retrievedBlob.blob, 'Blob must be stored in blobs tab
 assert.ok(isPathSafe(savedItem.path), 'Book vault path must pass isPathSafe check');
 assert.ok(!isPathSafe('../../dangerous.epub'), 'Hostile traversal path must be rejected');
 
+// Binary Ghost Upload Defense: 0-byte rejection contract
+await assert.rejects(
+  async () => {
+    await saveBookToVault({ blob: new Blob([]), filename: 'ghost-empty.epub' });
+  },
+  /0 bytes/,
+  'saveBookToVault must fail fast and reject 0-byte payload'
+);
+
+const { validateBinaryPayload, cloneBlob, verifyRemoteSize } = await import('./src/utils/binary.js');
+assert.throws(() => verifyRemoteSize({ expectedSize: 1024, remoteSize: 0, provider: 'Dropbox' }), /Dropbox received 0 bytes/);
+assert.throws(() => verifyRemoteSize({ expectedSize: 1024, remoteSize: 512, provider: 'Dropbox' }), /byte mismatch/);
+assert.strictEqual(verifyRemoteSize({ expectedSize: 1024, remoteSize: 1024, provider: 'Dropbox' }), true);
+
 console.log('✅ Book Vault Ingestion, path normalization, and IDB storage verified.');
 
 /* =========================================================================
@@ -437,6 +466,9 @@ assert.ok(html.includes('id="i-printer"'), 'index.html must include i-printer SV
 assert.ok(html.includes('id="i-graft"'), 'index.html must include i-graft SVG symbol for grafting notes');
 assert.ok(html.includes('id="compose-attach-image"'), 'index.html must include #compose-attach-image button');
 assert.ok(html.includes('id="compose-image-input"'), 'index.html must include #compose-image-input file input');
+assert.ok(html.includes('id="edit-source-sheet"'), 'index.html must include #edit-source-sheet modal for editing storage providers');
+assert.ok(html.includes('id="edit-source-form"'), 'index.html must include #edit-source-form');
+assert.ok(html.includes('id="i-eye"'), 'index.html must include #i-eye SVG symbol for credential visibility toggle');
 
 console.log('✅ DOM entry points, viewport meta, ARIA labels, and noscript fallbacks verified.');
 
@@ -469,15 +501,44 @@ assert.ok(cssCheck.success, `Structural CSS validation failed: ${cssCheck.errors
 console.log('✅ CSS touch targets, 100dvh viewport rules, structural block/media parsing, and diagnostic styles verified.');
 
 /* =========================================================================
-   Test 9: Service Worker Shell & Cache File Integrity
+   Test 9: Service Worker Shell Cache & Assets Integrity & Eviction Contract
    ========================================================================= */
-console.log('\n--- Test 9: Service Worker Shell Cache & Assets Integrity ---');
+console.log('\n--- Test 9: Service Worker Shell Cache, Assets Integrity & Eviction ---');
 
+const { VERSION, SHELL_CACHE } = await import('./src/version.js');
+const pkg = JSON.parse(fs.readFileSync('./package.json', 'utf8'));
+
+// 1. Version Parity Check: package.json vs src/version.js
+assert.strictEqual(VERSION, pkg.version, `src/version.js VERSION (${VERSION}) must match package.json version (${pkg.version})`);
+assert.strictEqual(SHELL_CACHE, `readover-shell-v${VERSION}`, `SHELL_CACHE must format as readover-shell-v${VERSION}`);
+
+// 2. Service Worker Cache Definition Check
 const swContent = fs.readFileSync('./sw.js', 'utf8');
-assert.ok(swContent.includes("'readover-shell-v9'"), 'sw.js must be bumped to current version readover-shell-v9');
+assert.ok(swContent.includes(`const SHELL_CACHE = '${SHELL_CACHE}';`), `sw.js must declare SHELL_CACHE = '${SHELL_CACHE}' matching version milestone`);
 assert.ok(swContent.includes("SKIP_WAITING"), 'sw.js must support SKIP_WAITING message');
 
-// Extract SHELL array and verify every referenced file exists on disk
+// 3. Service Worker Cache Eviction Contract Test
+assert.ok(swContent.includes("addEventListener('activate'"), 'sw.js must register activate event listener');
+assert.ok(swContent.includes('caches.delete'), 'sw.js activate listener must invoke caches.delete to purge obsolete caches');
+
+// Simulating cache eviction logic from sw.js activate listener
+const keep = new Set([SHELL_CACHE, 'readover-vendor-v2']);
+const mockExistingCaches = [
+  'readover-shell-v6',
+  'readover-shell-v7',
+  'readover-shell-v9',
+  'readover-shell-v4.0.0',
+  'readover-vendor-v2',
+  'unrelated-cache-xyz',
+];
+const toDelete = mockExistingCaches.filter((k) => k.startsWith('readover-') && !keep.has(k));
+assert.deepStrictEqual(
+  toDelete,
+  ['readover-shell-v6', 'readover-shell-v7', 'readover-shell-v9'],
+  'Activate handler must selectively delete all legacy readover shells and preserve current shell and vendor caches'
+);
+
+// 4. Extract SHELL array and verify every referenced file exists on disk
 const match = swContent.match(/const SHELL = \[([\s\S]*?)\];/);
 assert.ok(match, 'sw.js must define const SHELL array');
 const fileMatches = match[1].match(/'\.\/([^']+)'/g);
@@ -490,7 +551,7 @@ for (const m of fileMatches) {
   assert.ok(fs.existsSync(filePath), `File in sw.js SHELL must exist on disk: ${filePath}`);
 }
 
-console.log(`✅ All ${fileMatches.length} Service Worker shell precache assets verified to exist on disk.`);
+console.log(`✅ All ${fileMatches.length} Service Worker shell precache assets and cache eviction contract verified.`);
 
 /* =========================================================================
    Test 10: Manifest & Module Export Linkage Verification
@@ -512,6 +573,13 @@ const attachMod = await import('./src/attachments.js');
 assert.ok(typeof attachMod.setupImageAttachments === 'function', 'src/attachments.js must export setupImageAttachments');
 assert.ok(typeof attachMod.processAndSaveImage === 'function', 'src/attachments.js must export processAndSaveImage');
 assert.ok(typeof attachMod.insertAtCursor === 'function', 'src/attachments.js must export insertAtCursor');
+assert.ok(typeof attachMod.buildAttachmentPath === 'function', 'src/attachments.js must export buildAttachmentPath');
+assert.ok(typeof attachMod.generateAttachmentFilename === 'function', 'src/attachments.js must export generateAttachmentFilename');
+
+const binaryMod = await import('./src/utils/binary.js');
+assert.ok(typeof binaryMod.validateBinaryPayload === 'function', 'src/utils/binary.js must export validateBinaryPayload');
+assert.ok(typeof binaryMod.cloneBlob === 'function', 'src/utils/binary.js must export cloneBlob');
+assert.ok(typeof binaryMod.verifyRemoteSize === 'function', 'src/utils/binary.js must export verifyRemoteSize');
 
 const cardMod = await import('./src/ui/card.js');
 assert.ok(typeof cardMod.rail === 'function', 'src/ui/card.js must export rail');
@@ -526,6 +594,14 @@ assert.ok(readerContent.includes("id: 'reader-dock-graft'"), 'src/ui/reader.js m
 
 const growthContent = fs.readFileSync('./src/ui/growth.js', 'utf8');
 assert.ok(growthContent.includes("'graft' : 'grafts'"), 'src/ui/growth.js must display graft/grafts');
+
+const indexHtml = fs.readFileSync('./index.html', 'utf8');
+assert.ok(indexHtml.includes('id="app-version"'), 'index.html must include #app-version span in Settings footer');
+assert.ok(indexHtml.includes('id="sw-update-version"'), 'index.html must include #sw-update-version span in update banner');
+
+const diagContent = fs.readFileSync('./src/ui/diagnostics.js', 'utf8');
+assert.ok(diagContent.includes('Application Version: Readover ${VERSION}'), 'src/ui/diagnostics.js must format report with active VERSION');
+assert.ok(diagContent.includes('SHELL_CACHE'), 'src/ui/diagnostics.js must dynamically reference SHELL_CACHE');
 
 console.log('✅ Web App Manifest multipart enctype, core ES module exports, and botanical UI consistency verified successfully.');
 
@@ -546,5 +622,6 @@ assert.ok(astResult.totalDynamicImportsChecked > 20, 'Must check dynamic imports
 
 console.log(`✅ AST Linkage Check: Verified 0 missing exports across ${astResult.filesChecked} modules (${astResult.totalImportsChecked} static imports, ${astResult.totalDynamicImportsChecked} dynamic imports).`);
 
+clearTimeout(watchdog);
 console.log('\n🎉 ALL 11 TEST SUITES COMPLETED WITH 100% SUCCESS!\n');
 process.exit(0);

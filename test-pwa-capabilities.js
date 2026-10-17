@@ -6,6 +6,21 @@ import { validateCssStructure } from './lint-css.js';
 
 console.log('🧪 Running PWA & Capability Test Suite (test-pwa-capabilities.js)...\n');
 
+// Top-level watchdog timer (15s limit) with diagnostic handle dump
+const WATCHDOG_TIMEOUT_MS = 15000;
+const watchdog = setTimeout(() => {
+  console.error('\n🚨 [WATCHDOG TIMEOUT] test-pwa-capabilities.js exceeded 15s execution threshold!');
+  if (typeof process._getActiveHandles === 'function') {
+    const handles = process._getActiveHandles();
+    console.error(`Active handles count: ${handles.length}`);
+    for (const h of handles.slice(0, 10)) {
+      console.error(`- Handle type: ${h?.constructor?.name || typeof h}`);
+    }
+  }
+  process.exit(1);
+}, WATCHDOG_TIMEOUT_MS);
+watchdog.unref();
+
 let totalTests = 0;
 let passedTests = 0;
 
@@ -22,13 +37,20 @@ function test(name, fn) {
   }
 }
 
-async function testAsync(name, fn) {
+async function testAsync(name, fn, timeoutMs = 4000) {
   totalTests++;
+  let timer;
   try {
-    await fn();
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Test timed out after ${timeoutMs}ms: "${name}"`)), timeoutMs);
+      timer.unref?.();
+    });
+    await Promise.race([fn(), timeoutPromise]);
+    clearTimeout(timer);
     console.log(`  ✓ ${name}`);
     passedTests++;
   } catch (err) {
+    clearTimeout(timer);
     console.error(`  ❌ FAIL: ${name}`);
     console.error(err);
     process.exitCode = 1;
@@ -472,6 +494,7 @@ test('settings sheet provides an Apple Shortcuts helper card in Reading & Export
   );
 });
 
+clearTimeout(watchdog);
 console.log(`\n🎉 All ${passedTests}/${totalTests} PWA & Capability checks PASSED!\n`);
 process.exit(process.exitCode || 0);
 

@@ -3,6 +3,7 @@
 // mode 'import': <input webkitdirectory> fallback (Safari/iOS/Firefox). Files are copied into
 //                IndexedDB so books still open after a reload.
 import { getHandle, setHandle, blobs, keyOf } from '../store.js';
+import { validateBinaryPayload, verifyRemoteSize } from '../utils/binary.js';
 
 export const supportsHandles = () => 'showDirectoryPicker' in window;
 
@@ -93,18 +94,22 @@ export async function writeText(src, path, text) {
 }
 
 export async function writeBlob(src, path, blob) {
+  const { body, size: expectedSize } = await validateBinaryPayload(blob);
   if (src.mode !== 'handle') {
-    await blobs.put({ key: keyOf(src.id, path), sourceId: src.id, blob });
-    return `fs:${blob.size || 0}:${Date.now()}`;
+    await blobs.put({ key: keyOf(src.id, path), sourceId: src.id, blob: body });
+    return `fs:${expectedSize}:${Date.now()}`;
   }
   if (!(await requestPermission(src, true))) throw new Error('Write access to the folder was not granted.');
   const fh = await fileHandleFor(src, path, true);
   const w = await fh.createWritable();
-  await w.write(blob);
+  await w.write(body);
   await w.close();
   const file = await fh.getFile();
+  verifyRemoteSize({ expectedSize, remoteSize: file.size, provider: 'Local Folder' });
   return `fs:${file.size}:${file.lastModified}`;
 }
+
+export const writeFile = writeBlob;
 
 export async function getText(src, path) {
   try {

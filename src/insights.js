@@ -24,6 +24,7 @@ import { entries } from './notes-index.js';
 import { ANCHOR_RE, extractHighlights } from './markdown.js';
 import { parseImport } from './imports.js';
 import * as dataSync from './sync.js';
+import { validateBinaryPayload, cloneBlob } from './utils/binary.js';
 
 export { formatGardenNoteBody, extractInsightComponents, addToSection, addRelatedLink };
 
@@ -71,12 +72,31 @@ export function booksHome() {
 }
 
 /**
- * The folder insights and clips go to (Settings → Highlights go to). Highlights/ unless
- * chosen; '' is the top level of the library.
+ * The base folder where authored notes live within the connected library (Settings → Notes base folder).
+ * Defaults to '' (root of the library).
+ */
+export function notesFolder() {
+  const v = store.getPrefs().notesFolder;
+  return v == null ? '' : String(v).trim().replace(/^\/+|\/+$/g, '');
+}
+
+/**
+ * Computes the full base directory for notes within a library (combining src.root and notesFolder).
+ */
+export function notesRoot(src = null) {
+  const target = src || notesHome();
+  const root = String(target?.root || '').replace(/^\/+|\/+$/g, '');
+  const base = notesFolder();
+  return [root, base].filter(Boolean).join('/');
+}
+
+/**
+ * The folder insights and clips go to (Settings → Highlights folder). Highlights/ unless
+ * chosen; '' is the base level of the library.
  */
 export function highlightsFolder() {
   const v = store.getPrefs().highlightsFolder;
-  return v == null ? 'Highlights' : String(v).replace(/^\/+|\/+$/g, '');
+  return v == null ? 'Highlights' : String(v).trim().replace(/^\/+|\/+$/g, '');
 }
 
 /**
@@ -102,7 +122,14 @@ export function booksFolder() {
  * Writes to IndexedDB and triggers cloud upload if a remote adapter is active.
  */
 export async function saveBookToVault({ blob, file, filename, title = '', author = '', format = '', sourceId = null, folder = null }) {
-  const actualBlob = blob || file;
+  const rawPayload = blob || file;
+  if (!rawPayload) {
+    throw new Error('Upload failed: no book file or binary payload provided.');
+  }
+
+  // Pre-flight inspection & clone
+  const { body: validatedPayload, size: payloadSize } = await validateBinaryPayload(rawPayload);
+
   const actualFilename = filename || file?.name || '';
   const targetSource = sourceId ? (store.getSource(sourceId) || booksHome()) : booksHome();
   const ext = format === 'pdf' ? 'pdf' : (format === 'epub' ? 'epub' : (actualFilename?.split('.').pop()?.toLowerCase() || 'epub'));
@@ -121,15 +148,17 @@ export async function saveBookToVault({ blob, file, filename, title = '', author
     name: safeFilename,
     kind: ext === 'pdf' ? 'pdf' : 'epub',
     sha: `vault:${Date.now()}`,
+    size: payloadSize,
     addedAt: Date.now(),
   };
 
+  // Cache locally in IndexedDB
   await store.items.put(item);
   await store.blobs.put({
     key: itemKey,
     sourceId: targetSource.id,
     sha: item.sha,
-    blob: actualBlob,
+    blob: cloneBlob(validatedPayload),
   });
 
   if (title || author) {
@@ -144,23 +173,29 @@ export async function saveBookToVault({ blob, file, filename, title = '', author
     });
   }
 
-  // Upload to remote storage if connected
-  try {
-    if (targetSource.type === 'dropbox') {
-      const { upload } = await import('./sources/dropbox.js');
-      await upload(targetSource, path, blob);
-    } else if (targetSource.type === 'webdav') {
-      const { putBlob } = await import('./sources/webdav.js');
-      await putBlob(targetSource, path, blob);
-    } else if (targetSource.type === 's3' || targetSource.type === 'r2') {
-      const { putBlob } = await import('./sources/s3.js');
-      await putBlob(targetSource, path, blob);
-    } else if (targetSource.type === 'local' && targetSource.mode === 'handle') {
-      const { writeFile } = await import('./sources/local.js');
-      await writeFile(targetSource, path, blob);
+  // Upload to remote storage if connected (Fail-Fast Upload Rejection & Rollback)
+  if (targetSource && targetSource.type !== 'device') {
+    try {
+      if (targetSource.type === 'dropbox') {
+        const { putAttachment } = await import('./sources/dropbox.js');
+        await putAttachment(targetSource, path, cloneBlob(validatedPayload));
+      } else if (targetSource.type === 'webdav') {
+        const { putFile } = await import('./sources/webdav.js');
+        await putFile(targetSource, path, cloneBlob(validatedPayload));
+      } else if (targetSource.type === 's3' || targetSource.type === 'r2') {
+        const { putFile } = await import('./sources/s3.js');
+        await putFile(targetSource, path, cloneBlob(validatedPayload));
+      } else if (targetSource.type === 'local' && targetSource.mode === 'handle') {
+        const { writeBlob } = await import('./sources/local.js');
+        await writeBlob(targetSource, path, cloneBlob(validatedPayload));
+      }
+    } catch (uploadErr) {
+      // Roll back local items so we don't report success or leave corrupt/0-byte ghost on the shelf
+      await store.items.delete(itemKey).catch(() => {});
+      await store.blobs.delete(itemKey).catch(() => {});
+      await store.thumbs.delete(itemKey).catch(() => {});
+      throw uploadErr;
     }
-  } catch (uploadErr) {
-    console.warn('Saved on device, cloud upload pending or failed:', uploadErr);
   }
 
   // Pre-generate cover thumbnail
@@ -239,9 +274,10 @@ export async function createInsight({ quote, sourceTitle = '', attribution = '',
   let dest = newNotesHome();
   if (dest.virtual) dest = library.deviceSource(true);
   const finalTitle = String(title || '').trim() || titleFromQuote(quote);
-  // Inside the library's own folder, when it is one folder of a repo.
+  // Inside the library's root folder, combining base notes folder and highlights subfolder
   const root = String(dest.root || '').replace(/^\/+|\/+$/g, '');
-  const folder = [root, highlightsFolder()].filter(Boolean).join('/');
+  const base = [root, notesFolder()].filter(Boolean).join('/');
+  const folder = [base, highlightsFolder()].filter(Boolean).join('/');
   const path = await newNotePath(folder, finalTitle.replace(/…$/, ''), async (p) => Boolean(await store.items.get(store.keyOf(dest.id, p))));
 
   // Highlight Metadata Contract: ensure type: highlight and deterministic coordinates

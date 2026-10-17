@@ -10,6 +10,7 @@ import { sanitizeFilename, isPathSafe, parseFrontmatter, slugify } from '../note
 import { compressImage } from '../attachments.js';
 import { saveBookToVault, booksFolder, booksHome } from '../insights.js';
 import { broadcastMessage, onBroadcastMessage } from '../sync.js';
+import { VERSION, SHELL_CACHE } from '../version.js';
 
 export function openDiagnostics(app) {
   const dialog = document.getElementById('diagnostics-sheet');
@@ -154,10 +155,12 @@ export function openDiagnostics(app) {
       if ('serviceWorker' in navigator) {
         const reg = await navigator.serviceWorker.getRegistration();
         const cachesList = await window.caches?.keys();
-        const hasV6 = cachesList?.some((k) => k.includes('readover-shell-v6'));
+        const hasCurrentShell = cachesList?.some((k) => k.includes(SHELL_CACHE));
         return {
-          status: reg?.active ? (hasV6 ? 'pass' : 'warn') : 'warn',
-          message: reg?.active ? (hasV6 ? 'Service Worker active with readover-shell-v6 cache.' : 'Service Worker active; update pending.') : 'Service Worker not active (normal for HTTP localhost or private mode).',
+          status: reg?.active ? (hasCurrentShell ? 'pass' : 'warn') : 'warn',
+          message: reg?.active
+            ? (hasCurrentShell ? `Service Worker active with ${SHELL_CACHE} cache.` : 'Service Worker active; update pending.')
+            : 'Service Worker not active (normal for HTTP localhost or private mode).',
           detail: `Caches: ${cachesList?.join(', ') || 'none'}`,
         };
       }
@@ -443,6 +446,7 @@ locator:
     }
 
     const report = `# Readover System Health & Diagnostic Report
+Application Version: Readover ${VERSION} (${SHELL_CACHE})
 Generated: ${new Date().toISOString()}
 User Agent: ${navigator.userAgent}
 Viewport: ${window.innerWidth}x${window.innerHeight} (${window.devicePixelRatio}x DPR)
@@ -452,7 +456,7 @@ ${all.map((r) => `- **[${r.status.toUpperCase()}]** ${r.group} / ${r.name}: ${r.
 
 ## JSON Data
 \`\`\`json
-${JSON.stringify({ timestamp: Date.now(), results: all, userAgent: navigator.userAgent }, null, 2)}
+${JSON.stringify({ version: VERSION, shellCache: SHELL_CACHE, timestamp: Date.now(), results: all, userAgent: navigator.userAgent }, null, 2)}
 \`\`\`
 `;
     navigator.clipboard.writeText(report).then(

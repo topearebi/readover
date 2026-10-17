@@ -7,6 +7,7 @@ import * as dropbox from './sources/dropbox.js';
 import * as webdav from './sources/webdav.js';
 import * as s3 from './sources/s3.js';
 import * as outbox from './outbox.js';
+import { validateBinaryPayload, cloneBlob } from './utils/binary.js';
 
 const { items, content, state, thumbs, progress, blobs, keyOf } = store;
 
@@ -63,6 +64,11 @@ const device = {
     if (item.text) return item.text;
     throw new Error('This note is missing from this device.');
   },
+  async readBlob(src, item) {
+    const b = await blobs.get(item.key);
+    if (b?.blob) return b.blob;
+    throw new Error('Book binary not found on this device.');
+  },
 };
 
 /** The on-device notebook; created the first time it's needed. */
@@ -87,7 +93,7 @@ export function canWrite(src) {
 
 export function displayName(src) {
   if (!src) return '';
-  if (src.type === 'device') return 'This device';
+  if (src.type === 'device') return src.name || 'This device';
   if (src.name) return src.name;
   if (src.type === 'github') return `${src.owner}/${src.repo}`;
   if (src.type === 'dropbox') return 'Dropbox (/Apps/Readover)';
@@ -230,8 +236,10 @@ export async function readBlob(item) {
 }
 
 export async function hasOfflineCopy(item) {
+  if (!item) return false;
   if (item.kind === 'note') return Boolean(await content.get(item.key));
-  return Boolean(await blobs.get(item.key));
+  const b = await blobs.get(item.key);
+  return Boolean(b?.blob);
 }
 
 /** Resolve a relative image/link path inside a note to a blob URL. */
@@ -297,23 +305,30 @@ export async function readRelative(item, relPath) {
  * and caches in IndexedDB for instant offline-first rendering.
  */
 export async function putAttachment(src, attachmentPath, blob) {
+  const { body: validatedBlob } = await validateBinaryPayload(blob);
   const cleanPath = attachmentPath.replace(/^\/+/, '');
   const key = keyOf(src.id, cleanPath);
 
   // Always cache locally in IndexedDB first
-  await blobs.put({ key, sourceId: src.id, sha: `att:${Date.now()}`, blob });
+  await blobs.put({ key, sourceId: src.id, sha: `att:${Date.now()}`, blob: cloneBlob(validatedBlob) });
 
   if (src.type === 'device') {
     return { key, path: cleanPath, sourceId: src.id };
   }
-  if (src.type === 's3' || src.type === 'r2') {
-    await s3.putFile(src, cleanPath, blob);
-  } else if (src.type === 'dropbox') {
-    await dropbox.putFile(src, cleanPath, blob);
-  } else if (src.type === 'webdav') {
-    await webdav.putFile(src, cleanPath, blob);
-  } else if (src.type === 'local') {
-    await local.writeBlob(src, cleanPath, blob);
+
+  try {
+    if (src.type === 's3' || src.type === 'r2') {
+      await s3.putFile(src, cleanPath, cloneBlob(validatedBlob));
+    } else if (src.type === 'dropbox') {
+      await dropbox.putAttachment(src, cleanPath, cloneBlob(validatedBlob));
+    } else if (src.type === 'webdav') {
+      await webdav.putFile(src, cleanPath, cloneBlob(validatedBlob));
+    } else if (src.type === 'local') {
+      await local.writeBlob(src, cleanPath, cloneBlob(validatedBlob));
+    }
+  } catch (err) {
+    await blobs.delete(key).catch(() => {});
+    throw err;
   }
   return { key, path: cleanPath, sourceId: src.id };
 }
@@ -323,6 +338,7 @@ export async function putAttachment(src, attachmentPath, blob) {
  * Stashes metadata into items and binary into blobs and target storage provider.
  */
 export async function saveAcquiredBook(targetSrc, filename, blob, meta = {}) {
+  const { body: validatedBlob, size: expectedSize } = await validateBinaryPayload(blob);
   const parts = filename.split('/');
   const name = parts.pop();
   const folder = parts.join('/');
@@ -338,11 +354,12 @@ export async function saveAcquiredBook(targetSrc, filename, blob, meta = {}) {
     name,
     kind,
     sha,
+    size: expectedSize,
     addedAt: Date.now(),
   };
 
   await items.put(item);
-  await blobs.put({ key, sourceId: targetSrc.id, sha, blob });
+  await blobs.put({ key, sourceId: targetSrc.id, sha, blob: cloneBlob(validatedBlob) });
 
   if (meta.title || meta.authors?.length) {
     await thumbs.put({
@@ -355,15 +372,24 @@ export async function saveAcquiredBook(targetSrc, filename, blob, meta = {}) {
     });
   }
 
-  // Upload to remote storage if connected
-  if (targetSrc.type === 's3' || targetSrc.type === 'r2') {
-    s3.putFile(targetSrc, filename, blob).catch((err) => console.warn('Could not upload book to S3', err));
-  } else if (targetSrc.type === 'dropbox') {
-    dropbox.putFile(targetSrc, filename, blob).catch((err) => console.warn('Could not upload book to Dropbox', err));
-  } else if (targetSrc.type === 'webdav') {
-    webdav.putFile(targetSrc, filename, blob).catch((err) => console.warn('Could not upload book to WebDAV', err));
-  } else if (targetSrc.type === 'local') {
-    local.writeBlob(targetSrc, filename, blob).catch((err) => console.warn('Could not write book to local folder', err));
+  // Upload to remote storage if connected (Fail-Fast with rollback)
+  if (targetSrc && targetSrc.type !== 'device') {
+    try {
+      if (targetSrc.type === 's3' || targetSrc.type === 'r2') {
+        await s3.putFile(targetSrc, filename, cloneBlob(validatedBlob));
+      } else if (targetSrc.type === 'dropbox') {
+        await dropbox.putAttachment(targetSrc, filename, cloneBlob(validatedBlob));
+      } else if (targetSrc.type === 'webdav') {
+        await webdav.putFile(targetSrc, filename, cloneBlob(validatedBlob));
+      } else if (targetSrc.type === 'local' && targetSrc.mode === 'handle') {
+        await local.writeBlob(targetSrc, filename, cloneBlob(validatedBlob));
+      }
+    } catch (uploadErr) {
+      await items.delete(key).catch(() => {});
+      await blobs.delete(key).catch(() => {});
+      await thumbs.delete(key).catch(() => {});
+      throw uploadErr;
+    }
   }
 
   window.dispatchEvent(new CustomEvent('readover:progress'));
@@ -765,4 +791,285 @@ export async function moveNote(item, newPath, { frontmatter = null, message = ''
   await forget(item.key);
   notesChanged();
   return moved;
+}
+
+/* ---------------- Book & Attachment File Management ---------------- */
+
+/**
+ * Purges the local binary cache for a book from IndexedDB while preserving
+ * its shelf metadata, cover thumbnail, and reading progress.
+ * Cannot be called for on-device books (DEVICE_ID) as device books exist solely in local storage.
+ */
+export async function evictBookCache(itemKey) {
+  const item = await items.get(itemKey);
+  if (!item || !isBook(item)) {
+    throw new Error('Item is not a valid book or was not found.');
+  }
+  if (item.sourceId === DEVICE_ID) {
+    throw new Error('Cannot remove local download for a book that is only stored on this device.');
+  }
+  const cached = await blobs.get(itemKey);
+  const freedBytes = cached?.blob?.size || item.size || 0;
+  await blobs.delete(itemKey);
+  window.dispatchEvent(new CustomEvent('readover:shelf-refresh'));
+  return { freedBytes };
+}
+
+/**
+ * Clears local cached binaries for all books hosted on remote providers,
+ * freeing device storage while preserving shelf items and reading progress.
+ * Books hosted exclusively on "This device" are never evicted.
+ */
+export async function clearAllBookCaches() {
+  const all = await items.all();
+  const remoteBooks = all.filter((i) => isBook(i) && i.sourceId !== DEVICE_ID);
+  let count = 0;
+  let totalFreed = 0;
+  for (const b of remoteBooks) {
+    const cached = await blobs.get(b.key);
+    if (cached?.blob) {
+      totalFreed += cached.blob.size || b.size || 0;
+      await blobs.delete(b.key);
+      count++;
+    }
+  }
+  window.dispatchEvent(new CustomEvent('readover:shelf-refresh'));
+  return { count, freedBytes: totalFreed };
+}
+
+/**
+ * Permanently deletes a book from remote storage and purges all local records
+ * (items, blobs, thumbs, progress, state).
+ */
+export async function deleteBookPermanently(item) {
+  const src = store.getSource(item.sourceId);
+  if (src && src.type !== DEVICE_ID && canWrite(src)) {
+    try {
+      if (src.type === 'dropbox') await dropbox.deleteFile(src, item.path);
+      else if (src.type === 'webdav') await webdav.deleteFile(src, item.path);
+      else if (src.type === 's3' || src.type === 'r2') await s3.deleteFile(src, item.path);
+      else if (src.type === 'local') await local.removeFile(src, item.path);
+    } catch (err) {
+      console.warn('Failed to delete book from remote source:', err);
+    }
+  }
+  await forget(item.key);
+  store.markDirty('important');
+  window.dispatchEvent(new CustomEvent('readover:shelf-refresh'));
+}
+
+/**
+ * Migrates a book between connected storage sources while preserving
+ * reading progress, highlights, thumbnails, and locator keys.
+ */
+export async function moveBookBetweenSources(fromSourceId, destSourceId, itemKey, { onProgress = () => {} } = {}) {
+  const fromSrc = store.getSource(fromSourceId);
+  const destSrc = store.getSource(destSourceId);
+  if (!fromSrc) throw new Error(`Source library "${fromSourceId}" was not found.`);
+  if (!destSrc) throw new Error(`Destination library "${destSourceId}" was not found.`);
+  if (fromSourceId === destSourceId) {
+    return items.get(itemKey);
+  }
+  if (!canWrite(destSrc)) {
+    throw new Error(`Destination library "${displayName(destSrc)}" is read-only.`);
+  }
+
+  const item = await items.get(itemKey);
+  if (!item || !isBook(item)) {
+    throw new Error('Item is not a valid book or was not found.');
+  }
+
+  onProgress(`Retrieving ${item.name}…`);
+  let blobPayload;
+  const cached = await blobs.get(itemKey);
+  if (cached?.blob) {
+    blobPayload = cached.blob;
+  } else {
+    blobPayload = await readBlob(item);
+  }
+
+  const { body: validatedPayload, size: payloadSize } = await validateBinaryPayload(blobPayload);
+
+  // Compute destination path
+  const filename = item.name;
+  const destRoot = String(destSrc.root || '').replace(/^\/+|\/+$/g, '');
+  const booksSubfolder = 'books';
+  const targetFolder = [destRoot, booksSubfolder].filter(Boolean).join('/');
+  const destPath = [targetFolder, filename].filter(Boolean).join('/');
+  const newKey = keyOf(destSrc.id, destPath);
+
+  onProgress(`Transferring ${filename} to ${displayName(destSrc)}…`);
+
+  // Write/Upload binary to destination
+  if (destSrc.type === 'dropbox') {
+    await dropbox.putAttachment(destSrc, destPath, cloneBlob(validatedPayload));
+  } else if (destSrc.type === 'webdav') {
+    await webdav.putFile(destSrc, destPath, cloneBlob(validatedPayload));
+  } else if (destSrc.type === 's3' || destSrc.type === 'r2') {
+    await s3.putFile(destSrc, destPath, cloneBlob(validatedPayload));
+  } else if (destSrc.type === 'local' && destSrc.mode === 'handle') {
+    await local.writeBlob(destSrc, destPath, cloneBlob(validatedPayload));
+  }
+
+  // Register new item in local database
+  const newItem = {
+    ...item,
+    key: newKey,
+    sourceId: destSrc.id,
+    path: destPath,
+    folder: targetFolder,
+    size: payloadSize || item.size,
+    sha: `migrated:${Date.now()}`,
+    addedAt: item.addedAt || Date.now(),
+  };
+
+  await items.put(newItem);
+  await blobs.put({
+    key: newKey,
+    sourceId: destSrc.id,
+    sha: newItem.sha,
+    blob: cloneBlob(validatedPayload),
+  });
+
+  // Migrate progress & locators
+  const existingProg = await progress.get(itemKey);
+  if (existingProg) {
+    await progress.put({
+      ...existingProg,
+      key: newKey,
+      sourceId: destSrc.id,
+    });
+  }
+
+  // Migrate thumbnail and cover
+  const existingThumb = await thumbs.get(itemKey);
+  if (existingThumb) {
+    await thumbs.put({
+      ...existingThumb,
+      key: newKey,
+      sourceId: destSrc.id,
+      sha: newItem.sha,
+    });
+  }
+
+  // Migrate state (starred/hidden/flags)
+  const existingState = await state.get(itemKey);
+  if (existingState) {
+    await state.put({
+      ...existingState,
+      key: newKey,
+      sourceId: destSrc.id,
+      path: destPath,
+    });
+  }
+
+  // Coupling & Aliasing: Update any note anchors referencing the old book locator
+  const oldSourceKey = store.sourceKey(fromSrc);
+  const newSourceKey = store.sourceKey(destSrc);
+  const oldRef = oldSourceKey ? `${oldSourceKey}|${item.path}` : item.path;
+  const newRef = newSourceKey ? `${newSourceKey}|${destPath}` : destPath;
+
+  const allNotes = await content.all();
+  for (const n of allNotes) {
+    if (n.text && (n.text.includes(oldRef) || n.text.includes(encodeURIComponent(oldRef)) || n.text.includes(itemKey))) {
+      let updatedText = n.text;
+      if (oldRef !== newRef) {
+        updatedText = updatedText.replaceAll(oldRef, newRef);
+        updatedText = updatedText.replaceAll(encodeURIComponent(oldRef), encodeURIComponent(newRef));
+      }
+      if (itemKey !== newKey) {
+        updatedText = updatedText.replaceAll(itemKey, newKey);
+      }
+      if (updatedText !== n.text) {
+        await content.put({ ...n, text: updatedText });
+      }
+    }
+  }
+
+  // Delete from source provider (if writable and not on-device)
+  onProgress('Cleaning up source library…');
+  if (canWrite(fromSrc) && fromSrc.type !== DEVICE_ID) {
+    try {
+      if (fromSrc.type === 'dropbox') await dropbox.deleteFile(fromSrc, item.path);
+      else if (fromSrc.type === 'webdav') await webdav.deleteFile(fromSrc, item.path);
+      else if (fromSrc.type === 's3' || fromSrc.type === 'r2') await s3.deleteFile(fromSrc, item.path);
+      else if (fromSrc.type === 'local') await local.removeFile(fromSrc, item.path);
+    } catch (err) {
+      console.warn(`Failed to delete source book ${item.path}:`, err);
+    }
+  }
+
+  // Remove old database records
+  await forget(itemKey);
+
+  store.markDirty('important');
+  window.dispatchEvent(new CustomEvent('readover:shelf-refresh'));
+  window.dispatchEvent(new CustomEvent('readover:notes-changed'));
+
+  return newItem;
+}
+
+/**
+ * Moves multiple books between sources sequentially.
+ */
+export async function moveBooksBetweenSources(fromSourceId, destSourceId, itemKeys, { onProgress = () => {} } = {}) {
+  let count = 0;
+  for (let i = 0; i < itemKeys.length; i++) {
+    const key = itemKeys[i];
+    onProgress(`Migrating book ${i + 1} of ${itemKeys.length}…`);
+    await moveBookBetweenSources(fromSourceId, destSourceId, key, { onProgress });
+    count++;
+  }
+  return count;
+}
+
+/**
+ * Calculates a summary of book counts, total sizes, and local device caches grouped by source.
+ */
+export async function getStorageBreakdown() {
+  const allItems = await items.all();
+  const bookItems = allItems.filter(isBook);
+  const allBlobs = new Map((await blobs.all()).map((b) => [b.key, b]));
+  const sources = store.getSources();
+  const sourceMap = new Map(sources.map((s) => [s.id, s]));
+  if (!sourceMap.has(DEVICE_ID)) {
+    sourceMap.set(DEVICE_ID, { id: DEVICE_ID, type: 'device', name: 'This device' });
+  }
+
+  const bySource = new Map();
+  for (const b of bookItems) {
+    if (!bySource.has(b.sourceId)) bySource.set(b.sourceId, []);
+    bySource.get(b.sourceId).push(b);
+  }
+
+  for (const [sId] of sourceMap) {
+    if (!bySource.has(sId)) bySource.set(sId, []);
+  }
+
+  const breakdown = [];
+  for (const [srcId, bks] of bySource) {
+    const src = sourceMap.get(srcId) || { id: srcId, name: srcId, type: 'unknown' };
+    let totalBytes = 0;
+    let cachedCount = 0;
+    let cachedBytes = 0;
+    for (const b of bks) {
+      const size = b.size || 0;
+      totalBytes += size;
+      const blobEntry = allBlobs.get(b.key);
+      if (blobEntry?.blob) {
+        cachedCount++;
+        cachedBytes += blobEntry.blob.size || size;
+      }
+    }
+    breakdown.push({
+      sourceId: srcId,
+      sourceName: displayName(src) || src.name || srcId,
+      sourceType: src.type,
+      bookCount: bks.length,
+      totalBytes,
+      cachedCount,
+      cachedBytes,
+    });
+  }
+  return breakdown;
 }

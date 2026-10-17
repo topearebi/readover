@@ -14,7 +14,7 @@ import { entries as noteEntries } from './notes-index.js';
 import { sheet as buildSheet, menu } from './ui/sheet.js';
 import { initSettings } from './ui/settings.js';
 import { initCompose } from './ui/compose.js';
-import { openSheet, toast, haptic, el, hasOverlay, closeTop } from './ui/overlay.js';
+import { openSheet, toast, haptic, el, hasOverlay, closeTop, closeAll } from './ui/overlay.js';
 import { VERSION } from './version.js';
 import * as dataSync from './sync.js';
 import * as outbox from './outbox.js';
@@ -1098,7 +1098,9 @@ export async function handleIncomingNoteFile(file) {
     type: 'note',
     onCommit: async () => {
       const home = insights.notesHome();
-      const targetFolder = insights.highlightsFolder() || '';
+      const base = insights.notesFolder?.() || '';
+      const hl = insights.highlightsFolder?.() || '';
+      const targetFolder = [base, hl].filter(Boolean).join('/');
       const targetPath = targetFolder ? `${targetFolder}/${file.name}` : file.name;
       const finalItem = {
         key: store.keyOf(home.id, targetPath),
@@ -1351,12 +1353,21 @@ window.addEventListener('keydown', (e) => {
     import('./ui/observatory.js').then((m) => m.openObservatory(app));
     return;
   }
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Home') {
+    e.preventDefault();
+    if (hasOverlay()) closeAll();
+    return;
+  }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.target.closest?.('input, textarea, select, [contenteditable]')) return;
   if (e.key === 'Escape') {
     // <dialog> sheets handle Escape themselves (their 'cancel' event).
-    if (hasOverlay() && !document.querySelector('dialog[open]')) closeTop();
-    return;
+    if (document.querySelector('dialog[open]')) return;
+    if (document.querySelector('.reader') || hasOverlay()) {
+      e.preventDefault();
+      closeAll();
+      return;
+    }
   }
   if (hasOverlay()) return;
   // Enter and Space belong to a focused button or link, not to the feed.
@@ -1483,6 +1494,7 @@ $('scope-btn').onclick = openScope;
 $('search-btn').onclick = searchNotesDialog;
 $('settings-btn').onclick = () => settings.open();
 app.openSettings = (tab) => settings.open(tab);
+app.openEditSource = (src) => settings.openEditSource?.(src);
 app.openObservatory = () => import('./ui/observatory.js').then((m) => m.openObservatory(app));
 app.openItem = (item) => (item.kind === 'note' ? openNoteItem(item) : openBookItem(item));
 app.openBook = (item) => openBookItem(item);
@@ -1540,7 +1552,8 @@ window.addEventListener('readover:progress', () => {
   clearTimeout(shelfTimer);
   shelfTimer = setTimeout(() => app.view === 'shelf' && shelf.render(), 800);
 });
-$('app-version').textContent = VERSION;
+const appVerEl = $('app-version');
+if (appVerEl) appVerEl.textContent = VERSION;
 
 captureApp = { openItem: (item) => openNoteItem(item), showFirst };
 
@@ -1651,6 +1664,14 @@ function setupServiceWorkerUpdates(registration) {
   function showUpdatePrompt() {
     const banner = document.getElementById('sw-update-banner');
     if (!banner) return;
+    const updateVerEl = document.getElementById('sw-update-version');
+    if (updateVerEl) {
+      updateVerEl.textContent = `v${VERSION}`;
+    }
+    const updateTextEl = banner.querySelector('.sw-update-text');
+    if (updateTextEl && !updateVerEl) {
+      updateTextEl.textContent = `An update to Readover v${VERSION} is ready`;
+    }
     banner.hidden = false;
     banner.classList.add('is-visible');
 

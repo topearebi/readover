@@ -26,13 +26,26 @@ export function renderTypeChecks(box, options, chosen = [], onChange = () => {})
 export const readTypeChecks = (box) => (box.hidden ? [] : [...box.querySelectorAll('input:checked')].map((i) => i.value));
 
 /** A library's types: any subfolder containing a note (not Archive, not hidden ones), A–Z. */
-export function libraryTypes(items, src) {
+export function libraryTypes(items, src, baseFolder = null) {
   if (!src) return [];
   const root = String(src.root || '').replace(/^\/+|\/+$/g, '');
+  const base = baseFolder != null ? String(baseFolder).replace(/^\/+|\/+$/g, '') : '';
+  const fullBase = [root, base].filter(Boolean).join('/');
   const names = new Set();
   for (const i of items) {
     if (i.sourceId !== src.id || i.kind !== 'note') continue; // a folder of books isn't a type of note
-    const rel = root ? (i.path.startsWith(`${root}/`) ? i.path.slice(root.length + 1) : null) : i.path;
+    let rel = null;
+    if (fullBase) {
+      if (i.path.startsWith(`${fullBase}/`)) {
+        rel = i.path.slice(fullBase.length + 1);
+      }
+    } else if (root) {
+      if (i.path.startsWith(`${root}/`)) {
+        rel = i.path.slice(root.length + 1);
+      }
+    } else {
+      rel = i.path;
+    }
     if (!rel) continue;
     const parts = rel.split('/');
     parts.pop(); // remove file name

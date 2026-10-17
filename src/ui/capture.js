@@ -7,7 +7,7 @@ import { pickNote } from './reader.js';
 import { displayName } from '../library.js';
 import { entries } from '../notes-index.js';
 import { wikiLink } from '../notefile.js';
-import { createInsight, findQuote, titleFromQuote, newNotesHome, highlightsFolder } from '../insights.js';
+import { createInsight, findQuote, titleFromQuote, newNotesHome, notesFolder, highlightsFolder } from '../insights.js';
 import { passageUrl, plainUrl, tidyClip } from '../clip.js';
 
 /**
@@ -29,8 +29,8 @@ export async function openCapture(clip, app) {
   let opened = null;
 
   const home = newNotesHome();
-  const folder = highlightsFolder();
-  const where = el('p', { class: 'hint clip-where' }, `Saved to ${home.type === 'device' ? 'this device' : displayName(home)}${folder ? ` / ${folder}` : ''}`);
+  const relFolder = [notesFolder(), highlightsFolder()].filter(Boolean).join(' / ');
+  const where = el('p', { class: 'hint clip-where' }, `Saved to ${home.type === 'device' ? 'this device' : displayName(home)}${relFolder ? ` / ${relFolder}` : ''}`);
 
   // Already saved? Say so, and offer the existing note.
   let checkTimer = null;

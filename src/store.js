@@ -182,6 +182,34 @@ export function saveSource(source, { fromSync = false } = {}) {
   }
   return source;
 }
+
+/**
+ * Updates an existing source's configuration non-destructively.
+ * Strictly preserves the immutable `source.id` and `source.type` so note keys
+ * `${sourceId}|${path}` and IDB cache entries are never orphaned.
+ */
+export function updateSource(id, updates = {}) {
+  const current = getSource(id);
+  if (!current) throw new Error(`Source "${id}" not found`);
+  const { id: _ignoreId, type: _ignoreType, ...allowedUpdates } = updates;
+  const updated = {
+    ...current,
+    ...allowedUpdates,
+    id: current.id, // strictly immutable
+    type: current.type, // strictly immutable
+  };
+  return saveSource(updated);
+}
+
+export function setSource(source, options) {
+  if (source && source.id) {
+    const existing = getSource(source.id);
+    if (existing) {
+      return updateSource(source.id, source);
+    }
+  }
+  return saveSource(source, options);
+}
 export async function removeSource(id, { fromSync = false } = {}) {
   const src = getSource(id);
   writeJSON(
@@ -220,8 +248,10 @@ const DEFAULT_PREFS = {
   dropboxAppKey: '',
   notesHome: '', // Primary library for .md notes/journals
   newNotesHome: '', // Legacy alias for notesHome
+  notesFolder: '', // Base folder for notes within the library (empty string for library root)
   booksHome: '', // Archive for acquired EPUBs, PDFs, and books
   acquiredBooksHome: '', // Legacy alias for booksHome
+  booksFolder: 'books', // Base folder for books within the library
   attachmentsVault: 'same-as-note', // 'same-as-note' | 's3' | 'dropbox' | 'device'
   attachmentsDestination: 'note-provider', // Legacy alias for attachmentsVault
   highlightsFolder: 'Highlights',
@@ -240,8 +270,10 @@ export const SYNCED_PREFS = [
   'dropboxAppKey',
   'notesHome',
   'newNotesHome',
+  'notesFolder',
   'booksHome',
   'acquiredBooksHome',
+  'booksFolder',
   'attachmentsVault',
   'attachmentsDestination',
   'highlightsFolder',
@@ -263,6 +295,12 @@ export function getPrefs() {
 }
 export function setPrefs(patch, { fromSync = false } = {}) {
   const normalized = { ...patch };
+  if ('notesFolder' in normalized) {
+    normalized.notesFolder = String(normalized.notesFolder || '').trim().replace(/^\/+|\/+$/g, '');
+  }
+  if ('highlightsFolder' in normalized) {
+    normalized.highlightsFolder = String(normalized.highlightsFolder || '').trim().replace(/^\/+|\/+$/g, '');
+  }
   if ('notesHome' in normalized && !('newNotesHome' in normalized)) {
     normalized.newNotesHome = normalized.notesHome;
   } else if ('newNotesHome' in normalized && !('notesHome' in normalized)) {

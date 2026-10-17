@@ -1,9 +1,6 @@
-// Continuous-scroll PDF reader. Pages render only near the viewport. Each page gets
-// PDF.js's invisible text layer, so text can be selected and highlighted (only in
-// PDFs that contain text: scanned pages without OCR have nothing to select).
 import { loadPdfJs } from '../lib/vendor.js';
 import { progress, saveProgress } from '../store.js';
-import { pushOverlay, el, icon, toast } from '../ui/overlay.js';
+import { pushOverlay, closeAll, el, icon, toast } from '../ui/overlay.js';
 import { askNote } from '../ui/highlight-note.js';
 import {
   getReaderAppearance,
@@ -24,20 +21,49 @@ const norm = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
  */
 export async function openPdf(item, blob, title, opts = {}) {
   setReaderMounted(true).catch?.(() => {});
-  const back = el('button', { class: 'icon-btn', 'aria-label': 'Back' }, icon('back'));
+  const back = el('button', { class: 'icon-btn', 'aria-label': 'Back (Hold to return to Feed)', title: 'Back (Hold to return to Feed)' }, icon('back'));
   const status = el('span', { class: 'status' }, 'Opening…');
   const aaBtn = el('button', { class: 'icon-btn appearance-btn', 'aria-label': 'Reading appearance', title: 'Appearance' }, el('span', { class: 'btn-aa' }, 'Aa'));
   const zoomOut = el('button', { class: 'icon-btn', 'aria-label': 'Smaller' }, '−');
   const zoomIn = el('button', { class: 'icon-btn', 'aria-label': 'Larger' }, '+');
   const stage = el('div', { class: 'pdf-stage', tabindex: '-1' });
   const wrap = el('div', { class: 'pdf-wrap' }, stage);
+  const readerBar = el('div', { class: 'reader-bar' }, back, el('span', { class: 'title' }, title), status, aaBtn, zoomOut, zoomIn);
   const root = el(
     'div',
-    { class: 'reader', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
-    el('div', { class: 'reader-bar' }, back, el('span', { class: 'title' }, title), status, aaBtn, zoomOut, zoomIn),
+    { class: 'reader reader-pdf reader-doc chrome-hidden', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
+    readerBar,
     wrap
   );
   document.body.append(root);
+  document.body.classList.add('has-reader', 'has-book-reader');
+  const tabbar = document.querySelector('.tabbar');
+  if (tabbar) tabbar.setAttribute('aria-hidden', 'true');
+
+  let popover = null;
+
+  function toggleChrome(force) {
+    const hidden = force !== undefined ? !force : !root.classList.contains('chrome-hidden');
+    root.classList.toggle('chrome-hidden', hidden);
+    if (hidden && popover) {
+      popover.remove();
+      popover = null;
+    }
+  }
+  root.toggleChrome = toggleChrome;
+
+  // Single tap in neutral center area toggles transient book controls
+  wrap.addEventListener('click', (evt) => {
+    if (evt.target.closest?.('button, a, input, select, textarea, .selection-bar, .popover, .staging-banner')) return;
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && sel.toString().trim().length > 1) return;
+    const rect = wrap.getBoundingClientRect();
+    const x = evt.clientX - rect.left;
+    const w = rect.width;
+    if (x > w * 0.2 && x < w * 0.8) {
+      toggleChrome();
+    }
+  });
 
   if (opts.stagingBanner) {
     showStagingBanner({ ...opts.stagingBanner, container: root });
@@ -53,7 +79,6 @@ export async function openPdf(item, blob, title, opts = {}) {
   let selTimer = null;
   let resizeTimer = null;
   let onResize = null;
-  let popover = null;
 
   const onSelection = () => {
     clearTimeout(selTimer);
@@ -69,14 +94,75 @@ export async function openPdf(item, blob, title, opts = {}) {
     document.removeEventListener('selectionchange', onSelection);
     doc?.destroy();
     root.remove();
+    if (!document.querySelector('.reader')) {
+      document.body.classList.remove('has-reader', 'has-book-reader');
+      const tabbar = document.querySelector('.tabbar');
+      if (tabbar) tabbar.removeAttribute('aria-hidden');
+    }
   }, { element: root });
-  back.onclick = close;
+
+  let holdTimer = null;
+  let didHold = false;
+  let pressTime = 0;
+
+  const startHold = (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    didHold = false;
+    pressTime = Date.now();
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      didHold = true;
+      closeAll();
+    }, 400);
+  };
+
+  const clearHold = () => {
+    clearTimeout(holdTimer);
+  };
+
+  back.addEventListener('pointerdown', startHold);
+  back.addEventListener('pointerup', clearHold);
+  back.addEventListener('pointercancel', clearHold);
+  back.addEventListener('pointerleave', clearHold);
+  back.addEventListener('mousedown', startHold);
+  back.addEventListener('mouseup', clearHold);
+  back.addEventListener('touchstart', startHold, { passive: true });
+  back.addEventListener('touchend', clearHold);
+
+  back.onclick = (e) => {
+    clearTimeout(holdTimer);
+    if (didHold) {
+      didHold = false;
+      return;
+    }
+    if (pressTime && Date.now() - pressTime >= 400) {
+      pressTime = 0;
+      closeAll();
+      return;
+    }
+    pressTime = 0;
+    close();
+  };
+
+  root.addEventListener('keydown', (e) => {
+    if (e.target.closest?.('input, textarea, select')) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeAll();
+    } else if ((e.metaKey || e.ctrlKey) && e.key === 'Home') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeAll();
+    }
+  });
 
   let lib;
   try {
     lib = await loadPdfJs();
     doc = await lib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) }).promise;
   } catch (err) {
+    toggleChrome(true);
     status.textContent = '';
     stage.append(el('p', { class: 'reader-error' }, `This PDF could not be opened: ${err.message}`));
     return;

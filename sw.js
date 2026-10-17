@@ -7,7 +7,7 @@
 //   URLs include the version, so the file at a given URL never changes.
 // - GitHub API and raw files: never touched here; the app caches those itself.
 
-const SHELL_CACHE = 'readover-shell-v9';
+const SHELL_CACHE = 'readover-shell-v4.0.0';
 const VENDOR_CACHE = 'readover-vendor-v2';
 const NETWORK_TIMEOUT = 1500; // ms before falling back to the cached copy
 const SLOW_BACKOFF = 30000; // after a timeout, use the cache first for this long
@@ -43,6 +43,7 @@ const SHELL = [
   './src/relink.js',
   './src/wakelock.js',
   './src/utils/wakelock.js',
+  './src/utils/binary.js',
   './src/lib/gitsha.js',
   './src/lib/idb.js',
   './src/lib/vendor.js',

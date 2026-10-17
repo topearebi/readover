@@ -883,6 +883,11 @@ details.field[open] summary {
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
+.field-trio {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr 1fr;
+  gap: 12px;
+}
 .destinations-grid {
   display: flex;
   flex-direction: column;
@@ -1093,6 +1098,47 @@ details.field[open] summary {
 .repo-form .field input {
   background: var(--card);
 }
+.edit-source-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 0;
+}
+.edit-source-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.password-input-wrap {
+  display: flex;
+  align-items: center;
+  position: relative;
+  width: 100%;
+}
+.password-input-wrap input {
+  width: 100%;
+  padding-right: 42px;
+}
+.password-toggle-btn {
+  position: absolute;
+  right: 6px;
+  background: none;
+  border: 0;
+  padding: 6px;
+  cursor: pointer;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.password-toggle-btn:hover {
+  color: var(--ink);
+}
+.edit-source-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
 .settings-group {
   padding-top: 18px;
   border-top: 1px solid var(--line);
@@ -1122,7 +1168,7 @@ details.field[open] summary {
 .reader {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: 55;
   display: flex;
   flex-direction: column;
   background: var(--paper);
@@ -1191,7 +1237,7 @@ details.field[open] summary {
   padding: 6px 10px;
   padding-bottom: env(safe-area-inset-bottom, 16px);
   padding-top: env(safe-area-inset-top, 0px);
-  z-index: 40;
+  z-index: 60;
   backdrop-filter: blur(12px) !important;
   -webkit-backdrop-filter: blur(12px) !important;
   max-width: calc(100vw - 32px);
@@ -1249,6 +1295,48 @@ details.field[open] summary {
   height: 18px;
   background: var(--line, #e2ded6);
   margin: 0 2px;
+}
+
+/* ---------- Transient Chrome for Book & Document Readers ---------- */
+.reader.reader-doc {
+  background: var(--paper);
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  overflow: hidden;
+}
+
+.reader-doc .reader-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 25;
+  transition: transform 0.24s cubic-bezier(0.2, 0.9, 0.4, 1), opacity 0.18s ease;
+  transform: translateY(0);
+  opacity: 1;
+  pointer-events: auto;
+  background: color-mix(in srgb, var(--paper, #fcfbf9) 94%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+  padding: env(safe-area-inset-top) max(8px, env(safe-area-inset-right)) 0 max(4px, env(safe-area-inset-left));
+}
+
+.reader-doc.chrome-hidden .reader-bar {
+  transform: translateY(-100%);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.reader-doc .epub-stage,
+.reader-doc .pdf-wrap {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* ---------- Full-Page Authoring Canvas (.writer-canvas) ---------- */
@@ -2592,6 +2680,34 @@ nav.tabbar,
   -webkit-backdrop-filter: blur(12px);
   border-top: 1px solid var(--line);
 }
+
+/* Suppress top-level views and global navigation bar when reading */
+body.has-reader nav.tabbar,
+body.has-reader .tabbar,
+body:has(.reader) nav.tabbar,
+body:has(.reader) .tabbar,
+body.has-book-reader nav.tabbar,
+body.has-book-reader .tabbar,
+body:has(.reader-doc) nav.tabbar,
+body:has(.reader-doc) .tabbar {
+  display: none !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+
+body.has-reader #feed,
+body.has-reader .feed,
+body.has-reader #shelf,
+body.has-reader #notes,
+body.has-reader .banner,
+body:has(.reader) #feed,
+body:has(.reader) .feed,
+body:has(.reader) #shelf,
+body:has(.reader) #notes,
+body:has(.reader) .banner {
+  display: none !important;
+}
+
 .tab {
   flex: 0 1 140px;
   display: flex;
@@ -2656,6 +2772,12 @@ nav.tabbar,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+.shelf-book-card {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
 .shelf-book {
   min-width: 0;
   display: flex;
@@ -2666,6 +2788,174 @@ nav.tabbar,
   padding: 0;
   text-align: left;
   color: var(--ink);
+  cursor: pointer;
+  width: 100%;
+}
+.shelf-book-menu-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(18, 22, 20, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: #fff;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -1px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0.88;
+  transition: opacity 0.15s ease, background 0.15s ease, transform 0.15s ease;
+  z-index: 3;
+}
+.shelf-book-menu-btn:hover,
+.shelf-book-menu-btn:focus-visible {
+  opacity: 1;
+  background: rgba(18, 22, 20, 0.95);
+  transform: scale(1.08);
+}
+.shelf-cloud-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: rgba(18, 22, 20, 0.75);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  z-index: 2;
+  pointer-events: none;
+}
+.shelf-actions-btn {
+  margin-left: 2px;
+}
+
+/* Book Details & Management Sheet */
+.book-details-diag {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 10px 0 16px;
+}
+.book-details-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.book-details-badges .badge,
+.storage-breakdown-row .badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.06));
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+.badge-format {
+  background: rgba(58, 86, 75, 0.12) !important;
+  color: #2e5b4f !important;
+  border-color: rgba(58, 86, 75, 0.25) !important;
+}
+.badge-size {
+  font-variant-numeric: tabular-nums;
+}
+.badge-warning,
+.badge-danger {
+  background: rgba(180, 40, 40, 0.12) !important;
+  color: #a82020 !important;
+  border-color: rgba(180, 40, 40, 0.25) !important;
+}
+.badge-success {
+  background: rgba(30, 130, 70, 0.12) !important;
+  color: #1e7a44 !important;
+  border-color: rgba(30, 130, 70, 0.25) !important;
+}
+.badge-muted {
+  background: rgba(100, 110, 120, 0.1) !important;
+  color: var(--muted) !important;
+  border-color: var(--line) !important;
+}
+.book-details-meta-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 14px;
+  font-size: 0.875rem;
+  padding: 14px;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.03));
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.book-meta-label {
+  font-weight: 600;
+  color: var(--muted);
+}
+.book-meta-val {
+  color: var(--ink);
+  word-break: break-word;
+}
+.book-meta-path {
+  font-family: var(--mono, monospace);
+  font-size: 0.8125rem;
+}
+.book-details-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+.storage-breakdown-summary {
+  padding: 12px 14px;
+  background: var(--bg-hover, rgba(0, 0, 0, 0.03));
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  margin-bottom: 16px;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+.storage-breakdown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.storage-breakdown-row {
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface, #fff);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.storage-row-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.9375rem;
+}
+.storage-row-details {
+  font-size: 0.8125rem;
+  color: var(--muted);
 }
 .shelf-cover {
   aspect-ratio: 2 / 3;
@@ -5715,7 +6005,9 @@ textarea.drag-active {
 
 @media (max-width: 600px) {
   .settings-group .field-pair,
-  .destination-card .field-pair {
+  .destination-card .field-pair,
+  .settings-group .field-trio,
+  .destination-card .field-trio {
     display: flex;
     flex-direction: column;
     gap: 12px;

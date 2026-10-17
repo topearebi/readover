@@ -2,12 +2,17 @@
 // Optimized as dedicated attachment & book storage (EPUBs, PDFs, and media).
 // Uses pure JavaScript AWS Signature Version 4 (SigV4) via Web Crypto API (zero npm dependencies).
 
+import { validateBinaryPayload, verifyRemoteSize } from '../utils/binary.js';
+
 export const canWrite = (src) => Boolean(src.endpoint && src.bucket && src.accessKeyId && src.secretAccessKey);
 
 /* ---------- Lightweight Web Crypto SigV4 Signer ---------- */
 
 async function sha256Hex(data) {
-  const buf = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+  let buf;
+  if (typeof data === 'string') buf = new TextEncoder().encode(data);
+  else if (typeof Blob !== 'undefined' && data instanceof Blob) buf = await data.arrayBuffer();
+  else buf = data;
   const hash = await crypto.subtle.digest('SHA-256', buf);
   return Array.from(new Uint8Array(hash))
     .map((b) => b.toString(16).padStart(2, '0'))
@@ -191,20 +196,41 @@ export async function putFile(src, path, textOrBlob) {
   const root = (src.root || '').replace(/^\/+|\/+$/g, '');
   const fullPath = root ? `/${root}/${path.replace(/^\/+/, '')}` : `/${path.replace(/^\/+/, '')}`;
 
-  const body = typeof textOrBlob === 'string' ? new TextEncoder().encode(textOrBlob) : textOrBlob;
-  const isBinary = !(typeof textOrBlob === 'string');
+  const isString = typeof textOrBlob === 'string';
+  const { body, size: expectedSize } = isString
+    ? { body: new TextEncoder().encode(textOrBlob), size: new TextEncoder().encode(textOrBlob).byteLength }
+    : await validateBinaryPayload(textOrBlob);
 
   const res = await signedFetch(src, 'PUT', fullPath, {
     headers: {
-      'content-type': isBinary ? 'application/octet-stream' : 'text/markdown; charset=utf-8',
+      'content-type': isString ? 'text/markdown; charset=utf-8' : 'application/octet-stream',
+      'content-length': String(expectedSize),
     },
     body,
   });
 
   if (!res.ok) throw new Error(`S3/R2 upload failed (${res.status})`);
   const etag = res.headers.get('ETag') || '';
+
+  // Verification Contract: Confirm remote object size via HEAD
+  try {
+    const headRes = await signedFetch(src, 'HEAD', fullPath);
+    if (headRes.ok) {
+      const remoteSizeHeader = headRes.headers.get('content-length');
+      if (remoteSizeHeader !== null) {
+        verifyRemoteSize({ expectedSize, remoteSize: Number(remoteSizeHeader), provider: 'S3/R2' });
+      }
+    }
+  } catch (verifyErr) {
+    if (verifyErr.message && verifyErr.message.includes('Upload failed')) {
+      throw verifyErr;
+    }
+  }
+
   return etag.replace(/"/g, '') || `sha:${Date.now()}`;
 }
+
+export const putBlob = putFile;
 
 export async function deleteFile(src, path) {
   const root = (src.root || '').replace(/^\/+|\/+$/g, '');

@@ -1,7 +1,7 @@
-// Book covers + metadata, cached per file version.
 import { thumbs } from './store.js';
 import { readBlob } from './library.js';
 import { loadPdfJs, loadFoliate } from './lib/vendor.js';
+import { cloneBlob } from './utils/binary.js';
 
 const inflight = new Map();
 
@@ -14,7 +14,8 @@ export function getCover(item) {
         const cached = await thumbs.get(item.key);
         if (cached && cached.sha === item.sha) return cached;
         const file = await readBlob(item);
-        const meta = item.kind === 'pdf' ? await pdfCover(file) : await ebookCover(file, item.name);
+        const safeFile = cloneBlob(file);
+        const meta = item.kind === 'pdf' ? await pdfCover(safeFile) : await ebookCover(safeFile, item.name);
         const rec = { key: item.key, sourceId: item.sourceId, sha: item.sha, ...meta };
         await thumbs.put(rec);
         return rec;

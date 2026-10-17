@@ -6,6 +6,7 @@ import * as store from './store.js';
 import * as library from './library.js';
 import { toast } from './ui/overlay.js';
 import { attachmentsFolder } from './insights.js';
+import { validateBinaryPayload, cloneBlob } from './utils/binary.js';
 
 const MAX_DIMENSION = 1600;
 const WEBP_QUALITY = 0.8;
@@ -65,10 +66,27 @@ export async function compressImage(fileOrBlob, maxDim = MAX_DIMENSION, quality 
 /** Generate a clean, collision-free attachment filename */
 export function generateAttachmentFilename(base = 'image', format = 'webp') {
   const now = new Date();
-  const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
+  const dateStr = now.toISOString().slice(0, 10);
   const rand = Math.random().toString(36).slice(2, 6);
   const cleanBase = String(base || 'image').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20);
-  return `${cleanBase}-${dateStr}-${rand}.${format}`;
+  return `${dateStr}-${cleanBase}-${rand}.${format}`;
+}
+
+/**
+ * Constructs the clean relative storage path for an attachment.
+ * Defensively cleans and normalizes folder paths against leading/trailing/duplicate slashes.
+ */
+export function buildAttachmentPath(filename, folder = attachmentsFolder()) {
+  const cleanFolder = (folder || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\/+/g, '/');
+  const cleanFile = (filename || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
+  return cleanFolder ? `${cleanFolder}/${cleanFile}` : cleanFile;
 }
 
 /**
@@ -77,34 +95,39 @@ export function generateAttachmentFilename(base = 'image', format = 'webp') {
  */
 export function resolveAttachmentSource(noteSource = null) {
   const prefs = store.getPrefs();
-  const destType = prefs.attachmentsVault || prefs.attachmentsDestination || 'same-as-note';
+  const rawDest = prefs.attachmentsVault || prefs.attachmentsDestination || 'same-as-note';
+  const destType = String(rawDest).toLowerCase().trim();
   const sources = store.getSources();
 
-  // 1. If designated as dropbox
-  if (destType === 'dropbox') {
+  // 1. Direct match by source ID
+  const idMatch = sources.find((s) => s.id === rawDest && library.canWrite(s));
+  if (idMatch) return idMatch;
+
+  // 2. If designated as dropbox (or legacy string containing dropbox)
+  if (destType === 'dropbox' || destType.includes('dropbox')) {
     const dbx = sources.find((s) => s.type === 'dropbox' && library.canWrite(s));
     if (dbx) return dbx;
   }
 
-  // 2. If designated as s3 or r2
-  if (destType === 's3' || destType === 'r2') {
+  // 3. If designated as s3 or r2
+  if (destType === 's3' || destType === 'r2' || destType.includes('s3') || destType.includes('r2')) {
     const s3Src = sources.find((s) => (s.type === 's3' || s.type === 'r2') && library.canWrite(s));
     if (s3Src) return s3Src;
   }
 
-  // 3. If designated as device
-  if (destType === 'device') {
+  // 4. If designated as device
+  if (destType === 'device' || destType.includes('device')) {
     return library.deviceSource(true);
   }
 
-  // 4. 'same-as-note' or 'note-provider': Use the active note's source if writable
+  // 5. 'same-as-note' or 'note-provider': Use the active note's source if writable
   if (noteSource) {
     const sid = typeof noteSource === 'object' && noteSource?.sourceId ? noteSource.sourceId : noteSource;
     const src = typeof sid === 'string' ? store.getSource(sid) : sid;
     if (src && library.canWrite(src)) return src;
   }
 
-  // 5. Fallback hierarchy: noteSource -> s3 -> dropbox -> any writable -> device
+  // 6. Fallback hierarchy: noteSource -> s3 -> dropbox -> any writable -> device
   return (
     sources.find((s) => (s.type === 's3' || s.type === 'r2') && library.canWrite(s)) ||
     sources.find((s) => s.type === 'dropbox' && library.canWrite(s)) ||
@@ -118,6 +141,7 @@ export function resolveAttachmentSource(noteSource = null) {
  * Prefers configured attachment destination (Dropbox, S3/R2, or note provider)
  */
 export async function saveAttachment(sourceOrId, relPath, blob) {
+  const { body: validatedBlob } = await validateBinaryPayload(blob);
   const dest = resolveAttachmentSource(sourceOrId);
   const path = relPath.startsWith('/') ? relPath.slice(1) : relPath;
   const itemKey = store.keyOf(dest.id, path);
@@ -126,27 +150,27 @@ export async function saveAttachment(sourceOrId, relPath, blob) {
   try {
     if (dest.type === 'dropbox') {
       const { putAttachment } = await import('./sources/dropbox.js');
-      const res = await putAttachment(dest, path, blob);
+      const res = await putAttachment(dest, path, cloneBlob(validatedBlob));
       sha = res?.rev || sha;
     } else if (dest.type === 'webdav') {
-      const { putBlob } = await import('./sources/webdav.js');
-      await putBlob(dest, path, blob);
+      const { putFile } = await import('./sources/webdav.js');
+      await putFile(dest, path, cloneBlob(validatedBlob));
     } else if (dest.type === 's3' || dest.type === 'r2') {
-      const { putBlob } = await import('./sources/s3.js');
-      await putBlob(dest, path, blob);
+      const { putFile } = await import('./sources/s3.js');
+      await putFile(dest, path, cloneBlob(validatedBlob));
     } else if (dest.type === 'github') {
       // Small attachments can be committed via GitHub API if needed
       const { putFile } = await import('./sources/github.js');
       const reader = new FileReader();
       const base64 = await new Promise((res) => {
         reader.onloadend = () => res(reader.result.split(',')[1]);
-        reader.readAsDataURL(blob);
+        reader.readAsDataURL(cloneBlob(validatedBlob));
       });
       // GitHub API supports base64 encoding for binary
       await putFile(dest, path, atob(base64), null, `Readover: add attachment ${path}`);
     } else if (dest.type === 'local') {
-      const { writeFile } = await import('./sources/local.js');
-      await writeFile(dest, path, blob);
+      const { writeBlob } = await import('./sources/local.js');
+      await writeBlob(dest, path, cloneBlob(validatedBlob));
     }
   } catch (err) {
     console.warn('Remote attachment upload failed, caching locally:', err);
@@ -157,7 +181,7 @@ export async function saveAttachment(sourceOrId, relPath, blob) {
     key: itemKey,
     sourceId: dest.id,
     sha,
-    blob,
+    blob: cloneBlob(validatedBlob),
   });
 
   return { path, key: itemKey, sourceId: dest.id };
@@ -188,8 +212,7 @@ export async function processAndSaveImage(file, textarea, getSource = () => null
   try {
     const { blob, format, size, originalSize } = await compressImage(file);
     const filename = generateAttachmentFilename('diagram', format);
-    const folder = attachmentsFolder();
-    const relPath = folder ? `${folder}/${filename}` : filename;
+    const relPath = buildAttachmentPath(filename);
 
     toast('Saving attachment…');
     const src = typeof getSource === 'function' ? getSource() : getSource;

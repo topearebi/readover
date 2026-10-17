@@ -2,6 +2,8 @@
 // Maps to Dropbox API v2 using App Folder (/Apps/Readover) or custom folder.
 // Supports both browser OAuth 2.0 with PKCE and manual token entry.
 
+import { validateBinaryPayload, verifyRemoteSize } from '../utils/binary.js';
+
 const API = 'https://api.dropboxapi.com/2';
 const CONTENT_API = 'https://content.dropboxapi.com/2';
 
@@ -229,9 +231,11 @@ export async function putAttachment(src, relPath, blob, retried = false) {
   const token = tokenFor(src);
   if (!token) throw new Error('Dropbox is not connected. Add an access token in Settings.');
 
+  const { body, size: expectedSize } = await validateBinaryPayload(blob);
+
   const root = dbxPath(src.root);
-  const cleanPath = relPath.replace(/^\/+/, '');
-  const fullPath = root ? `${root}/${cleanPath}` : `/${cleanPath}`;
+  const cleanPath = relPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '').replace(/\/+/g, '/');
+  const fullPath = root ? `${root.replace(/\/+$/, '')}/${cleanPath}` : `/${cleanPath}`;
 
   const res = await fetch(`${CONTENT_API}/files/upload`, {
     method: 'POST',
@@ -245,7 +249,7 @@ export async function putAttachment(src, relPath, blob, retried = false) {
         mute: true,
       }),
     },
-    body: blob,
+    body,
   });
 
   if (res.status === 401 && !retried && src?.refreshToken) {
@@ -265,7 +269,9 @@ export async function putAttachment(src, relPath, blob, retried = false) {
   }
 
   const data = await res.json();
-  return { rev: data.rev || `rev:${Date.now()}` };
+  verifyRemoteSize({ expectedSize, remoteSize: data.size, provider: 'Dropbox' });
+
+  return { rev: data.rev || `rev:${Date.now()}`, size: data.size };
 }
 
 export const upload = putAttachment;
@@ -280,7 +286,10 @@ export async function putFile(src, path, textOrBlob, retried = false) {
 
   const root = dbxPath(src.root);
   const fullPath = root ? `${root}/${path.replace(/^\/+/, '')}` : dbxPath(path);
-  const bytes = typeof textOrBlob === 'string' ? new TextEncoder().encode(textOrBlob) : textOrBlob;
+  const isString = typeof textOrBlob === 'string';
+  const { body: bytes, size: expectedSize } = isString
+    ? { body: new TextEncoder().encode(textOrBlob), size: new TextEncoder().encode(textOrBlob).byteLength }
+    : await validateBinaryPayload(textOrBlob);
 
   const res = await fetch(`${CONTENT_API}/files/upload`, {
     method: 'POST',
@@ -314,6 +323,7 @@ export async function putFile(src, path, textOrBlob, retried = false) {
   }
 
   const data = await res.json();
+  verifyRemoteSize({ expectedSize, remoteSize: data.size, provider: 'Dropbox' });
   return data.rev || `rev:${Date.now()}`;
 }
 

@@ -12,6 +12,11 @@ window.addEventListener('popstate', () => {
   if (prev?.element) {
     prev.element.inert = false;
   }
+  if (!stack.length && !document.querySelector('.reader')) {
+    document.body.classList.remove('has-reader', 'has-book-reader');
+    const tabbar = document.querySelector('.tabbar');
+    if (tabbar) tabbar.removeAttribute('aria-hidden');
+  }
   setTimeout(() => {
     let back = top.opener;
     // A list redrawn meanwhile: find the same row again by its key.
@@ -26,7 +31,24 @@ function requestClose(entry) {
   if (!entry.closing) {
     entry.closing = true; // popstate is async; guard against double back()
     entry.gone = new Promise((r) => (entry.settled = r));
-    history.back();
+    if (typeof history !== 'undefined' && typeof history.back === 'function') {
+      history.back();
+    }
+    // Fallback for mock/test environments where history.back doesn't trigger popstate
+    setTimeout(() => {
+      if (stack.includes(entry)) {
+        const idx = stack.indexOf(entry);
+        stack.splice(idx, 1);
+        try { entry.close(); } catch {}
+        for (const el of entry.inerted || []) el.inert = false;
+        if (!stack.length && !document.querySelector('.reader')) {
+          document.body.classList.remove('has-reader', 'has-book-reader');
+          const tabbar = document.querySelector('.tabbar');
+          if (tabbar) tabbar.removeAttribute('aria-hidden');
+        }
+        entry.settled?.();
+      }
+    }, 50);
   }
   return entry.gone;
 }
@@ -51,6 +73,7 @@ export function pushOverlay(close, { element = null, opener = document.activeEle
 }
 
 export const hasOverlay = () => stack.length > 0;
+export const getOverlayCount = () => stack.length;
 
 export function closeTop() {
   const top = stack[stack.length - 1];
@@ -58,8 +81,43 @@ export function closeTop() {
 }
 
 export async function closeAll() {
-  while (stack.length) {
-    await closeTop();
+  const count = stack.length;
+  if (!count) return;
+  const entries = stack.splice(0, stack.length).reverse();
+  for (const top of entries) {
+    try {
+      top.close();
+    } catch (err) {
+      console.warn('Error during overlay close:', err);
+    }
+    for (const el of top.inerted || []) el.inert = false;
+    top.settled?.();
+  }
+  if (!document.querySelector('.reader')) {
+    document.body.classList.remove('has-reader', 'has-book-reader');
+    const tabbar = document.querySelector('.tabbar');
+    if (tabbar) tabbar.removeAttribute('aria-hidden');
+  }
+  const rootOpener = entries[entries.length - 1]?.opener;
+  if (rootOpener) {
+    setTimeout(() => {
+      let back = rootOpener;
+      if (back && !back.isConnected && back.dataset?.key) {
+        back = document.querySelector(`[data-key="${CSS.escape(back.dataset.key)}"]`);
+      }
+      if (back?.isConnected && !back.closest('[inert]')) back.focus({ preventScroll: true });
+    }, 0);
+  }
+  if (count > 0 && typeof history !== 'undefined') {
+    if (typeof history.go === 'function') {
+      try {
+        history.go(-count);
+      } catch {}
+    } else if (typeof history.back === 'function') {
+      try {
+        for (let i = 0; i < count; i++) history.back();
+      } catch {}
+    }
   }
 }
 

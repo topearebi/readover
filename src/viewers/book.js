@@ -4,7 +4,7 @@
 // come back in the feed.
 import { loadFoliate } from '../lib/vendor.js';
 import { progress, saveProgress } from '../store.js';
-import { pushOverlay, el, icon, toast, openSheet } from '../ui/overlay.js';
+import { pushOverlay, closeAll, el, icon, toast, openSheet } from '../ui/overlay.js';
 import { askNote } from '../ui/highlight-note.js';
 import {
   getReaderAppearance,
@@ -28,7 +28,7 @@ const fontItalicUrl = new URL('../../vendor/literata-5.2.5/literata-latin-wght-i
  */
 export async function openBook(item, blob, title, opts = {}) {
   setReaderMounted(true).catch?.(() => {});
-  const back = el('button', { class: 'icon-btn', 'aria-label': 'Back' }, icon('back'));
+  const back = el('button', { class: 'icon-btn', 'aria-label': 'Back (Hold to return to Feed)', title: 'Back (Hold to return to Feed)' }, icon('back'));
   const status = el('span', { class: 'status' }, 'Opening…');
   const contentsBtn = el('button', { class: 'btn btn-quiet', hidden: true }, 'Contents');
   const aaBtn = el('button', { class: 'icon-btn appearance-btn', 'aria-label': 'Reading appearance', title: 'Appearance' }, el('span', { class: 'btn-aa' }, 'Aa'));
@@ -38,13 +38,17 @@ export async function openBook(item, blob, title, opts = {}) {
   const prev = el('button', { class: 'epub-nav prev', 'aria-label': 'Previous page' }, '‹');
   const next = el('button', { class: 'epub-nav next', 'aria-label': 'Next page' }, '›');
   const stage = el('div', { class: 'epub-stage' }, area, prev, next);
+  const readerBar = el('div', { class: 'reader-bar' }, back, el('span', { class: 'title' }, title), status, contentsBtn, aaBtn, smaller, larger);
   const root = el(
     'div',
-    { class: 'reader', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
-    el('div', { class: 'reader-bar' }, back, el('span', { class: 'title' }, title), status, contentsBtn, aaBtn, smaller, larger),
+    { class: 'reader reader-book reader-doc chrome-hidden', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
+    readerBar,
     stage
   );
   document.body.append(root);
+  document.body.classList.add('has-reader', 'has-book-reader');
+  const tabbar = document.querySelector('.tabbar');
+  if (tabbar) tabbar.setAttribute('aria-hidden', 'true');
 
   if (opts.stagingBanner) {
     showStagingBanner({ ...opts.stagingBanner, container: root });
@@ -61,6 +65,30 @@ export async function openBook(item, blob, title, opts = {}) {
     if (['ArrowLeft', 'PageUp'].includes(e.key)) view.goLeft();
   };
   window.addEventListener('keydown', onKey);
+
+  function toggleChrome(force) {
+    const hidden = force !== undefined ? !force : !root.classList.contains('chrome-hidden');
+    root.classList.toggle('chrome-hidden', hidden);
+    if (hidden && popover) {
+      popover.remove();
+      popover = null;
+    }
+  }
+  root.toggleChrome = toggleChrome;
+
+  // Single tap in neutral center area toggles transient book controls
+  stage.addEventListener('click', (evt) => {
+    if (evt.target.closest?.('.epub-nav, button, a, .selection-bar, .popover, .staging-banner')) return;
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && sel.toString().trim().length > 1) return;
+    const rect = stage.getBoundingClientRect();
+    const x = evt.clientX - rect.left;
+    const w = rect.width;
+    if (x > w * 0.2 && x < w * 0.8) {
+      toggleChrome();
+    }
+  });
+
   const close = pushOverlay(() => {
     setReaderMounted(false).catch?.(() => {});
     popover?.remove();
@@ -69,8 +97,68 @@ export async function openBook(item, blob, title, opts = {}) {
       view?.close();
     } catch {}
     root.remove();
+    if (!document.querySelector('.reader')) {
+      document.body.classList.remove('has-reader', 'has-book-reader');
+      const tabbar = document.querySelector('.tabbar');
+      if (tabbar) tabbar.removeAttribute('aria-hidden');
+    }
   }, { element: root });
-  back.onclick = close;
+
+  let holdTimer = null;
+  let didHold = false;
+  let pressTime = 0;
+
+  const startHold = (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    didHold = false;
+    pressTime = Date.now();
+    clearTimeout(holdTimer);
+    holdTimer = setTimeout(() => {
+      didHold = true;
+      closeAll();
+    }, 400);
+  };
+
+  const clearHold = () => {
+    clearTimeout(holdTimer);
+  };
+
+  back.addEventListener('pointerdown', startHold);
+  back.addEventListener('pointerup', clearHold);
+  back.addEventListener('pointercancel', clearHold);
+  back.addEventListener('pointerleave', clearHold);
+  back.addEventListener('mousedown', startHold);
+  back.addEventListener('mouseup', clearHold);
+  back.addEventListener('touchstart', startHold, { passive: true });
+  back.addEventListener('touchend', clearHold);
+
+  back.onclick = (e) => {
+    clearTimeout(holdTimer);
+    if (didHold) {
+      didHold = false;
+      return;
+    }
+    if (pressTime && Date.now() - pressTime >= 400) {
+      pressTime = 0;
+      closeAll();
+      return;
+    }
+    pressTime = 0;
+    close();
+  };
+
+  root.addEventListener('keydown', (e) => {
+    if (e.target.closest?.('input, textarea, select')) return;
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeAll();
+    } else if ((e.metaKey || e.ctrlKey) && e.key === 'Home') {
+      e.preventDefault();
+      e.stopPropagation();
+      closeAll();
+    }
+  });
 
   const saved = (await progress.get(item.key)) || { pct: 0, loc: '', highlights: [] };
   const highlights = [...(saved.highlights || [])];
@@ -83,6 +171,7 @@ export async function openBook(item, blob, title, opts = {}) {
     area.append(view);
     await view.open(new File([blob], item.name, { type: blob.type }));
   } catch (err) {
+    toggleChrome(true);
     status.textContent = '';
     stage.replaceChildren(el('p', { class: 'reader-error' }, `This book could not be opened: ${err.message}`));
     return;
@@ -180,6 +269,20 @@ export async function openBook(item, blob, title, opts = {}) {
   view.addEventListener('load', (e) => {
     const { doc, index } = e.detail;
     doc.addEventListener('keydown', onKey);
+    doc.addEventListener('click', (evt) => {
+      if (evt.target.closest?.('a, button, [role=button]')) return;
+      const sel = doc.getSelection();
+      if (sel && !sel.isCollapsed && sel.toString().trim().length > 1) return;
+      const x = evt.clientX;
+      const w = doc.defaultView?.innerWidth || doc.documentElement?.clientWidth || window.innerWidth;
+      if (x < w * 0.2) {
+        view.goLeft();
+      } else if (x > w * 0.8) {
+        view.goRight();
+      } else {
+        toggleChrome();
+      }
+    });
     let t;
     doc.addEventListener('selectionchange', () => {
       clearTimeout(t);

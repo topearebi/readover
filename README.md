@@ -318,7 +318,7 @@ In JavaScript ES modules, a `SyntaxError` during initial script evaluation is fa
 This almost always occurs in offline-first static deployments when a Service Worker has cached an older version of one module (e.g. `attachments.js`), while the rest of the application imports a newer export from it.
 
 #### Mitigations Implemented in Readover:
-1. **Service Worker Version Bump (`readover-shell-v7`)**: Ensures existing devices immediately detect a cache mismatch and flush older cached scripts.
+1. **Service Worker Version Bump (`readover-shell-v4.0.0`)**: Ensures existing devices immediately detect a cache mismatch and flush older cached scripts.
 2. **Interactive Update Notification Banner**: When a newer Service Worker installs in the background, a non-intrusive floating banner appears with **Update now**, allowing instant one-tap refresh.
 3. **Boot-Time Script Error Trap (`#boot-error-boundary`)**: If an unhandled syntax or network error occurs before `app.js` finishes loading, Readover intercepts it and renders a clean recovery card with a **Clear cache & reload** button.
 4. **Built-in System Diagnostics Suite**:

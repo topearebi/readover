@@ -370,7 +370,7 @@ export async function discard(id) {
 }
 
 export async function list() {
-  return (await outbox.all()).sort((a, b) => a.id.localeCompare(b.id));
+  return (await outbox.all()).filter((a) => a && a.id).sort((a, b) => (a.id || '').localeCompare(b.id || ''));
 }
 
 window.addEventListener('online', () => kick(0));
