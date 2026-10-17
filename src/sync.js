@@ -8,6 +8,8 @@
 // re-reads and merges again instead of overwriting.
 import * as store from './store.js';
 import * as github from './sources/github.js';
+import * as dropbox from './sources/dropbox.js';
+import * as webdav from './sources/webdav.js';
 import { gitBlobSha } from './lib/gitsha.js';
 
 const DIR = '.readover';
@@ -19,17 +21,25 @@ let lastResult = { ok: true, at: 0, message: '' };
 
 export const lastSync = () => lastResult;
 
-/** The GitHub source that holds .readover/, or null (this device only). */
+function isRemoteWritable(src) {
+  if (!src) return false;
+  if (src.type === 'github') return github.canWrite(src);
+  if (src.type === 'dropbox') return dropbox.canWrite(src);
+  if (src.type === 'webdav') return webdav.canWrite(src);
+  return false;
+}
+
+/** The storage provider that holds .readover/, or null (this device only). */
 export function dataHome() {
   const { dataHome: id } = store.getPrefs();
   const src = id ? store.getSource(id) : null;
-  return src && src.type === 'github' && github.canWrite(src) ? src : null;
+  return src && isRemoteWritable(src) ? src : null;
 }
 
-/** Pick a data home automatically the first time a writable repo is connected. */
+/** Pick a data home automatically the first time a writable repo or library is connected. */
 export function ensureDataHome() {
   if (dataHome()) return dataHome();
-  const candidate = store.getSources().find((s) => s.type === 'github' && github.canWrite(s));
+  const candidate = store.getSources().find((s) => isRemoteWritable(s));
   if (candidate && !localStorage.getItem('readover.dataHomeChosen')) {
     store.setPrefs({ dataHome: candidate.id });
     return candidate;
@@ -86,8 +96,16 @@ function announce(phase = '') {
 /* ---------------- One attempt ---------------- */
 
 async function attemptSync(home, includeSeen) {
-  const head = await github.headSha(home);
-  const remoteRaw = head ? await readRemote(home, head) : {};
+  let head = null;
+  let remoteRaw = {};
+  if (home.type === 'github') {
+    head = await github.headSha(home);
+    remoteRaw = head ? await readRemoteGitHub(home, head) : {};
+  } else if (home.type === 'dropbox') {
+    remoteRaw = await readRemoteDropbox(home);
+  } else if (home.type === 'webdav') {
+    remoteRaw = await readRemoteWebdav(home);
+  }
   const remote = {
     state: parse(remoteRaw.state, home),
     seen: parse(remoteRaw.seen),
@@ -124,12 +142,23 @@ async function attemptSync(home, includeSeen) {
   }
   if (!Object.keys(changes).length) return { pushed: false, seenDeferred, ...applied };
 
-  try {
-    await github.commitFiles(home, head, changes, 'Readover: sync');
-  } catch (err) {
-    if (err.status === 422 || err.status === 409) return 'retry'; // branch moved: merge again
-    throw err;
+  if (home.type === 'github') {
+    try {
+      await github.commitFiles(home, head, changes, 'Readover: sync');
+    } catch (err) {
+      if (err.status === 422 || err.status === 409) return 'retry'; // branch moved: merge again
+      throw err;
+    }
+  } else if (home.type === 'dropbox') {
+    for (const [path, text] of Object.entries(changes)) {
+      await dropbox.putFile(home, path, text);
+    }
+  } else if (home.type === 'webdav') {
+    for (const [path, text] of Object.entries(changes)) {
+      await webdav.putFile(home, path, text);
+    }
   }
+
   // Remember what we wrote so the next sync doesn't download it again.
   const cache = store.readJSON(SHA_CACHE, {});
   for (const name of Object.keys(FILES)) {
@@ -140,8 +169,7 @@ async function attemptSync(home, includeSeen) {
   return { pushed: true, seenDeferred, ...applied };
 }
 
-
-async function readRemote(home, head) {
+async function readRemoteGitHub(home, head) {
   const listing = await github.listDir(home, DIR, head);
   const cache = store.readJSON(SHA_CACHE, {});
   const out = {};
@@ -155,6 +183,42 @@ async function readRemote(home, head) {
     }
   }
   store.writeJSON(SHA_CACHE, cache);
+  return out;
+}
+
+export const readRemote = readRemoteGitHub;
+
+async function readRemoteDropbox(home) {
+  const out = {};
+  for (const [name, file] of Object.entries(FILES)) {
+    try {
+      const text = await dropbox.readText(home, { path: `${DIR}/${file}` });
+      out[name] = text || '';
+    } catch (err) {
+      if (err.status === 404 || err.status === 409 || err.message?.includes('not found') || err.message?.includes('path/not_found')) {
+        out[name] = '';
+      } else {
+        throw err;
+      }
+    }
+  }
+  return out;
+}
+
+async function readRemoteWebdav(home) {
+  const out = {};
+  for (const [name, file] of Object.entries(FILES)) {
+    try {
+      const text = await webdav.readText(home, { path: `${DIR}/${file}` });
+      out[name] = text || '';
+    } catch (err) {
+      if (err.status === 404 || err.message?.includes('not found') || err.message?.includes('404')) {
+        out[name] = '';
+      } else {
+        throw err;
+      }
+    }
+  }
   return out;
 }
 
@@ -217,11 +281,26 @@ async function snapshot() {
   for (const k of store.SYNCED_PREFS) if (times[k]) fields[k] = { v: prefs[k], t: times[k] };
 
   const libs = {};
-  for (const s of sources.filter((x) => x.type === 'github')) {
-    libs[store.sourceKey(s)] = {
-      t: s.updatedAt || 1,
-      owner: s.owner, repo: s.repo, branch: s.branch || 'main', root: s.root || '', ignore: s.ignore || '', name: s.name || '',
-    };
+  for (const s of sources) {
+    if (s.type === 'github') {
+      libs[store.sourceKey(s)] = {
+        type: 'github',
+        t: s.updatedAt || 1,
+        owner: s.owner, repo: s.repo, branch: s.branch || 'main', root: s.root || '', ignore: s.ignore || '', name: s.name || '',
+      };
+    } else if (s.type === 'dropbox') {
+      libs[store.sourceKey(s)] = {
+        type: 'dropbox',
+        t: s.updatedAt || 1,
+        root: s.root || '', name: s.name || '',
+      };
+    } else if (s.type === 'webdav') {
+      libs[store.sourceKey(s)] = {
+        type: 'webdav',
+        t: s.updatedAt || 1,
+        url: s.url || '', username: s.username || '', name: s.name || '',
+      };
+    }
   }
   for (const [sk, t] of Object.entries(store.getRemovedSources())) libs[sk] = { t, removed: true };
 
@@ -273,15 +352,28 @@ async function applyLocally(merged, local) {
       await store.removeSource(mine.id, { fromSync: true });
       report.librariesRemoved++;
     } else if (!lib.removed && !mine) {
-      const src = {
-        id: store.newId('gh'), type: 'github', owner: lib.owner, repo: lib.repo, branch: lib.branch, root: lib.root,
-        ignore: lib.ignore, name: lib.name, token: '', updatedAt: lib.t,
-      };
+      let src = null;
+      if (lib.type === 'dropbox') {
+        src = { id: store.newId('dbx'), type: 'dropbox', root: lib.root || '', name: lib.name || 'Dropbox Notes', token: '', updatedAt: lib.t };
+      } else if (lib.type === 'webdav') {
+        src = { id: store.newId('wd'), type: 'webdav', url: lib.url || '', username: lib.username || '', name: lib.name || 'WebDAV Notes', password: '', updatedAt: lib.t };
+      } else {
+        src = {
+          id: store.newId('gh'), type: 'github', owner: lib.owner, repo: lib.repo, branch: lib.branch, root: lib.root,
+          ignore: lib.ignore, name: lib.name, token: '', updatedAt: lib.t,
+        };
+      }
       store.saveSource(src, { fromSync: true });
       bySk.set(sk, src);
       report.librariesAdded++;
     } else if (!lib.removed && mine) {
-      store.saveSource({ ...mine, branch: lib.branch, root: lib.root, ignore: lib.ignore, name: lib.name, updatedAt: lib.t }, { fromSync: true });
+      if (mine.type === 'dropbox') {
+        store.saveSource({ ...mine, root: lib.root, name: lib.name, updatedAt: lib.t }, { fromSync: true });
+      } else if (mine.type === 'webdav') {
+        store.saveSource({ ...mine, url: lib.url, username: lib.username, name: lib.name, updatedAt: lib.t }, { fromSync: true });
+      } else {
+        store.saveSource({ ...mine, branch: lib.branch, root: lib.root, ignore: lib.ignore, name: lib.name, updatedAt: lib.t }, { fromSync: true });
+      }
     }
   }
 

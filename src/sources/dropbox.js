@@ -127,7 +127,8 @@ export async function readBlob(src, item, type = '') {
   if (!token) throw new Error('Dropbox is not connected.');
 
   const root = dbxPath(src.root);
-  const fullPath = root ? `${root}/${item.path.replace(/^\/+/, '')}` : dbxPath(item.path);
+  const itemPath = typeof item === 'string' ? item : (item?.path || '');
+  const fullPath = root ? `${root}/${itemPath.replace(/^\/+/, '')}` : dbxPath(itemPath);
 
   const res = await fetch(`${CONTENT_API}/files/download`, {
     method: 'POST',
@@ -142,7 +143,53 @@ export async function readBlob(src, item, type = '') {
   return new Blob([buf], { type });
 }
 
+/**
+ * Binary attachment upload for images, audio, and documents.
+ * Endpoint: https://content.dropboxapi.com/2/files/upload
+ */
+export async function putAttachment(src, relPath, blob) {
+  const token = tokenFor(src);
+  if (!token) throw new Error('Dropbox is not connected. Add an access token in Settings.');
+
+  const root = dbxPath(src.root);
+  const cleanPath = relPath.replace(/^\/+/, '');
+  const fullPath = root ? `${root}/${cleanPath}` : `/${cleanPath}`;
+
+  const res = await fetch(`${CONTENT_API}/files/upload`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/octet-stream',
+      'Dropbox-API-Arg': JSON.stringify({
+        path: fullPath,
+        mode: 'overwrite',
+        autorename: false,
+        mute: true,
+      }),
+    },
+    body: blob,
+  });
+
+  if (!res.ok) {
+    let msg = `Dropbox upload failed (${res.status})`;
+    try {
+      const err = await res.json();
+      if (err.error_summary) msg = `Dropbox: ${err.error_summary}`;
+    } catch {}
+    throw new Error(msg);
+  }
+
+  const data = await res.json();
+  return { rev: data.rev || `rev:${Date.now()}` };
+}
+
+export const upload = putAttachment;
+
 export async function putFile(src, path, textOrBlob) {
+  if (textOrBlob instanceof Blob) {
+    const res = await putAttachment(src, path, textOrBlob);
+    return res.rev;
+  }
   const token = tokenFor(src);
   if (!token) throw new Error('Dropbox is not connected.');
 
@@ -178,6 +225,22 @@ export async function putFile(src, path, textOrBlob) {
   return data.rev || `rev:${Date.now()}`;
 }
 
+export async function deleteFile(src, path) {
+  const token = tokenFor(src);
+  if (!token) throw new Error('Dropbox is not connected.');
+  const root = dbxPath(src.root);
+  const fullPath = root ? `${root}/${path.replace(/^\/+/, '')}` : dbxPath(path);
+  try {
+    await dbxRpc(src, 'files/delete_v2', { path: fullPath });
+    return true;
+  } catch (err) {
+    if (err.message && (err.message.includes('path_lookup/not_found') || err.status === 404 || err.status === 409)) {
+      return true;
+    }
+    throw err;
+  }
+}
+
 export async function whoami(token) {
   try {
     const res = await fetch(`${API}/users/get_current_account`, {
@@ -192,7 +255,7 @@ export async function whoami(token) {
   }
 }
 
-/* ---------- PKCE OAuth 2.0 Helper ---------- */
+/* ---------- PKCE OAuth 2.0 Helper (Zero-Hardcoding) ---------- */
 
 function generateRandomString(length = 64) {
   const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
@@ -214,11 +277,27 @@ function base64url(buffer) {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-export async function createPKCEAuthUrl(clientId = '9c0wff8143gq9i0', redirectUri = '') {
-  const resolvedClientId = clientId || '9c0wff8143gq9i0';
-  const resolvedRedirectUri = redirectUri || (typeof location !== 'undefined' ? `${location.origin}/auth/callback` : '');
+export async function createPKCEAuthUrl(clientId = '', redirectUri = '') {
+  let resolvedClientId = clientId;
+  if (!resolvedClientId && typeof localStorage !== 'undefined') {
+    try {
+      const prefs = JSON.parse(localStorage.getItem('readover.prefs') || '{}');
+      resolvedClientId = prefs.dropboxAppKey || '';
+    } catch {}
+  }
+
+  if (!resolvedClientId) {
+    throw new Error('Please enter your Dropbox App Key in Settings first.');
+  }
+
+  const resolvedRedirectUri = redirectUri || (typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '');
   const verifier = generateRandomString(64);
-  sessionStorage.setItem('readover_dropbox_verifier', verifier);
+  
+  if (typeof sessionStorage !== 'undefined') {
+    sessionStorage.setItem('readover_dropbox_verifier', verifier);
+    sessionStorage.setItem('readover_dropbox_client_id', resolvedClientId);
+    sessionStorage.setItem('readover_dropbox_redirect_uri', resolvedRedirectUri);
+  }
 
   const hashed = await sha256(verifier);
   const challenge = base64url(hashed);
@@ -238,10 +317,30 @@ export async function createPKCEAuthUrl(clientId = '9c0wff8143gq9i0', redirectUr
   };
 }
 
-export async function exchangePKCECode(code, clientId = '9c0wff8143gq9i0', redirectUri = '') {
-  const resolvedClientId = clientId || '9c0wff8143gq9i0';
-  const resolvedRedirectUri = redirectUri || (typeof location !== 'undefined' ? `${location.origin}/auth/callback` : '');
-  const verifier = sessionStorage.getItem('readover_dropbox_verifier') || '';
+export async function exchangePKCECode(code, clientId = '', redirectUri = '') {
+  let resolvedClientId = clientId;
+  if (!resolvedClientId && typeof sessionStorage !== 'undefined') {
+    resolvedClientId = sessionStorage.getItem('readover_dropbox_client_id') || '';
+  }
+  if (!resolvedClientId && typeof localStorage !== 'undefined') {
+    try {
+      const prefs = JSON.parse(localStorage.getItem('readover.prefs') || '{}');
+      resolvedClientId = prefs.dropboxAppKey || '';
+    } catch {}
+  }
+  if (!resolvedClientId) {
+    throw new Error('Missing Dropbox App Key. Please enter it in Settings.');
+  }
+
+  let resolvedRedirectUri = redirectUri;
+  if (!resolvedRedirectUri && typeof sessionStorage !== 'undefined') {
+    resolvedRedirectUri = sessionStorage.getItem('readover_dropbox_redirect_uri') || '';
+  }
+  if (!resolvedRedirectUri && typeof window !== 'undefined') {
+    resolvedRedirectUri = `${window.location.origin}${window.location.pathname}`;
+  }
+
+  const verifier = (typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('readover_dropbox_verifier') : '') || '';
   const params = new URLSearchParams({
     code,
     grant_type: 'authorization_code',
@@ -266,7 +365,11 @@ export async function exchangePKCECode(code, clientId = '9c0wff8143gq9i0', redir
   }
 
   const data = await res.json();
-  sessionStorage.removeItem('readover_dropbox_verifier');
+  if (typeof sessionStorage !== 'undefined') {
+    sessionStorage.removeItem('readover_dropbox_verifier');
+    sessionStorage.removeItem('readover_dropbox_client_id');
+    sessionStorage.removeItem('readover_dropbox_redirect_uri');
+  }
   return {
     token: data.access_token,
     refreshToken: data.refresh_token,

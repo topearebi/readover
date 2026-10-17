@@ -142,8 +142,46 @@ export function initSettings(app) {
   function deviceRow(src, n) {
     const detail = el('div', { class: 'source-detail' }, `${n} ${n === 1 ? 'note' : 'notes'} · only in this browser`);
     const actions = el('div', { class: 'source-actions' });
-    const move = el('button', {}, 'Move to GitHub');
-    move.onclick = () => app.openSetup();
+    const move = el('button', {}, 'Move to…');
+    move.onclick = async () => {
+      const writable = store.getSources().filter((s) => s.type !== 'device' && canWriteSrc(s));
+      if (!writable.length) {
+        toast('Connect a writable library (Dropbox, WebDAV, or GitHub) first.');
+        return;
+      }
+      const destSelect = el(
+        'select',
+        { class: 'field-input' },
+        ...writable.map((s) => el('option', { value: s.id }, `${displayName(s)} (${s.type})`))
+      );
+      const folderInput = el('input', { type: 'text', placeholder: 'Optional subfolder (e.g. notes)', autocomplete: 'off' });
+      const { sheet: openSheetModal } = await import('./sheet.js');
+      const res = await openSheetModal({
+        title: 'Move device notes to library',
+        fields: [
+          el('p', { class: 'hint' }, 'Transfer notes kept only on this device to a cloud library. Notes will be removed from this device and indexed under the chosen library.'),
+          el('label', { class: 'field' }, 'Destination Library', destSelect),
+          el('label', { class: 'field' }, 'Destination Folder', folderInput),
+        ],
+        submit: 'Move notes',
+      });
+      if (res.value !== 'ok') return;
+      const targetId = destSelect.value;
+      const targetFolder = folderInput.value.trim();
+      toast('Moving notes…');
+      try {
+        const count = await library.moveNotesBetweenSources(src.id, targetId, {
+          targetFolder,
+          onProgress: (m) => toast(m),
+        });
+        toast(`Moved ${count} ${count === 1 ? 'note' : 'notes'} successfully`);
+        app.sourcesChanged();
+        renderSources();
+        renderHighlightHome();
+      } catch (err) {
+        toast(`Failed to move notes: ${err.message}`);
+      }
+    };
     const download = el('button', {}, 'Download');
     download.onclick = async () => {
       const blob = await deviceNotesZip();
@@ -201,6 +239,10 @@ export function initSettings(app) {
     const list = $('settings-opds-list');
     if (!list) return;
     const cats = getCatalogsList();
+    const pill = $('opds-count-pill');
+    if (pill) {
+      pill.textContent = `${cats.length} ${cats.length === 1 ? 'catalog' : 'catalogs'}`;
+    }
     if (!cats.length) {
       list.replaceChildren(el('p', { class: 'empty-sources' }, 'No OPDS catalogs configured.'));
       return;
@@ -239,6 +281,72 @@ export function initSettings(app) {
     openOpdsBtn.onclick = async () => {
       const { openOpdsBrowser } = await import('./opds.js');
       openOpdsBrowser(app);
+    };
+  }
+
+  const addOpdsBtn = $('add-opds-from-settings');
+  if (addOpdsBtn) {
+    addOpdsBtn.onclick = async () => {
+      const { openAddCatalogModal } = await import('./opds.js');
+      openAddCatalogModal(() => {
+        renderOpdsCatalogs();
+      });
+    };
+  }
+
+  /* ---- CORS Proxy Settings ---- */
+  const corsProxyInput = $('cors-proxy-input');
+  const corsTestBtn = $('cors-proxy-test-btn');
+  const corsSaveBtn = $('cors-proxy-save-btn');
+
+  function renderCorsProxy() {
+    if (!corsProxyInput) return;
+    const prefs = store.getPrefs();
+    corsProxyInput.value = prefs.corsProxyUrl || '';
+  }
+
+  if (corsProxyInput) {
+    corsProxyInput.onchange = () => {
+      const val = corsProxyInput.value.trim();
+      store.setPrefs({ corsProxyUrl: val });
+      toast(val ? 'CORS proxy saved' : 'CORS proxy cleared (using direct / public fallback)');
+    };
+  }
+
+  if (corsSaveBtn && corsProxyInput) {
+    corsSaveBtn.onclick = () => {
+      const val = corsProxyInput.value.trim();
+      store.setPrefs({ corsProxyUrl: val });
+      toast(val ? 'CORS proxy saved' : 'CORS proxy cleared');
+    };
+  }
+
+  if (corsTestBtn && corsProxyInput) {
+    corsTestBtn.onclick = async () => {
+      const proxy = corsProxyInput.value.trim();
+      if (!proxy) {
+        toast('Enter a proxy URL to test first.');
+        return;
+      }
+      corsTestBtn.disabled = true;
+      corsTestBtn.textContent = 'Testing…';
+      try {
+        const testTarget = 'https://m.gutenberg.org/ebooks.opds/';
+        const testUrl = proxy.includes('%s')
+          ? proxy.replace('%s', encodeURIComponent(testTarget))
+          : `${proxy}${encodeURIComponent(testTarget)}`;
+        const res = await fetch(testUrl, { signal: AbortSignal.timeout(6000) });
+        if (res.ok) {
+          toast('✓ Proxy test succeeded! Valid response received.');
+        } else {
+          toast(`Proxy returned HTTP ${res.status}: ${res.statusText}`);
+        }
+      } catch (err) {
+        toast(`Proxy test failed: ${err.message}`);
+      } finally {
+        corsTestBtn.disabled = false;
+        corsTestBtn.textContent = 'Test Proxy';
+      }
     };
   }
 
@@ -341,86 +449,94 @@ export function initSettings(app) {
   }
 
   /* ---- Dropbox Integration ---- */
-  $('dbx-auth-btn').onclick = async () => {
-    const btn = $('dbx-auth-btn');
-    btn.disabled = true;
-    try {
-      const redirectUri = `${window.location.origin}/auth/callback`;
-      const clientId = '9c0wff8143gq9i0';
-      const { url } = await dropbox.createPKCEAuthUrl(clientId, redirectUri);
-      
-      const authWindow = window.open(url, 'dropbox_oauth_popup', 'width=620,height=700');
-      if (!authWindow) {
-        toast('Popup blocked. Please allow popups to sign in with Dropbox.');
-        btn.disabled = false;
+  const dbxAppKeyInput = $('dbx-app-key-input');
+  const dbxAuthBtn = $('dbx-auth-btn');
+  const dbxSaveTokenBtn = $('dbx-save-token-btn');
+
+  function renderDropboxSettings() {
+    if (dbxAppKeyInput) {
+      dbxAppKeyInput.value = store.getPrefs().dropboxAppKey || '';
+    }
+    const redirectEl = $('dbx-current-redirect');
+    if (redirectEl && typeof window !== 'undefined') {
+      redirectEl.textContent = `${window.location.origin}${window.location.pathname}`;
+    }
+  }
+
+  if (dbxAppKeyInput) {
+    dbxAppKeyInput.onchange = () => {
+      const val = dbxAppKeyInput.value.trim();
+      store.setPrefs({ dropboxAppKey: val });
+    };
+  }
+
+  if (dbxAuthBtn) {
+    dbxAuthBtn.onclick = async () => {
+      const clientId = (dbxAppKeyInput?.value.trim() || store.getPrefs().dropboxAppKey || '').trim();
+      if (!clientId) {
+        toast('Please enter your Dropbox App Key (Client ID) first.');
+        dbxAppKeyInput?.focus();
         return;
       }
-
-      const onMessage = async (e) => {
-        if (e.data?.type === 'OAUTH_AUTH_CODE') {
-          window.removeEventListener('message', onMessage);
-          if (e.data.error) {
-            toast(`Dropbox sign in canceled: ${e.data.error}`);
-            btn.disabled = false;
-            return;
-          }
-          if (e.data.code) {
-            toast('Connecting Dropbox account…');
-            try {
-              const res = await dropbox.exchangePKCECode(e.data.code, clientId, redirectUri);
-              const user = (await dropbox.whoami(res.token)) || 'Dropbox';
-              const src = {
-                id: store.newId('dbx'),
-                type: 'dropbox',
-                token: res.token,
-                name: user ? `Dropbox (${user})` : 'Dropbox (/Apps/Readover)',
-                root: '',
-              };
-              store.saveSource(src);
-              $('accordion-dropbox').open = false;
-              app.sourcesChanged();
-              toast(`Connected ${src.name}! Syncing…`);
-              await app.syncSource(src, { userGesture: true });
-              renderSources();
-              renderHighlightHome();
-            } catch (err) {
-              toast(err.message);
-            } finally {
-              btn.disabled = false;
-            }
-          }
-        }
-      };
-      window.addEventListener('message', onMessage);
-    } catch (err) {
-      toast(err.message);
-      btn.disabled = false;
-    }
-  };
-
-  $('dbx-save-token-btn').onclick = async () => {
-    const token = $('dbx-token-input').value.trim();
-    if (!token) {
-      toast('Please enter a Dropbox access token.');
-      return;
-    }
-    const name = $('dbx-name-input').value.trim() || 'Dropbox (/Apps/Readover)';
-    const src = {
-      id: store.newId('dbx'),
-      type: 'dropbox',
-      token,
-      name,
-      root: '',
+      store.setPrefs({ dropboxAppKey: clientId });
+      dbxAuthBtn.disabled = true;
+      try {
+        const redirectUri = `${window.location.origin}${window.location.pathname}`;
+        const { url } = await dropbox.createPKCEAuthUrl(clientId, redirectUri);
+        // Direct redirect for universal PWA and mobile browser support
+        window.location.href = url;
+      } catch (err) {
+        toast(err.message);
+        dbxAuthBtn.disabled = false;
+      }
     };
-    store.saveSource(src);
-    $('dbx-token-input').value = '';
-    $('accordion-dropbox').open = false;
-    app.sourcesChanged();
-    toast(`Saved ${name}! Syncing…`);
-    await app.syncSource(src, { userGesture: true });
-    renderSources();
-    renderHighlightHome();
-  };
+  }
+
+  if (dbxSaveTokenBtn) {
+    dbxSaveTokenBtn.onclick = async () => {
+      const token = $('dbx-token-input')?.value.trim();
+      if (!token) {
+        toast('Please enter a Dropbox personal access token.');
+        return;
+      }
+      dbxSaveTokenBtn.disabled = true;
+      dbxSaveTokenBtn.textContent = 'Verifying…';
+      try {
+        const user = await dropbox.whoami(token);
+        if (!user) {
+          toast('Dropbox rejected this token. Check permissions: files.content.read, files.content.write, etc.');
+          return;
+        }
+        const name = $('dbx-name-input')?.value.trim() || `Dropbox (${user})`;
+        let src = store.getSources().find((s) => s.type === 'dropbox');
+        if (!src) {
+          src = {
+            id: store.newId('dbx'),
+            type: 'dropbox',
+            token,
+            name,
+            root: '',
+          };
+        } else {
+          src.token = token;
+          src.name = name;
+        }
+        store.saveSource(src);
+        $('dbx-token-input').value = '';
+        $('accordion-dropbox').open = false;
+        app.sourcesChanged();
+        toast(`Connected ${name}! Syncing…`);
+        await app.syncSource(src, { userGesture: true });
+        renderSources();
+        renderHighlightHome();
+      } catch (err) {
+        toast(`Dropbox connection failed: ${err.message}`);
+      } finally {
+        dbxSaveTokenBtn.disabled = false;
+        dbxSaveTokenBtn.textContent = 'Connect with Token';
+      }
+    };
+  }
 
   /* ---- WebDAV Integration ---- */
   sheet.querySelectorAll('[data-dav-preset]').forEach((b) => {
@@ -555,21 +671,27 @@ export function initSettings(app) {
   /* ---- Sync between devices ---- */
   async function renderSync() {
     const select = $('data-home-select');
-    const writable = store.getSources().filter((s) => s.type === 'github' && github.canWrite(s));
+    const writable = store.getSources().filter((s) => {
+      if (s.type === 'github') return github.canWrite(s);
+      if (s.type === 'dropbox') return dropbox.canWrite(s);
+      if (s.type === 'webdav') return webdav.canWrite(s);
+      return false;
+    });
     const home = dataSync.dataHome();
     select.replaceChildren(
       el('option', { value: '' }, 'This device only'),
-      ...writable.map((s) => el('option', { value: s.id }, displayName(s)))
+      ...writable.map((s) => el('option', { value: s.id }, `${displayName(s)} (${s.type})`))
     );
     select.value = home?.id || '';
     select.disabled = !writable.length;
 
     const info = $('sync-info');
     const last = dataSync.lastSync();
-    if (!writable.length) info.textContent = 'Needs a GitHub repo and token for sync.';
+    const homeName = home ? displayName(home) : '';
+    if (!writable.length) info.textContent = 'Connect a writable library (Dropbox, WebDAV, or GitHub) for sync.';
     else if (!home) info.textContent = 'Not syncing.';
-    else if (!last.at) info.textContent = `In ${home.repo}/.readover`;
-    else if (last.ok) info.textContent = `In ${home.repo}/.readover · synced ${new Date(last.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    else if (!last.at) info.textContent = `In ${homeName}/.readover`;
+    else if (last.ok) info.textContent = `In ${homeName}/.readover · synced ${new Date(last.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     else info.textContent = `Couldn't sync: ${last.message}`;
     $('sync-now-btn').hidden = !home;
 
@@ -634,6 +756,31 @@ export function initSettings(app) {
       .all()
       .then((all) => $('hl-folder-list').replaceChildren(...libraryTypes(all, home).map((t) => el('option', { value: t }))))
       .catch(() => {});
+
+    // Attachments & Media Destination
+    const attSel = $('attachments-dest-select');
+    if (attSel) {
+      const prefs = store.getPrefs();
+      const currentDest = prefs.attachmentsDestination || 'note-provider';
+      const options = [
+        el('option', { value: 'note-provider' }, 'Same library as note (default)'),
+      ];
+      const dbxSources = store.getSources().filter((s) => s.type === 'dropbox' && canWriteSrc(s));
+      for (const d of dbxSources) {
+        options.push(el('option', { value: 'dropbox' }, `Dropbox: ${displayName(d)} (/attachments)`));
+      }
+      const s3Sources = store.getSources().filter((s) => (s.type === 's3' || s.type === 'r2') && canWriteSrc(s));
+      for (const s of s3Sources) {
+        options.push(el('option', { value: 's3' }, `Object Vault: ${displayName(s)}`));
+      }
+      options.push(el('option', { value: 'device' }, 'This device only (offline blobs)'));
+      attSel.replaceChildren(...options);
+      attSel.value = currentDest;
+      attSel.onchange = (e) => {
+        store.setPrefs({ attachmentsDestination: e.target.value });
+        toast('Attachment destination updated');
+      };
+    }
   }
   $('hl-home-select').onchange = (e) => store.setPrefs({ newNotesHome: e.target.value });
   $('hl-folder-input').onchange = (e) => store.setPrefs({ highlightsFolder: e.target.value.trim().replace(/^\/+|\/+$/g, '') });
@@ -775,6 +922,8 @@ export function initSettings(app) {
       form.hidden = true;
       renderSources();
       renderOpdsCatalogs();
+      renderCorsProxy();
+      renderDropboxSettings();
       renderSync();
 
       renderHighlightHome();

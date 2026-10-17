@@ -34,13 +34,16 @@ export { formatGardenNoteBody, extractInsightComponents, addToSection, addRelate
 export function newNotesHome() {
   const prefs = store.getPrefs();
   const sources = store.getSources();
-  const pick = (id) => sources.find((s) => s.id === id && library.canWrite(s));
+  const pick = (id) => {
+    if (!id) return null;
+    if (id === library.DEVICE_ID) return library.deviceSource(false) || { id: library.DEVICE_ID, type: 'device', name: 'This device', virtual: true };
+    return sources.find((s) => s.id === id && library.canWrite(s));
+  };
   return (
     pick(prefs.newNotesHome) ||
     pick(prefs.highlightHome) || // the older setting, for books
     dataSync.dataHome() ||
-    sources.find((s) => s.type === 'github' && library.canWrite(s)) ||
-    sources.find((s) => s.type === 'local' && library.canWrite(s)) ||
+    sources.find((s) => s.type !== 'device' && library.canWrite(s)) ||
     // The on-device notebook, without creating it just by asking.
     library.deviceSource(false) || { id: library.DEVICE_ID, type: 'device', name: 'This device', virtual: true }
   );

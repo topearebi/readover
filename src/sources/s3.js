@@ -206,6 +206,16 @@ export async function putFile(src, path, textOrBlob) {
   return etag.replace(/"/g, '') || `sha:${Date.now()}`;
 }
 
+export async function deleteFile(src, path) {
+  const root = (src.root || '').replace(/^\/+|\/+$/g, '');
+  const fullPath = root ? `/${root}/${path.replace(/^\/+/, '')}` : `/${path.replace(/^\/+/, '')}`;
+  const res = await signedFetch(src, 'DELETE', fullPath);
+  if (!res.ok && res.status !== 404 && res.status !== 204) {
+    throw new Error(`S3/R2 delete failed (${res.status})`);
+  }
+  return true;
+}
+
 export async function testConnection(src) {
   const res = await signedFetch(src, 'GET', '/?list-type=2&max-keys=1');
   if (!res.ok) throw new Error(`Bucket responded with error code ${res.status}`);

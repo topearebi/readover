@@ -1,7 +1,7 @@
 // Notes: the place to work on notes, separate from reading. Browse by library and
 // folder, search everything, open a note to edit it, link it, move it or delete it.
 import * as store from '../store.js';
-import { displayName, canWrite } from '../library.js';
+import { displayName, canWrite, sourceNotesZip, moveNotesBetweenSources, DEVICE_ID } from '../library.js';
 import { entries, search, coverage, downloadAll } from '../notes-index.js';
 import { dataHome } from '../sync.js';
 import { el, icon, toast } from './overlay.js';
@@ -11,7 +11,7 @@ import { changedAt } from '../clock.js';
 import { GROWTH_FILTERS, counts, filterLabel, isFiltered, passes, typeList } from '../filters.js';
 import { renderTypeChecks, readTypeChecks } from './types.js';
 import { glyph, tagText } from './growth.js';
-import { sheet } from './sheet.js';
+import { sheet, menu } from './sheet.js';
 
 const SORTS = [
   { id: 'folders', label: 'Folders' },
@@ -48,12 +48,206 @@ export function initNotes(app) {
   const coverageLine = el('p', { class: 'hint notes-coverage', hidden: true });
   const crumbs = el('nav', { class: 'notes-crumbs', 'aria-label': 'Folder' });
   const newBtn = el('button', { class: 'btn' }, icon('pen', 'i i-sm'), 'New note here');
+  const manageBtn = el('button', { type: 'button', class: 'btn btn-quiet notes-manage-btn' }, 'Actions ▾');
   const list = el('div', { class: 'notes-list' });
+
+  // Bulk actions bar
+  const bulkBar = el('div', { class: 'notes-bulk-bar', hidden: true });
+  const selectAllBtn = el('button', { type: 'button', class: 'btn btn-sm btn-quiet' }, 'Select all');
+  const bulkCount = el('span', { class: 'notes-bulk-count' }, '0 selected');
+  const bulkMoveBtn = el('button', { type: 'button', class: 'btn btn-sm btn-primary' }, 'Move to…');
+  const bulkExportBtn = el('button', { type: 'button', class: 'btn btn-sm btn-quiet' }, 'Export (.zip)');
+  const bulkDoneBtn = el('button', { type: 'button', class: 'btn btn-sm btn-quiet' }, 'Done');
+  bulkBar.append(selectAllBtn, bulkCount, bulkMoveBtn, bulkExportBtn, bulkDoneBtn);
+
+  let selectMode = false;
+  const selectedKeys = new Set();
+  let currentVisibleNotes = [];
+
+  function startSelectMode() {
+    selectMode = true;
+    selectedKeys.clear();
+    bulkBar.hidden = false;
+    updateBulkBar();
+    render();
+  }
+
+  function exitSelectMode() {
+    selectMode = false;
+    selectedKeys.clear();
+    bulkBar.hidden = true;
+    render();
+  }
+
+  function updateBulkBar() {
+    bulkCount.textContent = `${selectedKeys.size} selected`;
+    bulkMoveBtn.disabled = selectedKeys.size === 0;
+    bulkExportBtn.disabled = selectedKeys.size === 0;
+    selectAllBtn.textContent = currentVisibleNotes.length > 0 && selectedKeys.size === currentVisibleNotes.length ? 'Deselect all' : 'Select all';
+  }
+
+  selectAllBtn.onclick = () => {
+    if (selectedKeys.size === currentVisibleNotes.length) {
+      selectedKeys.clear();
+    } else {
+      for (const n of currentVisibleNotes) selectedKeys.add(n.key);
+    }
+    updateBulkBar();
+    render();
+  };
+
+  bulkDoneBtn.onclick = () => exitSelectMode();
+
+  bulkExportBtn.onclick = async () => {
+    if (!selectedKeys.size) return;
+    toast('Creating .zip…');
+    try {
+      const { makeZip } = await import('../lib/zip.js');
+      const all = await entries();
+      const selectedEntries = all.filter((e) => selectedKeys.has(e.item.key));
+      const files = [];
+      for (const e of selectedEntries) {
+        const text = e.text || (await store.content.get(e.item.key))?.text || '';
+        files.push({ path: e.item.path, text });
+      }
+      const blob = makeZip(files);
+      const a = el('a', { href: URL.createObjectURL(blob), download: `readover-selected-${new Date().toISOString().slice(0, 10)}.zip` });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      toast('Zip downloaded');
+    } catch (err) {
+      toast(`Export failed: ${err.message}`);
+    }
+  };
+
+  bulkMoveBtn.onclick = async () => {
+    if (!selectedKeys.size) return;
+    const all = await entries();
+    const selectedEntries = all.filter((e) => selectedKeys.has(e.item.key));
+    const firstSrcId = selectedEntries[0]?.item.sourceId || view.sourceId || DEVICE_ID;
+    await promptAndMoveNotes(Array.from(selectedKeys), firstSrcId);
+  };
+
+  manageBtn.onclick = () => openActionsMenu();
+
+  async function openActionsMenu() {
+    const src = view.sourceId ? store.getSource(view.sourceId) : null;
+    const actions = [
+      { id: 'select', label: 'Select notes (multi-select mode)' },
+      { id: 'export-zip', label: src ? `Export ${view.folder ? `folder "${view.folder}"` : displayName(src)} as .zip` : 'Export all notes as .zip' },
+    ];
+    if (src) {
+      actions.push({ id: 'move-storage', label: `Move ${view.folder ? `folder "${view.folder}"` : displayName(src)} to another storage…` });
+    }
+    const chosen = await menu('Library & File Actions', actions);
+    if (chosen === 'select') {
+      startSelectMode();
+    } else if (chosen === 'export-zip') {
+      await exportCurrentScopeZip();
+    } else if (chosen === 'move-storage') {
+      await moveCurrentScope();
+    }
+  }
+
+  async function exportCurrentScopeZip() {
+    toast('Creating .zip…');
+    try {
+      let blob;
+      let filename;
+      if (view.sourceId) {
+        blob = await sourceNotesZip(view.sourceId, view.folder);
+        const src = store.getSource(view.sourceId);
+        const scope = [displayName(src), view.folder].filter(Boolean).join('-').replace(/[\\/:*?"<>|]+/g, '_');
+        filename = `readover-${scope}-${new Date().toISOString().slice(0, 10)}.zip`;
+      } else {
+        const { makeZip } = await import('../lib/zip.js');
+        const all = await entries();
+        const files = [];
+        for (const e of all) {
+          const text = e.text || (await store.content.get(e.item.key))?.text || '';
+          files.push({ path: e.item.path, text });
+        }
+        blob = makeZip(files);
+        filename = `readover-all-notes-${new Date().toISOString().slice(0, 10)}.zip`;
+      }
+      const a = el('a', { href: URL.createObjectURL(blob), download: filename });
+      document.body.append(a);
+      a.click();
+      a.remove();
+      toast('Zip downloaded');
+    } catch (err) {
+      toast(`Export failed: ${err.message}`);
+    }
+  }
+
+  async function moveCurrentScope() {
+    const all = await entries();
+    const prefix = view.folder ? `${view.folder}/` : '';
+    const scopeNotes = all.filter((e) => e.item.sourceId === view.sourceId && (!view.folder || e.item.folder === view.folder || e.item.folder.startsWith(prefix)));
+    if (!scopeNotes.length) {
+      toast('No notes in this view to move');
+      return;
+    }
+    await promptAndMoveNotes(scopeNotes.map((e) => e.item.key), view.sourceId);
+  }
+
+  async function promptAndMoveNotes(keysToMove, fromSourceId) {
+    const writable = store.getSources().filter((s) => canWrite(s) && s.id !== fromSourceId);
+    if (fromSourceId !== DEVICE_ID && !writable.some((s) => s.id === DEVICE_ID)) {
+      writable.push({ id: DEVICE_ID, type: 'device', name: 'This device' });
+    }
+    if (!writable.length) {
+      toast('Connect another writable library (Dropbox, WebDAV, or GitHub) in Settings first.');
+      return;
+    }
+    const destSelect = el(
+      'select',
+      { class: 'field-input' },
+      ...writable.map((s) => el('option', { value: s.id }, `${displayName(s)} (${s.type})`))
+    );
+    const folderInput = el('input', { type: 'text', placeholder: 'Optional subfolder (e.g. notes)', autocomplete: 'off' });
+    const { value } = await sheet({
+      title: `Move ${keysToMove.length} ${keysToMove.length === 1 ? 'note' : 'notes'}`,
+      fields: [
+        el('p', { class: 'hint' }, `Transfer selected notes to another storage provider. Content and reciprocal links will be preserved.`),
+        el('label', { class: 'field' }, 'Destination Library', destSelect),
+        el('label', { class: 'field' }, 'Destination Folder', folderInput),
+      ],
+      submit: 'Move notes',
+    });
+    if (value !== 'ok') return;
+    const targetId = destSelect.value;
+    const targetFolder = folderInput.value.trim();
+    toast('Moving notes…');
+    try {
+      const count = await moveNotesBetweenSources(fromSourceId, targetId, {
+        noteKeys: keysToMove,
+        targetFolder,
+        onProgress: (m) => toast(m),
+      });
+      toast(`Moved ${count} ${count === 1 ? 'note' : 'notes'}`);
+      exitSelectMode();
+      render();
+    } catch (err) {
+      toast(`Move failed: ${err.message}`);
+    }
+  }
+
   // Sort and filter (remembered on this device, separately from the feed's).
   const sortSel = el('select', { class: 'notes-sort', 'aria-label': 'Sort' }, ...SORTS.map((o) => el('option', { value: o.id }, o.label)));
   const filterBtn = el('button', { type: 'button', class: 'btn btn-quiet notes-filter' });
   const tools = el('div', { class: 'notes-tools' }, el('label', { class: 'notes-sort-label' }, 'Sort ', sortSel), filterBtn);
-  root.replaceChildren(el('div', { class: 'notes-inner' }, el('div', { class: 'notes-top' }, searchInput, tools, coverageLine), el('div', { class: 'notes-bar' }, crumbs, el('div', { class: 'notes-bar-actions' }, newBtn)), list));
+  root.replaceChildren(
+    el(
+      'div',
+      { class: 'notes-inner' },
+      el('div', { class: 'notes-top' }, searchInput, tools, coverageLine),
+      el('div', { class: 'notes-bar' }, crumbs, el('div', { class: 'notes-bar-actions' }, newBtn, manageBtn)),
+      bulkBar,
+      list
+    )
+  );
   sortSel.onchange = () => {
     store.setPrefs({ notesSort: sortSel.value });
     render();
@@ -104,6 +298,34 @@ export function initNotes(app) {
 
   function row(item, title, sub, g = null, meta = '') {
     const tag = g && !['pending', 'inbox'].includes(g.stage) ? miniTag(g) : null;
+    const isSelected = selectedKeys.has(item.key);
+
+    if (selectMode) {
+      const check = el('input', { type: 'checkbox', class: 'note-select-check', checked: isSelected, 'aria-label': `Select ${title}` });
+      const contentCol = el(
+        'div',
+        { class: 'note-content-col' },
+        el('b', {}, title),
+        sub ? el('span', {}, sub) : null,
+        tag || meta ? el('small', { class: 'row-meta' }, tag, tag && meta ? ' · ' : '', meta) : null
+      );
+      const b = el(
+        'button',
+        { class: `note-row selecting${isSelected ? ' is-selected' : ''}`, 'data-key': item.key, type: 'button' },
+        check,
+        contentCol
+      );
+      b.onclick = (e) => {
+        e.preventDefault();
+        if (selectedKeys.has(item.key)) selectedKeys.delete(item.key);
+        else selectedKeys.add(item.key);
+        updateBulkBar();
+        check.checked = selectedKeys.has(item.key);
+        b.classList.toggle('is-selected', check.checked);
+      };
+      return b;
+    }
+
     const b = el(
       'button',
       { class: 'note-row', 'data-key': item.key },
@@ -157,18 +379,28 @@ export function initNotes(app) {
     if (view.query) {
       crumbs.replaceChildren(el('span', {}, 'Search results'));
       newBtn.hidden = true;
+      manageBtn.hidden = true;
       const results = await search(view.query);
+      currentVisibleNotes = results.map((r) => r.item);
       list.replaceChildren(
         ...(results.length
           ? results.map((r) => row(r.item, r.title, r.snippet || [displayName(store.getSource(r.item.sourceId)), r.item.folder].filter(Boolean).join(' / '), growth.get(r.item.key)))
           : [el('p', { class: 'notes-empty' }, `Nothing matches “${view.query}”.`)])
       );
+      updateBulkBar();
       return;
     }
 
     // Choose a library first when there's more than one
     if (!view.sourceId && sources.length === 1) view.sourceId = sources[0].id;
-    newBtn.hidden = !(view.sourceId ? canWrite(store.getSource(view.sourceId)) : true);
+    if (selectMode) {
+      newBtn.hidden = true;
+      manageBtn.hidden = true;
+    } else {
+      newBtn.hidden = !(view.sourceId ? canWrite(store.getSource(view.sourceId)) : true);
+      manageBtn.hidden = false;
+    }
+
     // Sorted or filtered across all libraries.
     const flat = (prefs().notesSort || 'folders') !== 'folders' || isFiltered(prefs().notesGrowth || 'any', types());
     if (!view.sourceId && flat) {
@@ -177,6 +409,7 @@ export function initNotes(app) {
       return;
     }
     if (!view.sourceId) {
+      currentVisibleNotes = [];
       crumbs.replaceChildren(el('span', {}, 'All notes'));
       list.replaceChildren(
         ...sources.map((s) =>
@@ -188,6 +421,7 @@ export function initNotes(app) {
         )
       );
       if (!sources.length) list.replaceChildren(el('p', { class: 'notes-empty' }, 'No notes yet. Write one with the pen above, or connect a GitHub repo or folder in Settings.'));
+      updateBulkBar();
       return;
     }
 
@@ -227,11 +461,13 @@ export function initNotes(app) {
         if (next) sub.set(next, (sub.get(next) || 0) + 1);
       }
     }
+    currentVisibleNotes = notes.map((e) => e.item);
     list.replaceChildren(
       ...[...sub.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, n]) => folderRow(name, n, () => ((view.folder = prefix + name), render()))),
       ...notes.sort((a, b) => a.title.localeCompare(b.title)).map((e) => row(e.item, titles.get(e.item.key), e.hasText ? firstLine(e.text) : '', growth.get(e.item.key)))
     );
     if (!list.children.length) list.append(el('p', { class: 'notes-empty' }, 'Nothing here yet.'));
+    updateBulkBar();
   }
 
   /** Every note in this library (and folder, with its subfolders), filtered and sorted. */
@@ -250,12 +486,15 @@ export function initNotes(app) {
     }[sortId];
     rows.sort(cmp);
     const where = (e) => [view.sourceId ? '' : displayName(store.getSource(e.item.sourceId)), e.item.folder].filter(Boolean).join(' / ');
+    const visibleRows = rows.slice(0, 500);
+    currentVisibleNotes = visibleRows.map((e) => e.item);
     list.replaceChildren(
       el('p', { class: 'hint notes-count' }, `${rows.length} ${rows.length === 1 ? 'note' : 'notes'}`),
-      ...rows.slice(0, 500).map((e) => row(e.item, titles.get(e.item.key), e.hasText ? firstLine(e.text) : '', growth.get(e.item.key), [shortDate(when.get(e.item.key)), where(e)].filter(Boolean).join(' · ')))
+      ...visibleRows.map((e) => row(e.item, titles.get(e.item.key), e.hasText ? firstLine(e.text) : '', growth.get(e.item.key), [shortDate(when.get(e.item.key)), where(e)].filter(Boolean).join(' · ')))
     );
     if (rows.length > 500) list.append(el('p', { class: 'hint' }, `Showing the first 500. Narrow it with a folder or filter.`));
     if (!rows.length) list.append(el('p', { class: 'notes-empty' }, isFiltered(gId, tId) ? 'No notes match these filters here.' : 'Nothing here yet.'));
+    updateBulkBar();
   }
 
   const firstLine = (text) =>

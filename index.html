@@ -182,20 +182,59 @@
               </summary>
               <div class="provider-accordion-body">
                 <p class="hint">Stores notes and books in your private <code>/Apps/Readover</code> folder.</p>
-                <div class="row-actions">
-                  <button type="button" id="dbx-auth-btn" class="btn btn-primary">Sign in with Dropbox</button>
+
+                <!-- Method A: One-Tap OAuth via User's Dropbox App Key (PKCE) -->
+                <div class="dbx-oauth-block">
+                  <label class="field">Dropbox App Key (Client ID)
+                    <input id="dbx-app-key-input" placeholder="Paste App key from Dropbox App Console" autocomplete="off" autocapitalize="off" spellcheck="false" />
+                  </label>
+                  <div class="row-actions" style="margin-top: 0.5rem;">
+                    <button type="button" id="dbx-auth-btn" class="btn btn-primary">Sign in with Dropbox</button>
+                  </div>
                 </div>
-                <details class="more-options">
-                  <summary>Or enter an Access Token manually</summary>
-                  <label class="field">Access Token
-                    <input id="dbx-token-input" type="password" placeholder="sl.u.AF..." autocomplete="off" />
+
+                <!-- Method B: Direct Personal Access Token -->
+                <details class="more-options" style="margin-top: 0.75rem;">
+                  <summary>Or connect with a Personal Access Token / Custom Key</summary>
+                  <label class="field">Dropbox Personal Access Token
+                    <input id="dbx-token-input" type="password" placeholder="sl.u.AF..." autocomplete="off" autocapitalize="off" spellcheck="false" />
                   </label>
                   <label class="field">Custom Name (optional)
                     <input id="dbx-name-input" placeholder="Dropbox Notes" />
                   </label>
-                  <div class="row-actions">
-                    <button type="button" id="dbx-save-token-btn" class="btn">Save Dropbox Token</button>
+                  <div class="row-actions" style="margin-top: 0.5rem;">
+                    <button type="button" id="dbx-save-token-btn" class="btn">Connect with Token</button>
                   </div>
+                </details>
+
+                <!-- In-App Guidance & Scope Documentation -->
+                <details class="how" style="margin-top: 0.75rem;">
+                  <summary>How to get a Dropbox App Key or Token (2 minutes)</summary>
+                  <ol>
+                    <li>Open the <a href="https://www.dropbox.com/developers/apps" target="_blank" rel="noopener">Dropbox App Console</a>.</li>
+                    <li>Click <b>Create app</b>:
+                      <ul>
+                        <li>Choose <b>Scoped access</b>.</li>
+                        <li>Choose <b>App folder</b> (creates a private, safe sandbox at <code>/Apps/Readover</code>).</li>
+                        <li>Name your app (e.g. <code>My-Readover-Notes</code>).</li>
+                      </ul>
+                    </li>
+                    <li>In the <b>Permissions</b> tab, check these 4 permissions:
+                      <ul>
+                        <li><code>files.metadata.read</code></li>
+                        <li><code>files.metadata.write</code></li>
+                        <li><code>files.content.read</code></li>
+                        <li><code>files.content.write</code></li>
+                      </ul>
+                      Click <b>Submit</b> to save.
+                    </li>
+                    <li>In the <b>Settings</b> tab:
+                      <ul>
+                        <li><b>For Sign-In (PKCE):</b> Add your current URL (<code id="dbx-current-redirect"></code>) to <b>Redirect URIs</b>, then copy the <b>App key</b> and paste it above.</li>
+                        <li><b>For Direct Token:</b> Under <i>Generated access token</i>, click <b>Generate</b>, copy the token, and paste it above.</li>
+                      </ul>
+                    </li>
+                  </ol>
                 </details>
               </div>
             </details>
@@ -357,18 +396,53 @@
                 </div>
               </div>
             </details>
+
+            <!-- Remote OPDS Catalogs -->
+            <details class="provider-accordion" id="accordion-opds">
+              <summary>
+                <span>Remote OPDS Catalogs</span>
+                <span id="opds-count-pill" class="source-type-pill">0 catalogs</span>
+              </summary>
+              <div class="provider-accordion-body">
+                <p class="hint">Browse on-demand catalogs and stash books locally (Standard Ebooks, Calibre, Kavita).</p>
+                <div class="row-actions" style="margin-bottom: 0.75rem;">
+                  <button type="button" id="open-opds-from-settings" class="btn btn-sm btn-primary">Browse Catalogs</button>
+                  <button type="button" id="add-opds-from-settings" class="btn btn-sm btn-quiet">+ Connect a Catalog</button>
+                </div>
+                <div id="settings-opds-list" class="opds-catalogs-list"></div>
+
+                <div class="cors-proxy-settings" style="margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 0.85rem;">
+                  <label class="field">Custom CORS Proxy Gateway
+                    <input id="cors-proxy-input" type="url" placeholder="https://my-proxy.workers.dev/?url=" autocomplete="off" autocapitalize="off" spellcheck="false" />
+                  </label>
+                  <p class="hint" style="font-size: 0.8rem; margin-top: 0.25rem;">
+                    Used for catalogs that do not send browser CORS headers. Leave blank to use direct connections and public fallbacks. Use <code>%s</code> or append <code>?url=</code>.
+                  </p>
+                  <div class="row-actions" style="margin-top: 0.5rem;">
+                    <button type="button" id="cors-proxy-test-btn" class="btn btn-sm">Test Proxy</button>
+                    <button type="button" id="cors-proxy-save-btn" class="btn btn-sm btn-quiet">Save Proxy</button>
+                  </div>
+                  <details class="how" style="margin-top: 0.75rem;">
+                    <summary>Deploy a free Cloudflare Worker CORS proxy in 2 minutes</summary>
+                    <p class="hint">1. Go to <b>workers.cloudflare.com</b> and create a new Worker.</p>
+                    <p class="hint">2. Paste this script and click Deploy:</p>
+                    <pre style="background: var(--bg-card); padding: 0.6rem; border-radius: 4px; font-size: 0.75rem; overflow-x: auto; user-select: all; border: 1px solid var(--border);">export default {
+  async fetch(req) {
+    const url = new URL(req.url).searchParams.get('url');
+    if (!url) return new Response('Missing ?url=', { status: 400 });
+    const res = await fetch(url, { headers: req.headers });
+    const h = new Headers(res.headers);
+    h.set('Access-Control-Allow-Origin', '*');
+    h.set('Access-Control-Allow-Headers', '*');
+    return new Response(res.body, { status: res.status, headers: h });
+  }
+};</pre>
+                    <p class="hint">3. Copy your Worker URL (e.g. <code>https://my-proxy.yourname.workers.dev/?url=</code>) and paste it into the field above.</p>
+                  </details>
+                </div>
+              </div>
+            </details>
           </div>
-        <!-- OPDS Catalogs Section -->
-        <section class="settings-group" id="opds-catalogs-group">
-          <div class="group-header-row">
-            <div>
-              <h3>Remote OPDS Catalogs</h3>
-              <p class="hint">Browse on-demand catalogs and stash books locally (Standard Ebooks, Calibre, Kavita).</p>
-            </div>
-            <button type="button" id="open-opds-from-settings" class="btn btn-sm btn-primary">Browse Catalogs</button>
-          </div>
-          <div id="settings-opds-list" class="opds-catalogs-list"></div>
-        </section>
 
         <!-- Sync & State Storage -->
         <section class="settings-group" id="sync-group">
@@ -400,6 +474,10 @@
               <datalist id="hl-folder-list"></datalist>
             </label>
           </div>
+          <label class="field" style="margin-top: 0.75rem;">Images &amp; attachments destination
+            <select id="attachments-dest-select"></select>
+          </label>
+          <p class="hint" style="font-size: 0.8rem; margin-top: 0.25rem;">Choose whether image attachments live alongside your notes or in a dedicated vault (e.g. Dropbox <code>/attachments</code> or Cloudflare R2 / S3).</p>
         </section>
 
         <section class="settings-group">

@@ -267,11 +267,12 @@ const DEFAULT_PREFS = {
   highlightMix: 0.5,
   dataHome: '',
   corsProxyUrl: '',
+  dropboxAppKey: '',
   acquiredBooksHome: '',
-  attachmentsDestination: 'note-provider', // 'note-provider' | 's3'
+  attachmentsDestination: 'note-provider', // 'note-provider' | 's3' | 'dropbox' | 'device'
 };
 /** Preferences that follow you between devices. The rest (view filters, data home) are per device. */
-export const SYNCED_PREFS = ['theme', 'highlightMix', 'corsProxyUrl', 'acquiredBooksHome', 'attachmentsDestination'];
+export const SYNCED_PREFS = ['theme', 'highlightMix', 'corsProxyUrl', 'dropboxAppKey', 'acquiredBooksHome', 'attachmentsDestination'];
 export function getPrefs() {
   return { ...DEFAULT_PREFS, ...readJSON(LS.prefs, {}) };
 }

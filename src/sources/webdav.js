@@ -220,6 +220,20 @@ export async function putFile(src, path, textOrBlob) {
   return etag.replace(/"/g, '') || `rev:${Date.now()}`;
 }
 
+export async function deleteFile(src, path) {
+  const baseUrl = cleanUrl(src.url);
+  const cleanPath = path.replace(/^\/+/, '');
+  const fileUrl = `${baseUrl}/${encodeURI(cleanPath)}`;
+  const res = await fetch(fileUrl, {
+    method: 'DELETE',
+    headers: authHeaders(src),
+  });
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`WebDAV delete failed (${res.status})`);
+  }
+  return true;
+}
+
 /** Test connection helper for the Settings UI. */
 export async function testConnection(src) {
   const baseUrl = cleanUrl(src.url);

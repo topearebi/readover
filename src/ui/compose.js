@@ -736,7 +736,13 @@ export function initCompose(app) {
         }
       } else {
         // --- CREATING NEW NOTE ---
-        const src = f.source.value === DEVICE_ID ? deviceSource(true) : store.getSource(f.source.value);
+        const chosenSourceId = f.source.value;
+        if (chosenSourceId) {
+          try {
+            localStorage.setItem('readover.lastNoteSource', chosenSourceId);
+          } catch {}
+        }
+        const src = chosenSourceId === DEVICE_ID ? deviceSource(true) : store.getSource(chosenSourceId);
         const name = title || titleFromText(body).replace(/…$/, '');
         const path = await newNotePath(folder, name, async (p) => Boolean(await store.items.get(store.keyOf(src.id, p))));
         const text = newNoteText({ title, body, status, tags: f.tags.value });
@@ -840,15 +846,32 @@ export function initCompose(app) {
         submitBtn.textContent = 'Save note';
         sel.disabled = false;
 
+        let targetSourceId = null;
         if (presets.sourceId && [...sel.options].some((o) => o.value === presets.sourceId)) {
-          sel.value = presets.sourceId;
+          targetSourceId = presets.sourceId;
         } else {
-          sel.value = newNotesHome().id;
+          const prefs = store.getPrefs();
+          const lastSource = localStorage.getItem('readover.lastNoteSource');
+          if (prefs.newNotesHome && [...sel.options].some((o) => o.value === prefs.newNotesHome)) {
+            targetSourceId = prefs.newNotesHome;
+          } else if (lastSource && [...sel.options].some((o) => o.value === lastSource)) {
+            targetSourceId = lastSource;
+          } else {
+            targetSourceId = newNotesHome().id;
+          }
         }
+        sel.value = targetSourceId && [...sel.options].some((o) => o.value === targetSourceId) ? targetSourceId : DEVICE_ID;
 
         const initialFolder = presets.folder != null ? clean(presets.folder) : '';
         fillTypes(initialFolder);
-        sel.onchange = () => fillTypes(clean(presets.folder || ''));
+        sel.onchange = () => {
+          if (sel.value) {
+            try {
+              localStorage.setItem('readover.lastNoteSource', sel.value);
+            } catch {}
+          }
+          fillTypes(clean(presets.folder || ''));
+        };
 
         applyStatus(presets.status ?? '');
 

@@ -1831,6 +1831,54 @@ details.field[open] summary {
   padding: 20px 4px;
   line-height: 1.5;
 }
+.notes-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.notes-bulk-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 8px 0 12px;
+  font-size: 0.875rem;
+}
+.notes-bulk-count {
+  font-weight: 600;
+  color: var(--ink);
+  margin-right: auto;
+}
+.note-row.selecting {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+}
+.note-row.selecting.is-selected {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.note-row.selecting .note-select-check {
+  margin-top: 4px;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  pointer-events: none;
+}
+.note-row.selecting .note-content-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
 
 /* Menus and pickers */
 .menu-list {
@@ -3498,6 +3546,53 @@ details > summary {
 .opds-status {
   margin: 0;
   font-size: 0.8125rem;
+}
+
+/* OPDS Error & Recovery Panel */
+.opds-error-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 24px 20px;
+  margin: 16px 0;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius, 8px);
+  text-align: center;
+  align-items: center;
+}
+.opds-error-icon {
+  font-size: 2rem;
+  line-height: 1;
+}
+.opds-error-title {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.opds-error-msg {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--muted);
+  max-width: 480px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.opds-error-advice {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  max-width: 440px;
+  line-height: 1.4;
+  opacity: 0.85;
+}
+.opds-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 8px;
 }
 
 /* Subsections Grid */

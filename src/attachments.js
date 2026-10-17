@@ -71,31 +71,60 @@ export function generateAttachmentFilename(base = 'image', format = 'webp') {
 }
 
 /**
+ * Resolves the destination source for attachments based on user preferences.
+ * Supports split storage: notes in one provider (e.g. GitHub), attachments in another (e.g. Dropbox or S3/R2).
+ */
+export function resolveAttachmentSource(noteSource = null) {
+  const prefs = store.getPrefs();
+  const destType = prefs.attachmentsDestination || 'note-provider';
+  const sources = store.getSources();
+
+  // 1. If designated as dropbox
+  if (destType === 'dropbox') {
+    const dbx = sources.find((s) => s.type === 'dropbox' && library.canWrite(s));
+    if (dbx) return dbx;
+  }
+
+  // 2. If designated as s3 or r2
+  if (destType === 's3') {
+    const s3Src = sources.find((s) => (s.type === 's3' || s.type === 'r2') && library.canWrite(s));
+    if (s3Src) return s3Src;
+  }
+
+  // 3. If designated as device
+  if (destType === 'device') {
+    return library.deviceSource(true);
+  }
+
+  // 4. 'note-provider': Use the active note's source if writable
+  if (noteSource) {
+    const src = typeof noteSource === 'string' ? store.getSource(noteSource) : noteSource;
+    if (src && library.canWrite(src)) return src;
+  }
+
+  // 5. Fallback hierarchy: noteSource -> s3 -> dropbox -> any writable -> device
+  return (
+    sources.find((s) => (s.type === 's3' || s.type === 'r2') && library.canWrite(s)) ||
+    sources.find((s) => s.type === 'dropbox' && library.canWrite(s)) ||
+    sources.find((s) => library.canWrite(s)) ||
+    library.deviceSource(true)
+  );
+}
+
+/**
  * Route attachment to the appropriate storage adapter
- * Prefers S3/Cloudflare R2 if configured for attachments, otherwise note's library source
+ * Prefers configured attachment destination (Dropbox, S3/R2, or note provider)
  */
 export async function saveAttachment(sourceOrId, relPath, blob) {
-  const sources = store.getSources();
-  let dest = null;
-
-  // 1. Check if an S3 or R2 source is connected (designated object attachment storage)
-  const s3Source = sources.find((s) => (s.type === 's3' || s.type === 'r2') && library.canWrite(s));
-  
-  if (sourceOrId) {
-    dest = typeof sourceOrId === 'string' ? store.getSource(sourceOrId) : sourceOrId;
-  }
-  if (!dest || !library.canWrite(dest)) {
-    dest = s3Source || sources.find((s) => library.canWrite(s)) || library.deviceSource(true);
-  }
-
+  const dest = resolveAttachmentSource(sourceOrId);
   const path = relPath.startsWith('/') ? relPath.slice(1) : relPath;
   const itemKey = store.keyOf(dest.id, path);
   let sha = `att:${Date.now()}`;
 
   try {
     if (dest.type === 'dropbox') {
-      const { upload } = await import('./sources/dropbox.js');
-      const res = await upload(dest, path, blob);
+      const { putAttachment } = await import('./sources/dropbox.js');
+      const res = await putAttachment(dest, path, blob);
       sha = res?.rev || sha;
     } else if (dest.type === 'webdav') {
       const { putBlob } = await import('./sources/webdav.js');

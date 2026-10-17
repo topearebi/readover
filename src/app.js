@@ -1285,6 +1285,7 @@ $('brand').onclick = () => {
 $('scope-btn').onclick = openScope;
 $('search-btn').onclick = searchNotesDialog;
 $('settings-btn').onclick = () => settings.open();
+app.openSettings = (tab) => settings.open(tab);
 $('write-btn').onclick = () => compose.open();
 // "Paste a quote": read the clipboard while the tap still counts as a tap (iPhone asks
 // first), then switch from the new-note sheet to the capture sheet.
@@ -1348,6 +1349,45 @@ async function boot() {
   // open the capture sheet once the feed is up.
   const incoming = clipFromLocation();
   if (incoming) history.replaceState(null, '', location.pathname);
+
+  // Check for Dropbox OAuth 2.0 PKCE return (?code=...)
+  if (typeof window !== 'undefined' && window.location?.search) {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    if (code && typeof sessionStorage !== 'undefined' && sessionStorage.getItem('readover_dropbox_verifier')) {
+      try {
+        toast('Connecting Dropbox account…');
+        const dropbox = await import('./sources/dropbox.js');
+        const redirectUri = `${window.location.origin}${window.location.pathname}`;
+        const { token, account_id } = await dropbox.exchangePKCECode(code, '', redirectUri);
+        if (token) {
+          const user = (await dropbox.whoami(token)) || '';
+          let dbxSrc = store.getSources().find((s) => s.type === 'dropbox');
+          if (!dbxSrc) {
+            dbxSrc = {
+              id: store.newId('dbx'),
+              type: 'dropbox',
+              token,
+              name: user ? `Dropbox (${user})` : 'Dropbox (/Apps/Readover)',
+              root: '',
+              accountId: account_id || '',
+            };
+          } else {
+            dbxSrc.token = token;
+            if (account_id) dbxSrc.accountId = account_id;
+            if (user) dbxSrc.name = `Dropbox (${user})`;
+          }
+          await store.saveSource(dbxSrc);
+          app.sourcesChanged?.();
+          toast(`Connected ${dbxSrc.name}! Syncing…`);
+        }
+      } catch (err) {
+        toast(`Dropbox connection failed: ${err.message}`);
+      } finally {
+        history.replaceState(null, '', location.pathname);
+      }
+    }
+  }
   await reload();
   if (incoming) openCapture(incoming, captureApp);
   dataSync.ensureDataHome();

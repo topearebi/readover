@@ -256,6 +256,21 @@ export async function readRelative(item, relPath) {
     } catch {}
   }
 
+  // 4. Check any configured Dropbox attachment vaults
+  const dbxSources = store.getSources().filter((s) => s.type === 'dropbox');
+  for (const dbxSrc of dbxSources) {
+    const dbxKey = keyOf(dbxSrc.id, path);
+    const dbxCached = await blobs.get(dbxKey);
+    if (dbxCached?.blob) return dbxCached.blob;
+    try {
+      const b = await dropbox.readBlob(dbxSrc, { path }, '');
+      if (b) {
+        blobs.put({ key: dbxKey, sourceId: dbxSrc.id, sha: `att:${Date.now()}`, blob: b }).catch(() => {});
+        return b;
+      }
+    } catch {}
+  }
+
   if (!src || src.type === 'device') throw new Error('Attachment not found locally.');
   const fake = { key: directKey, sourceId: item.sourceId, path, folder: '', sha: null };
   if (src.type === 'github') return github.readBlob(src, fake);
@@ -417,79 +432,208 @@ export function setFlag(item, flag, on) {
   return store.patchState(item, { [flag]: on ? Date.now() : 0 });
 }
 
-/* ---------------- Moving on-device notes into a repo ---------------- */
+/* ---------------- Moving notes between storage libraries ---------------- */
+
+/** All notes from a library (or folder) as a .zip of Markdown files. */
+export async function sourceNotesZip(sourceId, folder = '') {
+  const { makeZip } = await import('./lib/zip.js');
+  const allNotes = await items.byIndex('sourceId', sourceId);
+  const prefix = folder ? `${folder.replace(/^\/+|\/+$/g, '')}/` : '';
+  const filtered = allNotes.filter((n) => {
+    if (!/\.(md|markdown|txt)$/i.test(n.path)) return false;
+    if (folder) return n.path === folder || n.path.startsWith(prefix);
+    return true;
+  });
+  const files = [];
+  for (const n of filtered) {
+    const text = (await content.get(n.key))?.text ?? (await readText(n).catch(() => ''));
+    const relPath = folder && n.path.startsWith(prefix) ? n.path.slice(prefix.length) : n.path;
+    files.push({ path: relPath, text: text || '' });
+  }
+  return makeZip(files);
+}
+
+/** All on-device notes as a .zip of Markdown files (a backup for people without cloud storage). */
+export async function deviceNotesZip() {
+  const dev = deviceSource(false);
+  return sourceNotesZip(dev?.id || DEVICE_ID);
+}
 
 /**
- * Copy every note from the on-device notebook into a GitHub repo as ONE commit,
- * carry over favourites and history, then remove them from the device notebook.
- * Paths that already exist in the repo get " (from this device)" added.
+ * Move notes from one storage provider to another.
+ * Works across Device, GitHub, Dropbox, WebDAV, Local, S3/R2.
+ * @param {string} fromSourceId
+ * @param {string} toSourceId
+ * @param {object} [options]
+ * @param {string[]} [options.noteKeys] - Specific note keys to move (if omitted, moves all notes from fromSourceId)
+ * @param {string} [options.targetFolder] - Optional subfolder in destination
+ * @param {function} [options.onProgress]
  */
-export async function moveDeviceNotes(dest, folder = '', onProgress = () => {}) {
-  const dev = deviceSource();
-  if (!dev) return 0;
-  if (!github.canWrite(dest)) throw new Error(`Add a token that can write to ${dest.owner}/${dest.repo} first.`);
-  const notes = await items.byIndex('sourceId', dev.id);
-  if (!notes.length) return 0;
+export async function moveNotesBetweenSources(fromSourceId, toSourceId, { noteKeys = null, targetFolder = '', onProgress = () => {} } = {}) {
+  if (fromSourceId === toSourceId) {
+    throw new Error('Source and destination libraries must be different.');
+  }
+  const fromSrc = fromSourceId === DEVICE_ID ? deviceSource(false) || { id: DEVICE_ID, type: 'device', root: '', name: 'This device' } : store.getSource(fromSourceId);
+  const destSrc = toSourceId === DEVICE_ID ? deviceSource(true) : store.getSource(toSourceId);
 
-  // Inside the library's own folder, when it is one folder of a repo.
-  const prefix = [String(dest.root || '').replace(/^\/+|\/+$/g, ''), folder.replace(/^\/+|\/+$/g, '')].filter(Boolean).join('/');
-  const taken = new Set((await items.byIndex('sourceId', dest.id)).map((i) => i.path));
-  const plan = [];
-  for (const n of notes) {
-    let path = prefix ? `${prefix}/${n.path}` : n.path;
-    if (taken.has(path)) path = path.replace(/(\.[^.]+)$/, ' (from this device)$1');
-    taken.add(path);
-    plan.push({ from: n, path, text: (await content.get(n.key))?.text ?? '' });
+  if (!fromSrc) throw new Error('Source library not found.');
+  if (!destSrc) throw new Error('Destination library not found.');
+  if (!canWrite(destSrc)) throw new Error(`"${displayName(destSrc)}" is read-only.`);
+
+  let notesToMove = [];
+  if (noteKeys && Array.isArray(noteKeys) && noteKeys.length > 0) {
+    const keySet = new Set(noteKeys);
+    const candidateNotes = await items.byIndex('sourceId', fromSrc.id);
+    notesToMove = candidateNotes.filter((n) => keySet.has(n.key) && /\.(md|markdown|txt)$/i.test(n.path));
+  } else {
+    const candidateNotes = await items.byIndex('sourceId', fromSrc.id);
+    notesToMove = candidateNotes.filter((n) => /\.(md|markdown|txt)$/i.test(n.path));
   }
 
-  onProgress(`Saving ${plan.length} ${plan.length === 1 ? 'note' : 'notes'} to ${dest.owner}/${dest.repo}…`);
-  const message = `Readover: add ${plan.length} ${plan.length === 1 ? 'note' : 'notes'} from this device`;
-  const files = Object.fromEntries(plan.map((p) => [p.path, p.text]));
-  for (let attempt = 0; ; attempt++) {
-    let head = await github.headSha(dest);
-    try {
-      if (!head) {
-        // Empty repo: the first file makes the first commit, the rest go in one more.
-        const [first, ...rest] = plan;
-        await github.putFile(dest, first.path, first.text, null, message);
-        if (rest.length) await github.commitFiles(dest, await github.headSha(dest), Object.fromEntries(rest.map((p) => [p.path, p.text])), message);
-      } else {
-        await github.commitFiles(dest, head, files, message);
+  if (!notesToMove.length) return 0;
+
+  const destExisting = new Set((await items.byIndex('sourceId', destSrc.id)).map((i) => i.path));
+  const destRoot = String(destSrc.root || '').replace(/^\/+|\/+$/g, '');
+  const cleanTargetFolder = String(targetFolder || '').replace(/^\/+|\/+$/g, '');
+  const prefix = [destRoot, cleanTargetFolder].filter(Boolean).join('/');
+
+  // Prepare migration plan
+  const plan = [];
+  for (const n of notesToMove) {
+    let destPath = prefix ? `${prefix}/${n.path}` : n.path;
+    if (destRoot && destPath.startsWith(`${destRoot}/${destRoot}/`)) {
+      destPath = destPath.slice(destRoot.length + 1);
+    }
+    if (destExisting.has(destPath)) {
+      destPath = destPath.replace(/(\.[^.]+)$/, ` (from ${displayName(fromSrc)})$1`);
+    }
+    destExisting.add(destPath);
+    const noteText = (await content.get(n.key))?.text ?? (await readText(n).catch(() => ''));
+    plan.push({ from: n, destPath, text: noteText || '' });
+  }
+
+  onProgress(`Saving ${plan.length} ${plan.length === 1 ? 'note' : 'notes'} to ${displayName(destSrc)}…`);
+
+  // Write files to destination provider
+  if (destSrc.type === 'github') {
+    const message = `Readover: move ${plan.length} ${plan.length === 1 ? 'note' : 'notes'} from ${displayName(fromSrc)}`;
+    const files = Object.fromEntries(plan.map((p) => [p.destPath, p.text]));
+    for (let attempt = 0; ; attempt++) {
+      let head = await github.headSha(destSrc);
+      try {
+        if (!head) {
+          const [first, ...rest] = plan;
+          await github.putFile(destSrc, first.destPath, first.text, null, message);
+          if (rest.length) {
+            await github.commitFiles(destSrc, await github.headSha(destSrc), Object.fromEntries(rest.map((p) => [p.destPath, p.text])), message);
+          }
+        } else {
+          await github.commitFiles(destSrc, head, files, message);
+        }
+        break;
+      } catch (err) {
+        if (attempt < 2 && (err.status === 422 || err.status === 409)) continue;
+        throw err;
       }
-      break;
-    } catch (err) {
-      if (attempt < 2 && (err.status === 422 || err.status === 409)) continue; // branch moved; try again
-      throw err;
+    }
+  } else if (destSrc.type === 'dropbox') {
+    for (let i = 0; i < plan.length; i++) {
+      const p = plan[i];
+      onProgress(`Writing ${i + 1}/${plan.length}: ${p.destPath}…`);
+      p.sha = await dropbox.putFile(destSrc, p.destPath, p.text);
+    }
+  } else if (destSrc.type === 'webdav') {
+    for (let i = 0; i < plan.length; i++) {
+      const p = plan[i];
+      onProgress(`Writing ${i + 1}/${plan.length}: ${p.destPath}…`);
+      p.sha = await webdav.putFile(destSrc, p.destPath, p.text);
+    }
+  } else if (destSrc.type === 's3' || destSrc.type === 'r2') {
+    for (let i = 0; i < plan.length; i++) {
+      const p = plan[i];
+      onProgress(`Writing ${i + 1}/${plan.length}: ${p.destPath}…`);
+      p.sha = await s3.putFile(destSrc, p.destPath, p.text);
+    }
+  } else if (destSrc.type === 'local') {
+    for (let i = 0; i < plan.length; i++) {
+      const p = plan[i];
+      p.sha = await local.writeText(destSrc, p.destPath, p.text);
+    }
+  } else {
+    // destSrc.type === 'device'
+    for (const p of plan) {
+      p.sha = `dev:${Date.now()}`;
     }
   }
 
-  // Re-home everything locally under the repo.
+  // Calculate git sha if needed for local index
   const { gitBlobSha } = await import('./lib/gitsha.js');
+
+  // Re-home everything locally under destination library
   for (const p of plan) {
-    const sha = await gitBlobSha(p.text);
-    const item = { ...toItem(dest, { path: p.path, sha }), addedAt: p.from.addedAt, written: p.from.written };
-    // Moving isn't tending: keep when each note last changed on the device.
+    const sha = p.sha || (await gitBlobSha(p.text));
+    const newItem = {
+      ...toItem(destSrc, { path: p.destPath, sha }),
+      addedAt: p.from.addedAt,
+      written: p.from.written,
+    };
     const was = /^dev:(\d+)$/.exec(p.from.sha || '');
-    if (was) Object.assign(item, { changedAt: Number(was[1]), changedSha: sha });
-    await items.put(item);
-    await content.put({ key: item.key, sourceId: dest.id, sha, text: p.text });
+    if (was) Object.assign(newItem, { changedAt: Number(was[1]), changedSha: sha });
+    await items.put(newItem);
+    await content.put({ key: newItem.key, sourceId: destSrc.id, sha, text: p.text });
+
     const st = await state.get(p.from.key);
     if (st) {
-      await state.put({ ...st, key: item.key, sourceId: dest.id, path: p.path, flagsAt: st.flagsAt || (st.starred || st.hidden ? Date.now() : undefined) });
+      await state.put({
+        ...st,
+        key: newItem.key,
+        sourceId: destSrc.id,
+        path: p.destPath,
+        flagsAt: st.flagsAt || (st.starred || st.hidden ? Date.now() : undefined),
+      });
     }
   }
-  await store.removeSource(dev.id, { fromSync: true });
+
+  // Delete from source provider
+  onProgress('Cleaning up source library…');
+  for (const p of plan) {
+    try {
+      if (fromSrc.type === 'github') {
+        if (canWrite(fromSrc)) await outbox.queueDelete(fromSrc, p.from.path);
+      } else if (fromSrc.type === 'dropbox') {
+        if (canWrite(fromSrc)) await dropbox.deleteFile(fromSrc, p.from.path);
+      } else if (fromSrc.type === 'webdav') {
+        if (canWrite(fromSrc)) await webdav.deleteFile(fromSrc, p.from.path);
+      } else if (fromSrc.type === 's3' || fromSrc.type === 'r2') {
+        if (canWrite(fromSrc)) await s3.deleteFile(fromSrc, p.from.path);
+      } else if (fromSrc.type === 'local') {
+        if (canWrite(fromSrc)) await local.removeFile(fromSrc, p.from.path);
+      }
+    } catch (err) {
+      console.warn(`Failed to delete source note ${p.from.path}:`, err);
+    }
+    await forget(p.from.key);
+  }
+
+  // If moving all notes from device, check if device notebook is empty and can be removed
+  if (fromSrc.type === 'device') {
+    const remaining = await items.byIndex('sourceId', fromSrc.id);
+    if (!remaining.length) {
+      await store.removeSource(fromSrc.id, { fromSync: true });
+    }
+  }
+
   store.markDirty('important');
+  notesChanged();
+  window.dispatchEvent(new CustomEvent('readover:sources-changed'));
+
   return plan.length;
 }
 
-/** All on-device notes as a .zip of Markdown files (a backup for people without GitHub). */
-export async function deviceNotesZip() {
-  const dev = deviceSource();
-  const { makeZip } = await import('./lib/zip.js');
-  const files = [];
-  for (const n of dev ? await items.byIndex('sourceId', dev.id) : []) files.push({ path: n.path, text: (await content.get(n.key))?.text ?? '' });
-  return makeZip(files);
+export async function moveDeviceNotes(dest, folder = '', onProgress = () => {}) {
+  const dev = deviceSource(false);
+  if (!dev) return 0;
+  return moveNotesBetweenSources(dev.id, dest.id, { targetFolder: folder, onProgress });
 }
 
 /* ---------------- Deleting, renaming, moving ---------------- */
@@ -558,6 +702,9 @@ export async function deleteNote(item) {
   const src = store.getSource(item.sourceId);
   if (!canWrite(src)) throw new Error(`"${displayName(src)}" is read-only.`);
   if (src.type === 'github') await outbox.queueDelete(src, item.path);
+  else if (src.type === 'dropbox') await dropbox.deleteFile(src, item.path);
+  else if (src.type === 'webdav') await webdav.deleteFile(src, item.path);
+  else if (src.type === 's3' || src.type === 'r2') await s3.deleteFile(src, item.path);
   else if (src.type === 'local') await local.removeFile(src, item.path);
   await forget(item.key);
   notesChanged();

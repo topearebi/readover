@@ -13,7 +13,7 @@ export const PRESET_CATALOGS = [
   {
     id: 'opds-standard-ebooks',
     name: 'Standard Ebooks (Donor Login)',
-    url: 'https://standardebooks.org/opds',
+    url: 'https://standardebooks.org/opds/',
     description: 'Carefully formatted public domain ebooks in EPUB format (requires donor credentials).',
     useProxy: false,
   },
@@ -26,11 +26,35 @@ export const PRESET_CATALOGS = [
   },
 ];
 
+/** Normalize OPDS URLs (e.g. Standard Ebooks trailing slash to prevent 301 CORS drops) */
+export function normalizeOpdsUrl(url) {
+  if (!url) return '';
+  let normalized = String(url).trim();
+  if (/^https?:\/\/standardebooks\.org\/opds\/?$/i.test(normalized)) {
+    return 'https://standardebooks.org/opds/';
+  }
+  return normalized;
+}
+
+/** Helper to retrieve user CORS proxy setting without triggering indexedDB initialization in tests */
+function getUserCorsProxy(catalog = null) {
+  if (catalog?.corsProxy) return catalog.corsProxy;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem('readover.prefs');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return parsed.corsProxy || parsed.corsProxyUrl || '';
+      }
+    }
+  } catch {}
+  return '';
+}
 
 /** Build request headers including optional Basic Auth */
-export function buildHeaders(catalog, extra = {}) {
+export function buildHeaders(catalog = {}, extra = {}) {
   const headers = { ...extra };
-  if (catalog.username && catalog.password) {
+  if (catalog?.username && catalog?.password) {
     const creds = btoa(`${catalog.username}:${catalog.password}`);
     headers['Authorization'] = `Basic ${creds}`;
   }
@@ -47,49 +71,138 @@ export function resolveUrl(href, baseUrl) {
   }
 }
 
-/** Get a proxy URL for an asset or request */
+function timeoutSignal(ms) {
+  if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(ms);
+  }
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), ms);
+  return controller.signal;
+}
+
+let localProxyAvailable = null;
+
+/** Get a proxy URL for an asset, cover image, or request */
 export function proxyUrl(targetUrl, catalog = null) {
   if (!targetUrl) return '';
-  const origin = typeof location !== 'undefined' ? location.origin : 'http://localhost:3000';
-  return `${origin}/api/opds-proxy?url=${encodeURIComponent(targetUrl)}`;
-}
-
-/**
- * Fetch with automatic fallback to /api/opds-proxy if direct fetch fails due to CORS.
- */
-export async function opdsFetch(url, catalog, options = {}) {
-  const headers = buildHeaders(catalog, options.headers || {});
-  const fetchOpts = { ...options, headers };
+  const cleanUrl = normalizeOpdsUrl(targetUrl);
   const isLocal = typeof location !== 'undefined' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
 
-  // If catalog is explicitly configured to use proxy, use proxy immediately
-  if (catalog?.useProxy) {
-    if (!isLocal) {
-      try {
-        return await fetch(url, fetchOpts);
-      } catch {
-        throw new Error('CORS blocked. Remote OPDS servers require CORS headers on hosted deployments.');
-      }
+  // Tier 2: User-configured CORS proxy from Settings or Catalog
+  const customProxy = getUserCorsProxy(catalog);
+  if (customProxy) {
+    if (customProxy.includes('%s')) {
+      return customProxy.replace('%s', encodeURIComponent(cleanUrl));
     }
-    const pUrl = proxyUrl(url);
-    return fetch(pUrl, fetchOpts);
+    return `${customProxy}${encodeURIComponent(cleanUrl)}`;
   }
 
-  try {
-    const res = await fetch(url, fetchOpts);
-    if (!res.ok && res.status === 0) {
-      throw new Error('CORS blocked');
-    }
-    return res;
-  } catch (err) {
-    if (!isLocal) {
-      throw new Error(`Direct connection to catalog failed (${err.message}). On hosted static deployments, OPDS servers must allow CORS.`);
-    }
-    // Fallback to proxy on localhost
-    const pUrl = proxyUrl(url);
-    return fetch(pUrl, fetchOpts);
+  // Tier 3: Local Dev Proxy (/api/opds-proxy) ONLY when actively confirmed available
+  if (isLocal && localProxyAvailable === true) {
+    const origin = typeof location !== 'undefined' ? location.origin : 'http://localhost:3000';
+    return `${origin}/api/opds-proxy?url=${encodeURIComponent(cleanUrl)}`;
   }
+
+  // By default, return direct cleanUrl for <img> tags. Browsers display cross-origin
+  // images natively without CORS errors. Avoid dead/paid third-party proxies.
+  return cleanUrl;
 }
+
+export const proxiedUrl = proxyUrl;
+
+/**
+ * Multi-tiered OPDS fetcher:
+ * Tier 1: Direct fetch (Fastest, zero-latency. Works for CORS-enabled self-hosted Calibre/Kavita/Caddy).
+ * Tier 2: User-configured CORS proxy from Settings (store.getPrefs().corsProxyUrl).
+ * Tier 3: Local Dev Proxy (/api/opds-proxy) when running on localhost and active.
+ * Tier 4: Reliable public CORS gateway fallback for unauthenticated public domain catalogs (CodeTabs / AllOrigins).
+ *         Credentials are NEVER sent to public gateways.
+ */
+export async function opdsFetch(url, catalog = null, options = {}) {
+  const targetUrl = normalizeOpdsUrl(url);
+  const headers = buildHeaders(catalog || {}, options.headers || {});
+  const fetchOpts = { ...options, headers };
+  const hasCredentials = Boolean((catalog?.username && catalog?.password) || headers['Authorization']);
+  const isLocal = typeof location !== 'undefined' && (location.hostname === 'localhost' || location.hostname === '127.0.0.1');
+  const tierErrors = [];
+
+  // Tier 1: Direct fetch first (unless catalog explicitly forces proxy)
+  if (!catalog?.useProxy) {
+    try {
+      const res = await fetch(targetUrl, fetchOpts);
+      if (res.ok) return res;
+      // If server returned 401 Unauthorized, upstream requires credentials - do not mask
+      if (res.status === 401) return res;
+      tierErrors.push(`Direct fetch returned HTTP ${res.status}`);
+    } catch (err) {
+      tierErrors.push(`Direct fetch failed: ${err.message}`);
+    }
+  }
+
+  // Tier 2: User-configured CORS proxy from catalog or Settings
+  const customProxy = getUserCorsProxy(catalog);
+  if (customProxy) {
+    try {
+      const pUrl = customProxy.includes('%s')
+        ? customProxy.replace('%s', encodeURIComponent(targetUrl))
+        : `${customProxy}${encodeURIComponent(targetUrl)}`;
+      const res = await fetch(pUrl, fetchOpts);
+      if (res.ok) return res;
+      if (res.status === 401) return res;
+      tierErrors.push(`Custom proxy (${customProxy}) returned HTTP ${res.status}`);
+    } catch (err) {
+      tierErrors.push(`Custom proxy failed: ${err.message}`);
+    }
+  }
+
+  // Tier 3: Local Dev Proxy (/api/opds-proxy) if on localhost and actively running
+  if (isLocal && localProxyAvailable !== false) {
+    try {
+      const origin = typeof location !== 'undefined' ? location.origin : 'http://localhost:3000';
+      const localUrl = `${origin}/api/opds-proxy?url=${encodeURIComponent(targetUrl)}`;
+      const res = await fetch(localUrl, { ...fetchOpts, signal: timeoutSignal(3000) });
+      if (res.ok) {
+        localProxyAvailable = true;
+        return res;
+      }
+      localProxyAvailable = false;
+      tierErrors.push(`Local proxy (/api/opds-proxy) returned HTTP ${res.status}`);
+    } catch (err) {
+      localProxyAvailable = false;
+      tierErrors.push(`Local proxy unreachable: ${err.message}`);
+    }
+  }
+
+  // Tier 4: Public CORS gateway fallback for unauthenticated public catalogs only
+  if (hasCredentials) {
+    tierErrors.push('Credentials present: Public third-party gateways omitted to protect credentials');
+  } else {
+    // Primary Public Gateway: CodeTabs
+    try {
+      const gatewayUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(targetUrl)}`;
+      const res = await fetch(gatewayUrl, { ...fetchOpts, signal: timeoutSignal(8000) });
+      if (res.ok) return res;
+      tierErrors.push(`Public gateway (codetabs) returned HTTP ${res.status}`);
+    } catch (err) {
+      tierErrors.push(`Public gateway (codetabs) failed: ${err.message}`);
+    }
+
+    // Secondary Public Gateway: AllOrigins (with timeout protection against 522 hang)
+    try {
+      const altGatewayUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+      const res = await fetch(altGatewayUrl, { ...fetchOpts, signal: timeoutSignal(6000) });
+      if (res.ok) return res;
+      tierErrors.push(`Secondary gateway (allorigins.win) returned HTTP ${res.status}`);
+    } catch (err) {
+      tierErrors.push(`Secondary gateway (allorigins.win) failed: ${err.message}`);
+    }
+  }
+
+  const detail = tierErrors.length ? ` (${tierErrors.join('; ')})` : '';
+  throw new Error(`Unable to fetch OPDS feed from "${targetUrl}". Direct connection and CORS proxies failed.${detail}`);
+}
+
+export const fetchWithFallback = opdsFetch;
 
 
 /** Fetch and parse an OPDS feed (Atom XML or JSON-LD) */
@@ -108,6 +221,11 @@ export async function loadCatalogFeed(catalog, feedUrl = null) {
       const json = JSON.parse(text);
       return parseOpds2Json(json, url);
     } catch {}
+  }
+
+  // Detect HTML error pages returned instead of OPDS XML feed
+  if (!text.includes('<feed') && !text.includes('application/atom+xml') && (text.includes('<!DOCTYPE html') || text.includes('<html'))) {
+    throw new Error('Received an HTML webpage instead of an OPDS XML/JSON feed. Please verify the catalog feed URL.');
   }
 
   return parseOpds1Atom(text, url);
@@ -362,3 +480,10 @@ export function makeSafeFilename(author, title, ext = 'epub') {
 // Backward and test compatibility aliases
 export const parseAtomXml = parseOpds1Atom;
 export const parseOpdsXml = parseOpds1Atom;
+
+// Catalog addition linkage
+export async function showAddCatalogSheet(onAdded) {
+  const { openAddCatalogModal } = await import('../ui/opds.js');
+  return openAddCatalogModal(onAdded);
+}
+export const openAddCatalogModal = showAddCatalogSheet;
