@@ -155,18 +155,41 @@ export async function openNote(item, opts = {}) {
   let starred = Boolean(opts.starred);
   const writable = canWrite(src);
   const star = el('button', { class: 'icon-btn star-btn', 'aria-pressed': String(starred), title: 'Favourite' }, icon('star'));
-  const editBtn = writable && !note.imported ? el('button', { class: 'btn' }, 'Edit') : null;
   const discardBtn = el('button', { class: 'btn btn-quiet discard-btn', hidden: true, title: 'Discard changes' }, 'Discard');
   const linkBtn = el('button', { class: 'btn btn-quiet', hidden: true, title: 'Insert a link to another note' }, '[[ ]]');
+  const saveBtn = el('button', { class: 'btn btn-primary save-btn', hidden: true, title: 'Save changes' }, 'Save');
   const moreBtn = el('button', { class: 'icon-btn', 'aria-label': 'More', title: 'More' }, '⋯');
   const back = el('button', { class: 'icon-btn', 'aria-label': 'Back' }, icon('back'));
-  const homeBtn = el('button', { class: 'icon-btn home-btn', 'aria-label': 'Home (back to feed)', title: 'Home (back to feed)' }, icon('home'));
-  homeBtn.onclick = () => closeAll();
   const status = el('span', { class: 'status' });
   const titleEl = el('span', { class: 'title' }, note.title);
-  const bar = el('div', { class: 'reader-bar' }, back, homeBtn, titleEl, status, star, linkBtn, discardBtn, editBtn, moreBtn);
+  const bar = el('div', { class: 'reader-bar' }, back, titleEl, status, star, linkBtn, discardBtn, saveBtn, moreBtn);
+
+  const dockWater = el('button', { type: 'button', class: 'reader-dock-btn', id: 'reader-dock-water', 'aria-label': 'Water: add a thought' },
+    icon('drop', 'i i-sm'),
+    el('span', {}, 'Water')
+  );
+  const dockGraft = el('button', { type: 'button', class: 'reader-dock-btn', id: 'reader-dock-graft', 'aria-label': 'Graft: link to another note', title: 'Graft: link to another note' },
+    icon('graft', 'i i-sm'),
+    el('span', {}, 'Graft')
+  );
+  const dockEdit = el('button', { type: 'button', class: 'reader-dock-btn reader-dock-btn-primary', id: 'reader-dock-edit', 'aria-label': 'Edit note' },
+    icon('pen', 'i i-sm'),
+    el('span', {}, 'Edit')
+  );
+
+  const readerDock = el('nav', { class: 'reader-dock', 'aria-label': 'Note actions' },
+    dockWater,
+    el('span', { class: 'reader-dock-divider', 'aria-hidden': 'true' }),
+    dockGraft,
+    el('span', { class: 'reader-dock-divider', 'aria-hidden': 'true' }),
+    dockEdit
+  );
+  if (!writable || note.imported) {
+    readerDock.hidden = true;
+  }
+
   const scroll = el('div', { class: 'reader-scroll', tabindex: '-1' });
-  const root = el('div', { class: 'reader', role: 'dialog', 'aria-modal': 'true', 'aria-label': note.title }, bar, scroll);
+  const root = el('div', { class: 'reader', role: 'dialog', 'aria-modal': 'true', 'aria-label': note.title }, bar, scroll, readerDock);
 
   const githubUrl = () =>
     src?.type === 'github'
@@ -288,7 +311,7 @@ export async function openNote(item, opts = {}) {
 
         let linkBackBtn = null;
         if (writable) {
-          linkBackBtn = el('button', { type: 'button', class: 'btn btn-quiet link-back-btn', title: 'Add link under ## Related' }, '+ Link back');
+          linkBackBtn = el('button', { type: 'button', class: 'btn btn-quiet link-back-btn', title: 'Add graft under ## Related' }, '+ Graft back');
           linkBackBtn.onclick = async (e) => {
             e.stopPropagation();
             linkBackBtn.disabled = true;
@@ -299,7 +322,7 @@ export async function openNote(item, opts = {}) {
                 text = newText;
                 note = parseNote(text, item.path);
                 prose = renderArticle();
-                toast(`Linked back to ${b.title}`);
+                toast(`Grafted back to ${b.title}`);
               }
             } catch (err) {
               toast(err.message);
@@ -429,10 +452,12 @@ export async function openNote(item, opts = {}) {
 
   const stopEditing = () => {
     editing = false;
-    editBtn.textContent = 'Edit';
-    editBtn.classList.remove('btn-primary');
+    saveBtn.hidden = true;
     linkBtn.hidden = true;
     discardBtn.hidden = true;
+    if (writable && !note.imported) {
+      readerDock.hidden = false;
+    }
   };
 
   discardBtn.onclick = () => {
@@ -441,54 +466,58 @@ export async function openNote(item, opts = {}) {
     toast('Changes discarded');
   };
 
-  if (editBtn) {
-    editBtn.onclick = async () => {
-      if (opts.editNote) {
-        return opts.editNote(item, {
-          onSaved: async (savedItem, updatedText) => {
-            Object.assign(item, savedItem);
-            text = updatedText;
-            note = parseNote(text, item.path);
-            titleEl.textContent = note.title;
-            root.setAttribute('aria-label', note.title);
-            prose = renderArticle();
-            try {
-              const conn = await connections(item);
-              showConnections(conn);
-            } catch {}
-            opts.onSaved?.(item, text);
-          },
-        });
-      }
-      if (!editing) {
-        editing = true;
-        textarea = el('textarea', { spellcheck: 'true', 'aria-label': 'Note source' });
-        textarea.value = text;
-        setupImageAttachments(textarea, { getSource: () => src, folder: item.folder });
-        scroll.replaceChildren(el('div', { class: 'editor' }, textarea));
+  async function startEdit() {
+    if (opts.editNote) {
+      return opts.editNote(item, {
+        onSaved: async (savedItem, updatedText) => {
+          Object.assign(item, savedItem);
+          text = updatedText;
+          note = parseNote(text, item.path);
+          titleEl.textContent = note.title;
+          root.setAttribute('aria-label', note.title);
+          prose = renderArticle();
+          try {
+            const conn = await connections(item);
+            showConnections(conn);
+          } catch {}
+          opts.onSaved?.(item, text);
+        },
+      });
+    }
+    if (!editing) {
+      editing = true;
+      readerDock.hidden = true;
+      textarea = el('textarea', { spellcheck: 'true', 'aria-label': 'Note source' });
+      textarea.value = text;
+      setupImageAttachments(textarea, { getSource: () => src, folder: item.folder });
+      scroll.replaceChildren(el('div', { class: 'editor' }, textarea));
 
-        textarea.addEventListener('input', () => fitEditor(textarea, scroll));
-        fitEditor(textarea, scroll);
-        editBtn.textContent = 'Save';
-        editBtn.classList.add('btn-primary');
-        linkBtn.hidden = false;
-        discardBtn.hidden = false;
-        // Start at the top of the note, not with the cursor (and view) at the end.
-        textarea.setSelectionRange(0, 0);
-        textarea.focus({ preventScroll: true });
-        scroll.scrollTop = 0;
-        return;
-      }
-      editBtn.disabled = true;
-      if (textarea.value !== text) {
-        if (await save(textarea.value)) stopEditing();
-      } else {
-        stopEditing();
-        prose = renderArticle();
-      }
-      editBtn.disabled = false;
-    };
+      textarea.addEventListener('input', () => fitEditor(textarea, scroll));
+      fitEditor(textarea, scroll);
+      saveBtn.hidden = false;
+      linkBtn.hidden = false;
+      discardBtn.hidden = false;
+      // Start at the top of the note, not with the cursor (and view) at the end.
+      textarea.setSelectionRange(0, 0);
+      textarea.focus({ preventScroll: true });
+      scroll.scrollTop = 0;
+    }
   }
+
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    if (textarea.value !== text) {
+      if (await save(textarea.value)) stopEditing();
+    } else {
+      stopEditing();
+      prose = renderArticle();
+    }
+    saveBtn.disabled = false;
+  };
+
+  dockWater.onclick = () => addThought();
+  dockGraft.onclick = () => linkTo();
+  dockEdit.onclick = () => startEdit();
 
   // While editing: insert a [[link]] at the cursor.
   linkBtn.onclick = async () => {
@@ -502,29 +531,46 @@ export async function openNote(item, opts = {}) {
   };
 
   moreBtn.onclick = async () => {
-    const actions = [];
-    if (writable && !editing && !note.imported) {
-      actions.push({ id: 'thought', label: 'Water: add a thought', icon: 'pen' });
-      actions.push({ id: 'link', label: 'Graft: link to another note', icon: 'open' });
+    const group1 = [];
+    if (writable && !editing) {
+      group1.push({ id: 'graft', label: 'Graft: link to another note', icon: 'graft' });
+      group1.push({ id: 'move', label: 'Rename or move', icon: 'feed' });
+      const archived = isArchived(item.path);
+      if (opts.replant && archived) group1.push({ id: 'replant', label: 'Replant note', icon: 'feed' });
+      else if (opts.prune && !archived) group1.push({ id: 'prune', label: 'Prune: move to Archive', icon: 'hide' });
     }
-    const archived = isArchived(item.path);
-    if (writable && !editing && opts.prune && !archived) actions.push({ id: 'prune', label: 'Prune: move to Archive', icon: 'hide' });
-    if (writable && !editing && opts.replant && archived) actions.push({ id: 'replant', label: 'Replant', icon: 'feed' });
-    if (writable && !editing) actions.push({ id: 'move', label: 'Rename or move', icon: 'feed' });
-    if (githubUrl()) actions.push({ id: 'github', label: 'View on GitHub', icon: 'share' });
+    if (githubUrl()) group1.push({ id: 'github', label: 'View on GitHub', icon: 'open' });
+
+    const group2 = [];
     if (!editing) {
-      actions.push({ id: 'share', label: 'Share via OS', icon: 'share' });
-      actions.push({ id: 'copy-publish', label: 'Copy for Publishing', icon: 'pen' });
-      actions.push({ id: 'print', label: 'Print / Save PDF', icon: 'open' });
+      group2.push({ id: 'share', label: 'Share via OS', icon: 'share' });
+      group2.push({ id: 'copy-publish', label: 'Copy for Publishing', icon: 'clipboard' });
+      group2.push({ id: 'print', label: 'Print / Save as PDF', icon: 'printer' });
     }
-    if (writable && !editing) actions.push({ id: 'delete', label: 'Delete', icon: 'close', danger: true });
+
+    const group3 = [];
+    if (writable && !editing) {
+      group3.push({ id: 'delete', label: 'Delete note', icon: 'close', danger: true });
+    }
+
+    const actions = [];
+    if (group1.length) actions.push(...group1);
+    if (group2.length) {
+      if (actions.length) actions.push({ type: 'divider' });
+      actions.push(...group2);
+    }
+    if (group3.length) {
+      if (actions.length) actions.push({ type: 'divider' });
+      actions.push(...group3);
+    }
+
     if (!actions.length) {
       toast(`“${displayName(src)}” is read-only`);
       return;
     }
     const choice = await menu(note.title, actions);
     if (choice === 'thought') addThought();
-    if (choice === 'link') linkTo();
+    if (choice === 'graft' || choice === 'link') linkTo();
     if (choice === 'move') renameOrMove();
     if (choice === 'prune') prune();
     if (choice === 'replant') replant();
@@ -680,21 +726,21 @@ ${prose.innerHTML}
   }
 
   async function linkTo() {
-    const picked = await pickNote(`Link “${note.title}” to…`, item);
+    const picked = await pickNote(`Graft “${note.title}” to…`, item);
     if (!picked) return;
     const myLink = await linkFor(picked);
     const theirLink = await linkFor(item);
-    await save(addToSection(text, 'Related', `- ${myLink}`), 'Linked', `Readover: link ${item.path} to ${picked.path}`);
+    await save(addToSection(text, 'Related', `- ${myLink}`), 'Grafted', `Readover: graft ${item.path} to ${picked.path}`);
 
     try {
       const pickedSrc = getSource(picked.sourceId);
       if (canWrite(pickedSrc)) {
         const pickedText = await readText(picked);
         const newPickedText = addToSection(pickedText, 'Related', `- ${theirLink}`);
-        await writeNote(pickedSrc, picked.path, newPickedText, { message: `Readover: reciprocal link from ${item.path}` });
+        await writeNote(pickedSrc, picked.path, newPickedText, { message: `Readover: reciprocal graft from ${item.path}` });
       }
     } catch (err) {
-      console.warn('Could not write reciprocal link', err);
+      console.warn('Could not write reciprocal graft', err);
     }
   }
 
@@ -827,8 +873,8 @@ ${prose.innerHTML}
     }
   }
 
-  if (opts.startInEditor && editBtn) {
-    editBtn.click();
+  if (opts.startInEditor && writable && !note.imported) {
+    startEdit();
   }
   if (opts.startMove) {
     setTimeout(() => renameOrMove(), 50);
@@ -861,7 +907,7 @@ export async function pickNote(title, from) {
   const row = (item, title, sub, snippet) => {
     const isLinked = linked.has(item.key);
     const main = el('button', { type: 'button', class: 'pick-item', 'aria-expanded': 'false' }, el('b', {}, title), snippet ? el('span', { class: 'pick-snippet' }, snippet) : null, el('small', {}, sub));
-    const link = el('button', { type: 'button', class: `btn ${isLinked ? 'btn-quiet' : ''} pick-link`, disabled: isLinked }, isLinked ? 'Linked' : 'Link');
+    const link = el('button', { type: 'button', class: `btn ${isLinked ? 'btn-quiet' : ''} pick-link`, disabled: isLinked }, isLinked ? 'Grafted' : 'Graft');
     const preview = el('div', { class: 'pick-preview', hidden: true });
     const wrap = el('div', { class: 'pick-row' }, el('div', { class: 'pick-line' }, main, link), preview);
     link.onclick = () => {

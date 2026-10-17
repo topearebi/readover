@@ -25,13 +25,56 @@ export async function menu(title, actions) {
   let chosen = '';
   const list = el(
     'div',
-    { class: 'menu-list' },
+    { class: 'menu-list', role: 'menu' },
     ...actions.map((a) => {
-      const b = el('button', { type: 'submit', value: a.id, class: `menu-item${a.danger ? ' danger' : ''}` }, a.icon ? icon(a.icon) : null, el('span', {}, a.label));
+      if (a.type === 'divider') {
+        return el('hr', { class: 'menu-divider', 'aria-hidden': 'true' });
+      }
+      const b = el(
+        'button',
+        { type: 'submit', value: a.id, class: `menu-item sheet-action${a.danger ? ' danger' : ''}`, role: 'menuitem' },
+        a.icon ? icon(a.icon) : null,
+        el('span', {}, a.label)
+      );
       b.addEventListener('click', () => (chosen = a.id));
       return b;
     })
   );
-  const { value } = await sheet({ title, fields: [list] });
+
+  const handleKeydown = (e) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+    const items = [...list.querySelectorAll('button.sheet-action:not([disabled])')];
+    if (!items.length) return;
+    const currentIndex = items.indexOf(document.activeElement);
+    let nextIndex = 0;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length;
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      nextIndex = currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length;
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      nextIndex = 0;
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      nextIndex = items.length - 1;
+    }
+    items[nextIndex]?.focus();
+  };
+
+  list.addEventListener('keydown', handleKeydown);
+
+  const { value } = await sheet({
+    title,
+    fields: [list],
+    onOpen: (form) => {
+      form.addEventListener('keydown', handleKeydown);
+      const firstAction = list.querySelector('button.sheet-action:not([disabled])');
+      if (firstAction) {
+        setTimeout(() => firstAction.focus(), 30);
+      }
+    },
+  });
   return value || chosen;
 }

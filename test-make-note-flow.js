@@ -232,3 +232,4 @@ assert.ok(css.includes('position: sticky;'), 'compose-submit-bar must be sticky'
 console.log('✅ CSS touch targets, sticky bottom save bar, and responsive cultivate button verified.');
 
 console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY! 100% compliant.\n');
+process.exit(0);

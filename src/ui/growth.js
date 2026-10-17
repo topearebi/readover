@@ -87,7 +87,7 @@ export async function openGrowthSheet(title, g, on) {
     'div',
     { class: 'grow-stats' },
     el('div', {}, el('b', {}, String(g.thoughts ?? 0)), g.thoughts === 1 ? 'thought' : 'thoughts'),
-    el('div', {}, el('b', {}, String(g.connections ?? 0)), g.connections === 1 ? 'link' : 'links'),
+    el('div', {}, el('b', {}, String(g.connections ?? 0)), g.connections === 1 ? 'graft' : 'grafts'),
     el('div', {}, el('b', {}, since == null ? '–' : ageShort(since)), g.resting ? 'since read' : 'since tended')
   );
   const health = g.stage === 'pruned' ? 'Pruned: kept in Archive, out of the feed.' : g.resting ? 'Done: it rests, so it doesn’t wilt.' : g.health ? `${cap(g.health)}.` : 'Checking when it last changed…';
@@ -105,18 +105,30 @@ export async function openGrowthSheet(title, g, on) {
     const url = el('input', { type: 'url', name: 'canonical', value: g.canonical || '', placeholder: 'https://… where it was published', autocapitalize: 'off', spellcheck: 'false' });
     url.onchange = () => on.canonical?.(url.value.trim());
     const openLink = g.canonical ? el('a', { href: g.canonical, target: '_blank', rel: 'noopener', class: 'linklike' }, 'Open published version') : null;
-    fields.push(el('div', { class: 'field-pair' }, el('label', { class: 'field' }, 'Status', sel), el('label', { class: 'field' }, 'Published at', url)));
+    fields.push(el('div', { class: 'field-pair grow-field-pair' }, el('label', { class: 'field' }, 'Status', sel), el('label', { class: 'field' }, 'Published at', url)));
     if (openLink) fields.push(el('p', { class: 'grow-link' }, openLink));
   }
   const acts = el('div', { class: 'grow-acts' });
   if (g.stage === 'pruned') {
     if (on.replant) acts.append(act('sprout', 'Replant', 'back where it was', on.replant));
   } else {
-    if (on.water) acts.append(act('drop', 'Water', 'add a thought', on.water, 'water'));
-    if (on.graft) acts.append(act('graft', 'Graft', 'link to a note', on.graft));
     if (on.prune) acts.append(act('pruned', 'Prune', 'move to Archive', on.prune, 'prune'));
   }
-  fields.push(acts);
+  if (acts.children.length) fields.push(acts);
+  const dropGlyph = glyph('drop');
+  dropGlyph.style.width = '14px';
+  dropGlyph.style.height = '14px';
+  dropGlyph.style.verticalAlign = '-2px';
+  dropGlyph.style.color = 'var(--healthy)';
+  fields.push(
+    el(
+      'p',
+      { class: 'hint grow-toolbar-tip', style: 'margin-top: 14px; font-size: 0.8125rem; color: var(--faint); line-height: 1.4;' },
+      'Tip: Water notes using the droplet (',
+      dropGlyph,
+      ') on the card rail, or graft notes via note actions (⋯).'
+    )
+  );
   await sheet({ title, fields });
   if (chosen) await chosen();
 }

@@ -79,6 +79,10 @@
       <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" fill="none" stroke-width="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/><polyline points="21 15 16 10 5 21" stroke="currentColor" fill="none" stroke-width="2"/></symbol>
       <symbol id="i-opds" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" stroke="currentColor" fill="none" stroke-width="2"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" stroke="currentColor" fill="none" stroke-width="2"/><circle cx="12" cy="10" r="3" stroke="currentColor" fill="none" stroke-width="2"/><path d="M12 3v3M12 14v4" stroke="currentColor" stroke-width="2"/></symbol>
       <symbol id="i-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/></symbol>
+      <symbol id="i-drop" viewBox="0 0 24 24"><path d="M12 3C12 3 6 9.5 6 14a6 6 0 0 0 12 0c0-4.5-6-11-6-11z" fill="currentColor"/></symbol>
+      <symbol id="i-clipboard" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></symbol>
+      <symbol id="i-printer" viewBox="0 0 24 24"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></symbol>
+      <symbol id="i-graft" viewBox="0 0 24 24"><path d="M10 14l4-4M10.5 6.5l1.5-1.5a3.5 3.5 0 0 1 5 5l-1.5 1.5M13.5 17.5l-1.5 1.5a3.5 3.5 0 0 1-5-5l1.5-1.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
     </defs>
 
   </svg>
@@ -86,8 +90,8 @@
   <header class="topbar" role="banner">
     <button id="brand" class="brand" title="Shuffle again (R)" aria-label="Readover, shuffle feed (R)">Readover</button>
     <div class="topbar-actions">
-      <button id="sync-dot" class="sync-dot" hidden data-state="idle" aria-label="Sync status"><span></span></button>
-      <button id="scope-btn" class="scope-chip" aria-haspopup="dialog" aria-label="Filter reading feed">
+      <button id="sync-dot" class="sync-dot" hidden data-state="idle" aria-label="Sync status" title="Sync status"><span></span></button>
+      <button id="scope-btn" class="scope-chip scope-btn" aria-haspopup="dialog" aria-label="Filter reading feed">
         <span id="scope-label">Everything</span>
         <svg class="i i-sm" aria-hidden="true"><use href="#i-down"/></svg>
       </button>
@@ -703,51 +707,69 @@
   </dialog>
 
   <!-- New note -->
-  <dialog id="compose-sheet" class="sheet sheet-tall" aria-labelledby="compose-title">
-    <form id="compose-form" class="sheet-inner">
-      <div class="sheet-head">
-        <h2 id="compose-title">New note</h2>
-        <button class="icon-btn" type="button" data-close aria-label="Close"><svg class="i"><use href="#i-close"/></svg></button>
+  <!-- Authoring Canvas (Full-Page Writing Workstation) -->
+  <div id="writer-canvas" class="writer-canvas" hidden role="dialog" aria-modal="true" aria-label="Authoring canvas">
+    <header class="writer-header">
+      <button type="button" class="icon-btn writer-back-btn" id="writer-back" aria-label="Back" title="Discard or go back">
+        <svg class="i"><use href="#i-back"/></svg>
+      </button>
+      <button type="button" class="writer-crumbs" id="writer-crumbs" title="Change destination folder or storage">
+        <span class="writer-crumb-src" id="writer-crumb-src">This device</span>
+        <span class="writer-crumb-sep">/</span>
+        <span class="writer-crumb-folder" id="writer-crumb-folder">Unsorted</span>
+      </button>
+      <div class="writer-header-actions">
+        <span class="writer-status" id="writer-status"></span>
+        <button type="button" class="btn btn-primary writer-done-btn" id="writer-done">Done</button>
       </div>
-      <div class="compose-tools">
-        <button type="button" id="compose-paste" class="btn compose-paste">“ Paste a quote</button>
-        <button type="button" id="compose-include-citation" class="btn compose-include-citation" title="Browse and insert citations from your highlights folder"><svg class="i i-sm"><use href="#i-search"/></svg> “ Include citation…</button>
-        <button type="button" id="compose-link-note" class="btn compose-link-note" title="Insert a link to another note"><svg class="i i-sm"><use href="#i-open"/></svg> [[ ]] Link</button>
-        <button type="button" id="compose-attach-image" class="btn compose-attach-image" title="Attach and compress an image (WebP)"><svg class="i i-sm"><use href="#i-image"/></svg> Image</button>
-        <input type="file" id="compose-image-input" accept="image/*" hidden />
-      </div>
+    </header>
 
-      <label class="field"><span>Title <span class="field-opt">optional</span></span>
-        <input name="title" placeholder="Left empty, the first words are used" />
-      </label>
-      <div class="field-pair">
-        <label class="field">Save to
-          <select name="source" required></select>
-        </label>
-        <label class="field" id="compose-type-field">Type
-          <select name="folder"></select>
-        </label>
+    <div class="writer-scroll" id="writer-scroll">
+      <div class="writer-measure">
+        <input type="text" class="writer-title" id="writer-title" name="title" placeholder="Title (optional)" autocomplete="off" spellcheck="true" />
+        <textarea class="writer-body" id="writer-body" name="body" placeholder="Write it the way you'd want to read it again. Markdown works, and a line starting with > becomes a highlight." spellcheck="true"></textarea>
       </div>
-      <button type="button" class="linklike compose-add-type" id="compose-add-type" hidden>Put it in a new type (folder)…</button>
-      <label class="field" id="compose-new-type" hidden>New type
-        <input name="newType" placeholder="A folder name, e.g. Essays" autocapitalize="words" spellcheck="false" />
-      </label>
-      <fieldset class="seg compose-status">
-        <legend class="sr">Status</legend>
-        <label><input type="radio" name="status" value="" checked /><span>In progress</span></label>
-        <label><input type="radio" name="status" value="done" /><span>Done</span></label>
-      </fieldset>
-      <label class="field field-fill">Note
-        <textarea name="body" rows="10" placeholder="Write it the way you'd want to read it again. Markdown works, and a line starting with > becomes a highlight."></textarea>
-      </label>
-      <label class="field"><span>Tags <span class="field-opt">optional</span></span>
-        <input name="tags" placeholder="e.g. habits, writing" autocapitalize="off" spellcheck="false" />
-      </label>
-      <div class="compose-submit-bar">
-        <button class="btn btn-primary btn-save-note" type="submit">Save note</button>
+    </div>
+
+    <!-- Sticky Virtual Keyboard Accessory Bar -->
+    <nav class="writer-accessory-bar" id="writer-accessory-bar" aria-label="Writing tools">
+      <button type="button" class="writer-bar-btn" id="writer-btn-cite" title="Cite highlights or literature notes">
+        <span class="writer-btn-glyph" aria-hidden="true">“</span> <span>Cite</span>
+      </button>
+      <button type="button" class="writer-bar-btn" id="writer-btn-graft" title="Graft a note (insert [[link]])">
+        <svg class="i i-sm" aria-hidden="true"><use href="#i-graft"/></svg> <span>Graft</span>
+      </button>
+      <button type="button" class="writer-bar-btn" id="compose-attach-image" title="Attach and compress an image (WebP)">
+        <svg class="i i-sm" aria-hidden="true"><use href="#i-image"/></svg> <span>Image</span>
+      </button>
+      <input type="file" id="compose-image-input" accept="image/*" hidden />
+      <button type="button" class="writer-bar-btn" id="writer-btn-tag" title="Add a tag (#)">
+        <span class="writer-btn-glyph" aria-hidden="true">#</span> <span>Tag</span>
+      </button>
+      <button type="button" class="writer-bar-btn" id="writer-btn-meta" title="Destination folder & status">
+        <svg class="i i-sm" aria-hidden="true"><use href="#i-down"/></svg> <span id="writer-meta-label">Folder</span>
+      </button>
+      <button type="button" id="compose-paste" class="btn compose-paste" hidden style="display:none"></button>
+      <button type="button" id="compose-include-citation" class="compose-include-citation" hidden style="display:none"></button>
+      <div class="compose-submit-bar" hidden style="display:none"><button type="button" class="btn btn-primary btn-save-note">Save note</button></div>
+    </nav>
+
+    <!-- Sliding Research Drawer -->
+    <aside class="research-drawer" id="research-drawer" aria-label="Research and citations">
+      <div class="research-drawer-head">
+        <div class="research-drawer-title">Research &amp; Citations</div>
+        <button type="button" class="icon-btn research-drawer-close" id="research-drawer-close" aria-label="Close research drawer">
+          <svg class="i"><use href="#i-close"/></svg>
+        </button>
       </div>
-    </form>
-  </dialog>
+      <div class="research-drawer-search">
+        <input type="search" class="research-drawer-input" id="research-drawer-search" placeholder="Search highlights &amp; notes…" autocomplete="off" aria-label="Search citations" />
+      </div>
+      <div class="research-drawer-list" id="research-drawer-list">
+        <!-- Scored contextual citations rendered dynamically -->
+      </div>
+    </aside>
+  </div>
 
   <!-- Service Worker Update Available Notification Banner -->
   <aside id="sw-update-banner" class="sw-update-banner" hidden aria-live="polite" role="status">

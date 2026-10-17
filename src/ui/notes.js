@@ -236,7 +236,7 @@ export function initNotes(app) {
 
   // Sort and filter (remembered on this device, separately from the feed's).
   const sortSel = el('select', { class: 'notes-sort', 'aria-label': 'Sort' }, ...SORTS.map((o) => el('option', { value: o.id }, o.label)));
-  const filterBtn = el('button', { type: 'button', class: 'btn btn-quiet notes-filter' });
+  const filterBtn = el('button', { type: 'button', class: 'btn btn-quiet notes-filter', 'aria-label': 'Filter notes' }, 'Filter');
   const tools = el('div', { class: 'notes-tools' }, el('label', { class: 'notes-sort-label' }, 'Sort ', sortSel), filterBtn);
   root.replaceChildren(
     el(
@@ -256,8 +256,10 @@ export function initNotes(app) {
   const showFilterLabel = () => {
     const label = filterLabel(prefs().notesGrowth, types());
     filterBtn.textContent = label ? `Filter: ${label}` : 'Filter';
+    filterBtn.setAttribute('aria-label', label ? `Filter notes: ${label}` : 'Filter notes');
     filterBtn.classList.toggle('active', Boolean(label));
   };
+  showFilterLabel();
 
   async function openFilters() {
     const map = await garden().catch(() => new Map());

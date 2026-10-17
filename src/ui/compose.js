@@ -1,10 +1,11 @@
-// Quick capture and full garden note composer. Readover is read-first, so this stays
-// focused and clean: what you write, where it goes, and connections between notes.
-// The type is a top-level folder of the library (none = the top level, Unsorted);
-// the file is named from the date and the title, or the first words.
+// Full-page botanical authoring canvas and sliding research drawer.
+// Readover is read-first, organic, and distraction-free: 68ch writing measure,
+// tactile paper tones (#fbf9f5), forest green save actions, instant research citations,
+// inline [[ wikilink autocomplete, and seamless reciprocal backlinks.
+
 import * as store from '../store.js';
-import { canWrite, displayName, writeNote, readText, deviceSource, DEVICE_ID } from '../library.js';
-import { openSheet, toast, el, closeTop, icon } from './overlay.js';
+import { canWrite, displayName, writeNote, readText, deviceSource, DEVICE_ID, moveNote } from '../library.js';
+import { pushOverlay, toast, el, closeTop, icon } from './overlay.js';
 import {
   newNotePath,
   newNoteText,
@@ -22,7 +23,7 @@ import { entries as indexEntries, resolve } from '../notes-index.js';
 import { libraryTypes } from './types.js';
 import { sheet as openCustomSheet } from './sheet.js';
 import { pickNote, linkFor } from './reader.js';
-import { setupAttachmentListeners } from '../attachments.js';
+import { setupAttachmentListeners, processAndSaveImage, insertAtCursor } from '../attachments.js';
 
 const NEW_TYPE = '\u0000new';
 const STATUS_KEY = 'readover.statusByFolder';
@@ -45,16 +46,34 @@ const rememberStatus = (folder, status) => {
 };
 
 export function initCompose(app) {
-  const sheet = document.getElementById('compose-sheet');
-  const form = document.getElementById('compose-form');
-  const f = form.elements;
-  const composeTitle = document.getElementById('compose-title');
-  const submitBtn = form.querySelector('.btn-save-note') || form.querySelector('[type=submit]');
-  const typeField = document.getElementById('compose-type-field');
-  const addType = document.getElementById('compose-add-type');
-  const newType = document.getElementById('compose-new-type');
-  const includeCitationBtn = document.getElementById('compose-include-citation') || document.getElementById('compose-include-insight');
-  const linkNoteBtn = document.getElementById('compose-link-note');
+  // Main canvas elements
+  const canvas = document.getElementById('writer-canvas');
+  const backBtn = document.getElementById('writer-back');
+  const crumbsBtn = document.getElementById('writer-crumbs');
+  const crumbSrc = document.getElementById('writer-crumb-src');
+  const crumbFolder = document.getElementById('writer-crumb-folder');
+  const statusEl = document.getElementById('writer-status');
+  const doneBtn = document.getElementById('writer-done');
+  const scrollEl = document.getElementById('writer-scroll');
+  const titleInput = document.getElementById('writer-title');
+  const bodyInput = document.getElementById('writer-body');
+
+  // Sticky accessory bar elements
+  const btnCite = document.getElementById('writer-btn-cite');
+  const btnGraft = document.getElementById('writer-btn-graft');
+  const btnImage = document.getElementById('compose-attach-image');
+  const imageInput = document.getElementById('compose-image-input');
+  const btnTag = document.getElementById('writer-btn-tag');
+  const btnMeta = document.getElementById('writer-btn-meta');
+  const metaLabel = document.getElementById('writer-meta-label');
+  const btnPaste = document.getElementById('compose-paste');
+  const legacyCiteBtn = document.getElementById('compose-include-citation');
+
+  // Sliding research drawer elements
+  const drawer = document.getElementById('research-drawer');
+  const drawerClose = document.getElementById('research-drawer-close');
+  const drawerSearch = document.getElementById('research-drawer-search');
+  const drawerList = document.getElementById('research-drawer-list');
 
   let allItems = [];
   let activeSourceItem = null;
@@ -62,72 +81,213 @@ export function initCompose(app) {
   let onSavedCallback = null;
   const citedInsights = new Set();
 
+  let currentSourceId = DEVICE_ID;
+  let currentFolder = '';
+  let currentStatus = '';
+  let currentTags = '';
+  let closeOverlayFn = null;
+
+  let initialState = {
+    title: '',
+    body: '',
+    sourceId: DEVICE_ID,
+    folder: '',
+    status: '',
+    tags: '',
+  };
+
   const srcOf = (id) => (id === DEVICE_ID ? deviceSource(false) || { id: DEVICE_ID, type: 'device', root: '' } : store.getSource(id));
   const rootOf = (src) => clean(src?.root);
 
-  /** The folder chosen, relative to the repo (the library's top level when Unsorted). */
-  function chosenFolder() {
-    const root = rootOf(srcOf(f.source.value));
-    const join = (name) => [root, clean(name)].filter(Boolean).join('/');
-    if (!newType.hidden) return join(f.newType.value);
-    return typeField.hidden ? root : f.folder.value;
+  // Auto-resize textarea to fit content and avoid double scrollbars
+  function autoResize() {
+    if (!bodyInput) return;
+    bodyInput.style.height = 'auto';
+    bodyInput.style.height = `${Math.max(360, bodyInput.scrollHeight)}px`;
+  }
+  bodyInput?.addEventListener('input', autoResize);
+
+  function updateBreadcrumbs() {
+    const src = srcOf(currentSourceId);
+    if (crumbSrc) {
+      crumbSrc.textContent = currentSourceId === DEVICE_ID ? 'This device' : (displayName(src) || 'Library');
+    }
+    const cleanF = clean(currentFolder);
+    const folderDisplay = cleanF ? cleanF.split('/').pop() : 'Unsorted';
+    if (crumbFolder) {
+      crumbFolder.textContent = folderDisplay;
+    }
+    if (metaLabel) {
+      metaLabel.textContent = folderDisplay;
+    }
   }
 
-  function showNewType(on) {
-    newType.hidden = !on;
-    if (on) f.newType.focus();
+  function isDirty() {
+    return (
+      (titleInput?.value || '') !== initialState.title ||
+      (bodyInput?.value || '') !== initialState.body ||
+      currentSourceId !== initialState.sourceId ||
+      currentFolder !== initialState.folder ||
+      currentStatus !== initialState.status ||
+      currentTags !== initialState.tags
+    );
   }
 
-  /** Fill the type picker for the chosen library; `keep` is a folder to select. */
-  function fillTypes(keep = null) {
-    const src = srcOf(f.source.value);
+  function closeCanvas() {
+    if (closeOverlayFn) {
+      const fn = closeOverlayFn;
+      closeOverlayFn = null;
+      fn();
+    } else {
+      if (canvas) canvas.hidden = true;
+      drawer?.classList.remove('open');
+      document.body.classList.remove('has-writer');
+      dismissAutocomplete();
+    }
+  }
+
+  // Back / Discard with dirty checking
+  if (backBtn) {
+    backBtn.onclick = () => {
+      if (isDirty() && !confirm('Discard your changes?')) return;
+      closeCanvas();
+    };
+  }
+
+  // Auto-save draft for new notes
+  let autoSaveTimer = null;
+  function triggerAutoSave() {
+    if (currentExistingItem || activeSourceItem) return;
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          'readover.draft',
+          JSON.stringify({
+            title: titleInput.value,
+            body: bodyInput.value,
+            tags: currentTags,
+            sourceId: currentSourceId,
+            folder: currentFolder,
+            status: currentStatus,
+          })
+        );
+        if (statusEl) {
+          const now = new Date();
+          const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          statusEl.textContent = `Draft saved ${timeStr}`;
+        }
+      } catch {}
+    }, 400);
+  }
+  titleInput?.addEventListener('input', triggerAutoSave);
+  bodyInput?.addEventListener('input', triggerAutoSave);
+
+  // Metadata / Folder / Status Sheet
+  async function openMetadataSheet() {
+    const src = srcOf(currentSourceId);
     const root = rootOf(src);
-    const types = libraryTypes(allItems, src);
-    if (keep != null && keep !== root && !keep.startsWith(`${root}/`) && root) keep = root;
-    const opts = [el('option', { value: root }, 'Unsorted'), ...types.map((t) => el('option', { value: [root, t].filter(Boolean).join('/') }, t))];
-    // A deeper folder (a note started from inside it) stays as it is.
-    if (keep && !opts.some((o) => o.value === keep)) opts.push(el('option', { value: keep }, keep.slice(root ? root.length + 1 : 0).split('/').join(' / ')));
-    opts.push(el('option', { value: NEW_TYPE }, 'New type…'));
-    f.folder.replaceChildren(...opts);
-    f.folder.value = keep != null && opts.some((o) => o.value === keep) ? keep : root;
-    // No folders in this library: no types to pick, just a quiet way to start one.
-    const none = types.length === 0 && !(keep && keep !== root);
-    typeField.hidden = none;
-    addType.hidden = !none;
-    showNewType(false);
-    applyStatus();
-  }
+    const writable = store.getSources().filter((s) => s.type !== 'device' && canWrite(s));
 
-  function applyStatus(preferredStatus = null) {
-    const s = preferredStatus != null ? preferredStatus : lastStatus(chosenFolder());
-    const opt = form.querySelector(`input[name=status][value="${s}"]`);
-    if (opt) opt.checked = true;
-    else {
-      const defaultOpt = form.querySelector('input[name=status][value=""]');
-      if (defaultOpt) defaultOpt.checked = true;
+    const sourceOpts = [
+      el('option', { value: DEVICE_ID }, 'This device'),
+      ...writable.map((s) => el('option', { value: s.id }, displayName(s))),
+    ];
+    const sourceSelect = el('select', { name: 'source', class: 'field-input', disabled: Boolean(currentExistingItem) }, ...sourceOpts);
+    sourceSelect.value = currentSourceId;
+
+    const sourceField = el('label', { class: 'field' }, el('span', { class: 'field-label' }, 'Library / Storage'), sourceSelect);
+
+    const folderFieldWrapper = el('div', { class: 'folder-field-wrapper' });
+    const newFolderInput = el('input', {
+      type: 'text',
+      name: 'newType',
+      class: 'field-input',
+      placeholder: 'New folder name…',
+      hidden: true,
+      style: 'margin-top: 8px;',
+    });
+
+    let folderSelect = null;
+    function refreshFolderOptions(forSrc) {
+      const r = rootOf(forSrc);
+      const types = libraryTypes(allItems, forSrc);
+      const opts = [
+        el('option', { value: r }, 'Unsorted'),
+        ...types.map((t) => el('option', { value: [r, t].filter(Boolean).join('/') }, t)),
+      ];
+      if (currentFolder && !opts.some((o) => o.value === currentFolder)) {
+        opts.push(el('option', { value: currentFolder }, currentFolder));
+      }
+      opts.push(el('option', { value: NEW_TYPE }, 'New folder…'));
+
+      folderSelect = el('select', { name: 'folder', class: 'field-input' }, ...opts);
+      folderSelect.value = currentFolder && opts.some((o) => o.value === currentFolder) ? currentFolder : r;
+      folderSelect.onchange = () => {
+        newFolderInput.hidden = folderSelect.value !== NEW_TYPE;
+        if (!newFolderInput.hidden) newFolderInput.focus();
+      };
+      folderFieldWrapper.replaceChildren(
+        el('label', { class: 'field' }, el('span', { class: 'field-label' }, 'Folder / Type'), folderSelect),
+        newFolderInput
+      );
+    }
+
+    refreshFolderOptions(src);
+    sourceSelect.onchange = () => {
+      const selectedSrc = srcOf(sourceSelect.value);
+      refreshFolderOptions(selectedSrc);
+    };
+
+    const statusSelect = el(
+      'select',
+      { name: 'status', class: 'field-input' },
+      el('option', { value: '' }, 'None (standard note)'),
+      el('option', { value: 'seed' }, 'Seed 🌱'),
+      el('option', { value: 'budding' }, 'Budding 🌿'),
+      el('option', { value: 'evergreen' }, 'Evergreen 🌲')
+    );
+    statusSelect.value = currentStatus || '';
+    const statusField = el('label', { class: 'field' }, el('span', { class: 'field-label' }, 'Garden Status'), statusSelect);
+
+    const tagsInputField = el('input', {
+      type: 'text',
+      name: 'tags',
+      class: 'field-input',
+      placeholder: 'philosophy, architecture...',
+      value: currentTags,
+    });
+    const tagsField = el('label', { class: 'field' }, el('span', { class: 'field-label' }, 'Tags'), tagsInputField);
+
+    const { value } = await openCustomSheet({
+      title: 'Note destination & status',
+      fields: [sourceField, folderFieldWrapper, statusField, tagsField],
+      submit: 'Apply',
+    });
+
+    if (value === 'ok') {
+      currentSourceId = sourceSelect.value;
+      if (folderSelect.value === NEW_TYPE) {
+        const typed = clean(newFolderInput.value);
+        const activeRoot = rootOf(srcOf(currentSourceId));
+        currentFolder = typed ? [activeRoot, typed].filter(Boolean).join('/') : activeRoot;
+      } else {
+        currentFolder = folderSelect.value;
+      }
+      currentStatus = statusSelect.value;
+      currentTags = tagsInputField.value.trim();
+
+      updateBreadcrumbs();
+      rememberStatus(currentFolder, currentStatus);
+      triggerAutoSave();
     }
   }
 
-  f.folder.onchange = () => {
-    if (f.folder.value === NEW_TYPE) {
-      showNewType(true);
-      return;
-    }
-    showNewType(false);
-    applyStatus();
-  };
-  addType.onclick = () => {
-    addType.hidden = true;
-    showNewType(true);
-  };
-  f.newType.addEventListener('change', () => applyStatus());
+  crumbsBtn?.addEventListener('click', openMetadataSheet);
+  btnMeta?.addEventListener('click', openMetadataSheet);
 
   /* ---------- Intent-Aware Draft Signature & Citation Scorer ---------- */
 
-  /**
-   * Silently inspects the active draft editor in memory and extracts
-   * a lightweight signature: normalized WikiLinks and #tags without heavy NLP.
-   */
   function extractDraftSignature(bodyText, tagsText) {
     const linkSet = new Set();
     const tagSet = new Set();
@@ -154,10 +314,6 @@ export function initCompose(app) {
     return { linkSet, tagSet };
   }
 
-  /**
-   * Fast in-memory Set scoring (<5ms) ranking candidate citations
-   * using a weighted composite of direct tag overlap, 1-hop neighbors, and 2-hop bridge notes.
-   */
   function scoreCandidateCitations(candidates, draftSig, allEntries) {
     if (!draftSig.linkSet.size && !draftSig.tagSet.size) {
       return candidates.map((c) => ({ ...c, score: 0, reason: '' }));
@@ -250,13 +406,14 @@ export function initCompose(app) {
     return scored;
   }
 
-  /* ---------- Dynamic Dual-State "Include Citation" Picker ---------- */
+  /* ---------- Sliding Research Drawer Controller ---------- */
 
-  async function openIncludeCitationPicker() {
+  let cachedCitations = null;
+  let scoredCitations = [];
+
+  async function loadResearchCitations() {
     const all = await indexEntries().catch(() => []);
     const inbox = await inboxState().catch(() => null);
-
-    // Dynamically retrieve the current configured highlights folder from Settings
     const hlFolder = clean(highlightsFolder()).toLowerCase();
 
     const inHighlightsFolder = (item) => {
@@ -268,23 +425,19 @@ export function initCompose(app) {
       return item.path.toLowerCase().includes('highlight') || item.kind === 'highlight';
     };
 
-    // Collect citation objects strictly from the configured highlights folder to prevent bloating
     const itemsMap = new Map();
 
     for (const e of all) {
       if (!e.hasText) continue;
-      // Filter out other note types (e.g. general garden notes, unsorted, journal)
       if (!inHighlightsFolder(e.item)) continue;
 
       const rawText = (await store.content.get(e.item.key))?.text || '';
-      // Extract quote passages from blockquotes or note content
       const quotes = [];
       for (const m of rawText.matchAll(/(?:^|\n)((?:\s*>.*(?:\n|$))+)/g)) {
         const lines = m[1].split('\n').map((l) => l.replace(/^\s*>\s?/, '')).filter((l) => l.trim() && !/^\s*(—|–|--)\s*\S/.test(l));
         if (lines.length) quotes.push(lines.join(' ').trim());
       }
 
-      // If no explicit blockquote exists, the substantive prose of the highlight note is the quote
       const mainQuote = quotes[0] || e.text.replace(/^[#\s]+.*$/gm, '').replace(/<!--[\s\S]*?-->/g, '').trim();
       if (mainQuote && mainQuote.length > 10) {
         itemsMap.set(e.item.key, {
@@ -300,7 +453,6 @@ export function initCompose(app) {
       }
     }
 
-    // Add inbox seeds if their source belongs to highlights or inbox
     if (inbox?.inboxes) {
       for (const box of inbox.inboxes.values()) {
         const item = box.item;
@@ -322,162 +474,168 @@ export function initCompose(app) {
       }
     }
 
-    const allCitations = [...itemsMap.values()];
+    cachedCitations = [...itemsMap.values()];
 
-    // Silently extract draft signature and score candidate citations in memory (<5ms)
-    const draftSig = extractDraftSignature(f.body.value, f.tags.value);
-    const scoredCitations = scoreCandidateCitations(allCitations, draftSig, all);
+    const draftSig = extractDraftSignature(bodyInput.value, currentTags);
+    scoredCitations = scoreCandidateCitations(cachedCitations, draftSig, all);
+  }
 
-    // Keep search input completely clean and blank for manual typing
-    const searchInput = el('input', {
-      type: 'search',
-      class: 'field-input',
-      placeholder: `Search citations in ${hlFolder || 'highlights'}…`,
-      autocomplete: 'off',
-      'aria-label': 'Search citations',
-    });
+  function renderDrawerList(query = '') {
+    if (!drawerList) return;
+    const q = query.toLowerCase().trim();
+    let displayed = [];
+    let isContextualState = false;
 
-    const listContainer = el('div', { class: 'insight-picker-list' });
-    const emptyNotice = el('p', { class: 'insight-picker-empty', hidden: true }, 'No citations found in the configured highlights folder.');
-    let closeDialog = null;
-
-    /**
-     * Dual-state rendering:
-     * State A (empty query): Displays top 3-5 contextual suggestions / 2-hop bridge notes.
-     * State B (active query): Instantly collapses into standard fuzzy search.
-     */
-    function renderList(query = '') {
-      const q = query.toLowerCase().trim();
-      let displayed = [];
-      let isContextualState = false;
-
-      if (!q) {
-        // State A: Empty input -> top contextual suggestions
-        const highScored = scoredCitations.filter((c) => c.score > 0);
-        if (highScored.length > 0) {
-          displayed = highScored.slice(0, 5);
-          isContextualState = true;
-        } else {
-          displayed = scoredCitations.slice(0, 20);
-        }
+    if (!q) {
+      const highScored = scoredCitations.filter((c) => c.score > 0);
+      if (highScored.length > 0) {
+        displayed = highScored.slice(0, 5);
+        isContextualState = true;
       } else {
-        // State B: Active query -> instant fuzzy match
-        displayed = allCitations.filter((ins) =>
+        displayed = (cachedCitations || []).slice(0, 20);
+      }
+    } else {
+      displayed = (cachedCitations || []).filter(
+        (ins) =>
           ins.quote.toLowerCase().includes(q) ||
           ins.title.toLowerCase().includes(q) ||
           ins.source.toLowerCase().includes(q) ||
           ins.thought.toLowerCase().includes(q)
-        );
-      }
+      );
+    }
 
-      if (!displayed.length) {
-        emptyNotice.hidden = false;
-        listContainer.replaceChildren(emptyNotice);
-        return;
-      }
-      emptyNotice.hidden = true;
+    if (!displayed.length) {
+      drawerList.replaceChildren(
+        el('p', { class: 'insight-picker-empty', style: 'padding: 16px; color: var(--muted); text-align: center;' }, 'No matching citations found.')
+      );
+      return;
+    }
 
-      const headerEl = !q && isContextualState
-        ? el('div', { class: 'citation-suggestions-header' }, 'Contextual bridge citations for this draft')
+    const headerEl =
+      !q && isContextualState
+        ? el('div', { class: 'citation-suggestions-header', style: 'font-size: 0.8125rem; font-weight: 600; color: var(--healthy); margin-bottom: 6px;' }, 'Contextual bridge citations for this draft')
         : null;
 
-      const cards = displayed.map((ins) => {
-        const card = el('div', { class: 'insight-picker-card', role: 'button', tabindex: '0' });
-        const titleEl = el('span', { class: 'insight-picker-title' }, ins.title);
-        const sourceEl = ins.source ? el('span', { class: 'insight-picker-source' }, ins.source) : null;
-        const reasonBadge = ins.reason
-          ? el('span', { class: 'citation-intent-badge' }, ins.reason)
-          : null;
+    const cards = displayed.map((ins) => {
+      const card = el('div', { class: 'insight-picker-card', role: 'button', tabindex: '0' });
+      const titleEl = el('span', { class: 'insight-picker-title' }, ins.title);
+      const sourceEl = ins.source ? el('span', { class: 'insight-picker-source' }, ins.source) : null;
+      const reasonBadge = ins.reason ? el('span', { class: 'citation-intent-badge' }, ins.reason) : null;
 
-        const headMeta = el('div', { class: 'insight-picker-meta' }, reasonBadge, sourceEl);
-        const head = el('div', { class: 'insight-picker-head' }, titleEl, headMeta);
-        const quoteEl = el('blockquote', { class: 'insight-picker-quote' }, `“${ins.quote.slice(0, 220)}${ins.quote.length > 220 ? '…' : ''}”`);
-        const thoughtEl = ins.thought ? el('p', { class: 'insight-picker-thought' }, ins.thought.slice(0, 140)) : null;
+      const headMeta = el('div', { class: 'insight-picker-meta' }, reasonBadge, sourceEl);
+      const head = el('div', { class: 'insight-picker-head' }, titleEl, headMeta);
+      const quoteEl = el('blockquote', { class: 'insight-picker-quote' }, `“${ins.quote.slice(0, 220)}${ins.quote.length > 220 ? '…' : ''}”`);
+      const thoughtEl = ins.thought ? el('p', { class: 'insight-picker-thought' }, ins.thought.slice(0, 140)) : null;
 
-        const insertBtn = el('button', { type: 'button', class: 'btn btn-quiet insight-picker-insert' }, 'Insert citation');
-        const footer = el('div', { class: 'insight-picker-footer' }, insertBtn);
+      const insertBtn = el('button', { type: 'button', class: 'btn btn-quiet insight-picker-insert' }, 'Insert citation');
+      const footer = el('div', { class: 'insight-picker-footer' }, insertBtn);
 
-        card.append(head, quoteEl, thoughtEl, footer);
+      card.append(head, quoteEl, thoughtEl, footer);
 
-        const insertAction = (e) => {
-          e?.stopPropagation?.();
-          e?.preventDefault?.();
-          insertCitation(ins);
-          closeDialog?.();
-        };
+      const insertAction = (e) => {
+        e?.stopPropagation?.();
+        e?.preventDefault?.();
+        insertCitation(ins);
+      };
 
-        card.onclick = insertAction;
-        insertBtn.onclick = insertAction;
-        card.onkeydown = (e) => {
-          if (e.key === 'Enter') insertAction(e);
-        };
-        return card;
-      });
-
-      listContainer.replaceChildren(...(headerEl ? [headerEl, ...cards] : cards));
-    }
-
-    // Insert as an Obsidian citation callout block with [[TargetPath|DisplayTitle]] wiki link
-    function insertCitation(ins) {
-      const sourceLink = wikiLink(ins.path, ins.title);
-      const cleanQuote = ins.quote.trim();
-      const qLines = [
-        `> [!quote] ${sourceLink}`,
-        ...cleanQuote.split(/\r?\n/).map((l) => (l.trim() ? `> ${l.trim()}` : '>')),
-      ];
-      if (ins.source) {
-        qLines.push('>', `> — ${ins.source}`);
-      }
-      const insertionText = qLines.join('\n');
-
-      const start = f.body.selectionStart ?? f.body.value.length;
-      const end = f.body.selectionEnd ?? start;
-      const cur = f.body.value;
-      const prefix = start > 0 && cur[start - 1] !== '\n' ? '\n\n' : '';
-      const suffix = '\n\n';
-      const toInsert = `${prefix}${insertionText}${suffix}`;
-
-      f.body.setRangeText(toInsert, start, end, 'end');
-      citedInsights.add(ins.item);
-      f.body.focus();
-      toast('Citation inserted');
-    }
-
-    renderList('');
-    searchInput.oninput = () => renderList(searchInput.value);
-
-    const pickerWrapper = el('div', { class: 'insight-picker' }, searchInput, listContainer);
-
-    const { form: dialogForm } = await openCustomSheet({
-      title: 'Include citation',
-      fields: [pickerWrapper],
-      tall: true,
-      onOpen: (modalForm) => {
-        closeDialog = () => modalForm.closest('dialog')?.close();
-        setTimeout(() => searchInput.focus(), 60);
-      },
+      card.onclick = insertAction;
+      insertBtn.onclick = insertAction;
+      card.onkeydown = (e) => {
+        if (e.key === 'Enter') insertAction(e);
+      };
+      return card;
     });
+
+    drawerList.replaceChildren(...(headerEl ? [headerEl, ...cards] : cards));
   }
 
-  if (includeCitationBtn) {
-    includeCitationBtn.onclick = () => openIncludeCitationPicker();
+  function insertCitation(ins) {
+    const sourceLink = wikiLink(ins.path, ins.title);
+    const cleanQuote = ins.quote.trim();
+    const qLines = [
+      `> [!quote] ${sourceLink}`,
+      ...cleanQuote.split(/\r?\n/).map((l) => (l.trim() ? `> ${l.trim()}` : '>')),
+    ];
+    if (ins.source) {
+      qLines.push('>', `> — ${ins.source}`);
+    }
+    const insertionText = qLines.join('\n');
+
+    insertAtCursor(bodyInput, `\n\n${insertionText}\n\n`);
+    citedInsights.add(ins.item);
+    autoResize();
+    bodyInput.focus();
+    toast('Citation inserted');
+
+    if (window.innerWidth < 1024) {
+      drawer?.classList.remove('open');
+    }
   }
 
-  /* ---------- Header [[ ]] Wiki-Link Button ---------- */
+  async function toggleResearchDrawer() {
+    if (!drawer) return;
+    const isCurrentlyOpen = drawer.classList.contains('open');
+    if (isCurrentlyOpen) {
+      drawer.classList.remove('open');
+      bodyInput.focus();
+    } else {
+      drawer.classList.add('open');
+      if (drawerSearch) drawerSearch.value = '';
+      if (drawerList) {
+        drawerList.replaceChildren(el('p', { class: 'hint', style: 'padding: 16px; text-align: center;' }, 'Loading citations…'));
+      }
+      await loadResearchCitations();
+      renderDrawerList('');
+      setTimeout(() => drawerSearch?.focus(), 60);
+    }
+  }
 
-  if (linkNoteBtn) {
-    linkNoteBtn.onclick = async () => {
-      const picked = await pickNote('Link to a note', currentExistingItem);
-      if (!picked) return;
-      const insert = await linkFor(picked);
-      const start = f.body.selectionStart ?? f.body.value.length;
-      const end = f.body.selectionEnd ?? start;
-      f.body.setRangeText(insert, start, end, 'end');
-      f.body.focus();
+  btnCite?.addEventListener('click', toggleResearchDrawer);
+  legacyCiteBtn?.addEventListener('click', toggleResearchDrawer);
+  drawerClose?.addEventListener('click', () => {
+    drawer?.classList.remove('open');
+    bodyInput.focus();
+  });
+  drawerSearch?.addEventListener('input', () => {
+    renderDrawerList(drawerSearch.value);
+  });
+
+  /* ---------- Graft Button (Wiki-Link) ---------- */
+  btnGraft?.addEventListener('click', async () => {
+    const picked = await pickNote('Graft a note', currentExistingItem);
+    if (!picked) return;
+    const insert = await linkFor(picked);
+    insertAtCursor(bodyInput, insert);
+    autoResize();
+    bodyInput.focus();
+  });
+
+  /* ---------- Tag Button ---------- */
+  btnTag?.addEventListener('click', () => {
+    insertAtCursor(bodyInput, '#');
+    autoResize();
+    bodyInput.focus();
+  });
+
+  /* ---------- Attach Image Button & File Input ---------- */
+  if (btnImage && imageInput) {
+    btnImage.onclick = () => {
+      imageInput.value = '';
+      imageInput.click();
+    };
+    imageInput.onchange = async () => {
+      const file = imageInput.files?.[0];
+      if (!file) return;
+      try {
+        await processAndSaveImage(file, bodyInput, () => currentSourceId);
+        autoResize();
+      } catch (err) {
+        console.error('Failed to attach image:', err);
+      }
     };
   }
 
-  /* ---------- Inline [[ Autocomplete Engine with Mobile Cleanup ---------- */
+  /* ---------- Inline [[ Autocomplete Engine ---------- */
 
   let autocompleteEl = null;
   let autocompleteMatches = [];
@@ -496,14 +654,15 @@ export function initCompose(app) {
   }
 
   function handleAutocompleteOutside(e) {
-    if (autocompleteEl && !autocompleteEl.contains(e.target) && e.target !== f.body) {
+    if (autocompleteEl && !autocompleteEl.contains(e.target) && e.target !== bodyInput) {
       dismissAutocomplete();
     }
   }
 
   async function checkAutocomplete() {
-    const text = f.body.value;
-    const cursorPos = f.body.selectionStart;
+    if (!bodyInput) return;
+    const text = bodyInput.value;
+    const cursorPos = bodyInput.selectionStart;
     const beforeCursor = text.slice(0, cursorPos);
     const lastOpen = beforeCursor.lastIndexOf('[[');
     if (lastOpen < 0) {
@@ -512,7 +671,6 @@ export function initCompose(app) {
     }
 
     const querySegment = beforeCursor.slice(lastOpen + 2);
-    // Unmount if brackets closed, newline encountered, or piped
     if (querySegment.includes('\n') || querySegment.includes(']]') || querySegment.includes('|')) {
       dismissAutocomplete();
       return;
@@ -553,10 +711,9 @@ export function initCompose(app) {
   function renderAutocompletePopup() {
     if (!autocompleteEl) {
       autocompleteEl = el('div', { class: 'wiki-autocomplete-menu', role: 'listbox' });
-      // Dock cleanly relative to the editor field
-      const fieldFill = f.body.closest('.field-fill') || form;
-      fieldFill.style.position = 'relative';
-      fieldFill.appendChild(autocompleteEl);
+      const parentContainer = bodyInput?.parentElement || canvas;
+      parentContainer.style.position = 'relative';
+      parentContainer.appendChild(autocompleteEl);
       window.addEventListener('pointerdown', handleAutocompleteOutside);
     }
 
@@ -589,20 +746,20 @@ export function initCompose(app) {
   }
 
   function chooseAutocomplete(entry) {
-    if (bracketTriggerStart < 0) return;
-    // Align with [[TargetPath|DisplayTitle]] convention
+    if (bracketTriggerStart < 0 || !bodyInput) return;
     const insert = wikiLink(entry.item.path, entry.title);
-    const end = f.body.selectionStart;
-    f.body.setRangeText(insert, bracketTriggerStart, end, 'end');
+    const end = bodyInput.selectionStart;
+    bodyInput.setRangeText(insert, bracketTriggerStart, end, 'end');
     dismissAutocomplete();
-    f.body.focus();
+    autoResize();
+    bodyInput.focus();
   }
 
-  f.body.addEventListener('input', () => {
+  bodyInput?.addEventListener('input', () => {
     checkAutocomplete();
   });
 
-  f.body.addEventListener('keydown', (e) => {
+  bodyInput?.addEventListener('keydown', (e) => {
     if (!autocompleteEl || !autocompleteMatches.length) {
       if (e.key === 'Escape') dismissAutocomplete();
       return;
@@ -626,45 +783,42 @@ export function initCompose(app) {
     }
   });
 
-  f.body.addEventListener('blur', () => {
-    // Delay slightly to allow tap/click on virtual keyboards
+  bodyInput?.addEventListener('blur', () => {
     setTimeout(() => {
-      if (document.activeElement !== f.body && !autocompleteEl?.contains(document.activeElement)) {
+      if (document.activeElement !== bodyInput && !autocompleteEl?.contains(document.activeElement)) {
         dismissAutocomplete();
       }
     }, 180);
   });
 
-  setupAttachmentListeners(f.body, {
-    getContext: () => ({
-      sourceId: f.source.value,
-      title: f.title.value.trim() || 'diagram',
-    }),
-  });
+  if (bodyInput) {
+    setupAttachmentListeners(bodyInput, {
+      getSource: () => currentSourceId,
+      getContext: () => ({
+        sourceId: currentSourceId,
+        title: titleInput?.value.trim() || 'diagram',
+      }),
+    });
+  }
 
-  /* ---------- Unified Form Submit (New & Existing Notes) ---------- */
+  /* ---------- Unified Save Handler ---------- */
 
-  form.onsubmit = async (e) => {
-    e.preventDefault();
+  async function handleDoneSave() {
     dismissAutocomplete();
+    drawer?.classList.remove('open');
 
-    const title = f.title.value.trim();
-    const body = f.body.value.trim();
+    const title = titleInput.value.trim();
+    const body = bodyInput.value.trim();
     if (!title && !body) {
       toast('Write something first');
-      f.body.focus();
-      return;
-    }
-    if (!newType.hidden && !clean(f.newType.value)) {
-      toast('Name the new type, or pick one');
-      f.newType.focus();
+      bodyInput.focus();
       return;
     }
 
-    const folder = chosenFolder();
-    const status = form.querySelector('input[name=status]:checked')?.value || '';
-    const btn = submitBtn;
-    btn.disabled = true;
+    const folder = clean(currentFolder);
+    const status = currentStatus || '';
+    doneBtn.disabled = true;
+    if (statusEl) statusEl.textContent = 'Saving…';
 
     try {
       if (currentExistingItem) {
@@ -674,7 +828,7 @@ export function initCompose(app) {
         const rawOld = await readText(item).catch(() => '');
         const { meta: oldMeta } = parseFrontmatter(rawOld);
 
-        const tagArr = f.tags.value
+        const tagArr = currentTags
           .split(/[,#\s]+/)
           .map((t) => t.trim().replace(/^#/, ''))
           .filter(Boolean);
@@ -689,10 +843,9 @@ export function initCompose(app) {
         const updatedText = `${buildFrontmatter(patch)}\n${body}\n`;
         let savedItem = item;
 
-        // If folder changed, move the note to new location
         if (clean(folder) !== clean(item.folder)) {
           const newPath = [folder, basename(item.path)].filter(Boolean).join('/');
-          savedItem = await library.moveNote(item, newPath, {
+          savedItem = await moveNote(item, newPath, {
             message: `Readover: move ${item.path} to ${newPath}`,
           });
         }
@@ -727,8 +880,7 @@ export function initCompose(app) {
         currentExistingItem = null;
         onSavedCallback = null;
         citedInsights.clear();
-        form.reset();
-        closeTop();
+        closeCanvas();
 
         toast('Changes saved');
         if (savedCallback) {
@@ -736,7 +888,7 @@ export function initCompose(app) {
         }
       } else {
         // --- CREATING NEW NOTE ---
-        const chosenSourceId = f.source.value;
+        const chosenSourceId = currentSourceId;
         if (chosenSourceId) {
           try {
             localStorage.setItem('readover.lastNoteSource', chosenSourceId);
@@ -745,10 +897,10 @@ export function initCompose(app) {
         const src = chosenSourceId === DEVICE_ID ? deviceSource(true) : store.getSource(chosenSourceId);
         const name = title || titleFromText(body).replace(/…$/, '');
         const path = await newNotePath(folder, name, async (p) => Boolean(await store.items.get(store.keyOf(src.id, p))));
-        const text = newNoteText({ title, body, status, tags: f.tags.value });
+        const text = newNoteText({ title, body, status, tags: currentTags });
         const item = await writeNote(src, path, text, { message: `Readover: add ${path}` });
 
-        // Automated Reciprocal Linking & Graph Synchronization:
+        // Automated Reciprocal Linking
         const targets = [activeSourceItem, ...citedInsights].filter(Boolean);
         for (const targetItem of targets) {
           try {
@@ -774,121 +926,91 @@ export function initCompose(app) {
         citedInsights.clear();
         rememberStatus(folder, status);
         localStorage.removeItem('readover.draft');
-        form.reset();
-        closeTop();
+        closeCanvas();
         toast(src.type === 'device' ? 'Garden note saved on this device' : `Garden note saved to ${displayName(src)}`);
         if (src.type === 'device') navigator.storage?.persist?.().catch(() => {});
         app.showFirst(item);
       }
     } catch (err) {
       toast(err.message);
+      if (statusEl) statusEl.textContent = 'Error saving';
     } finally {
-      btn.disabled = false;
+      doneBtn.disabled = false;
     }
-  };
+  }
 
-  // Ctrl/Cmd+Enter saves from anywhere in the form
-  form.addEventListener('keydown', (e) => {
+  doneBtn?.addEventListener('click', handleDoneSave);
+
+  // Ctrl/Cmd+Enter saves from anywhere in the canvas
+  canvas?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      form.requestSubmit();
+      handleDoneSave();
     }
-  });
-
-  // Keep an unsent draft per device (only when not working on an existing note or populated insight)
-  form.addEventListener('input', () => {
-    if (activeSourceItem || currentExistingItem) return;
-    try {
-      localStorage.setItem('readover.draft', JSON.stringify({ title: f.title.value, body: f.body.value, tags: f.tags.value }));
-    } catch {}
   });
 
   return {
-    /**
-     * presets: { existingItem, onSaved, sourceId, folder, title, body, thought, quote, attribution, tags, status, sourceItem, sourceTitle }
-     * opens the unified editor sheet for either creating a new note or editing an existing note.
-     */
     async open(presets = {}) {
       dismissAutocomplete();
+      drawer?.classList.remove('open');
+      if (imageInput) imageInput.value = '';
       activeSourceItem = presets.sourceItem || null;
       currentExistingItem = presets.existingItem || null;
       onSavedCallback = presets.onSaved || null;
       citedInsights.clear();
+      cachedCitations = null;
 
       allItems = await store.items.all();
 
-      // Repos and folders you can write to, then this device (always available).
-      const writable = store.getSources().filter((s) => s.type !== 'device' && canWrite(s));
-      const sel = f.source;
-      sel.replaceChildren(...writable.map((s) => el('option', { value: s.id }, displayName(s))), el('option', { value: DEVICE_ID }, 'This device'));
-
       if (currentExistingItem) {
         // Mode: Edit existing note
-        composeTitle.textContent = 'Edit note';
-        submitBtn.textContent = 'Save changes';
-        sel.value = currentExistingItem.sourceId;
-        sel.disabled = true;
+        currentSourceId = currentExistingItem.sourceId;
+        currentFolder = currentExistingItem.folder != null ? clean(currentExistingItem.folder) : '';
 
         const rawText = await readText(currentExistingItem).catch(() => '');
         const { meta, body } = parseFrontmatter(rawText);
 
-        f.title.value = meta.title || resolveTitle(meta, body, currentExistingItem.path) || '';
-        f.body.value = body || '';
-        f.tags.value = Array.isArray(meta.tags) ? meta.tags.join(', ') : meta.tags || '';
-
-        const initialFolder = currentExistingItem.folder != null ? clean(currentExistingItem.folder) : '';
-        fillTypes(initialFolder);
-        sel.onchange = () => fillTypes(clean(currentExistingItem.folder || ''));
-        applyStatus(meta.status ?? '');
+        titleInput.value = meta.title || resolveTitle(meta, body, currentExistingItem.path) || '';
+        bodyInput.value = body || '';
+        currentTags = Array.isArray(meta.tags) ? meta.tags.join(', ') : meta.tags || '';
+        currentStatus = meta.status ?? '';
       } else {
         // Mode: New note
-        composeTitle.textContent = 'New note';
-        submitBtn.textContent = 'Save note';
-        sel.disabled = false;
-
         let targetSourceId = null;
-        if (presets.sourceId && [...sel.options].some((o) => o.value === presets.sourceId)) {
+        const writable = store.getSources().filter((s) => s.type !== 'device' && canWrite(s));
+        const validIds = new Set([DEVICE_ID, ...writable.map((s) => s.id)]);
+
+        if (presets.sourceId && validIds.has(presets.sourceId)) {
           targetSourceId = presets.sourceId;
         } else {
           const prefs = store.getPrefs();
           const lastSource = localStorage.getItem('readover.lastNoteSource');
-          if (prefs.newNotesHome && [...sel.options].some((o) => o.value === prefs.newNotesHome)) {
+          if (prefs.newNotesHome && validIds.has(prefs.newNotesHome)) {
             targetSourceId = prefs.newNotesHome;
-          } else if (lastSource && [...sel.options].some((o) => o.value === lastSource)) {
+          } else if (lastSource && validIds.has(lastSource)) {
             targetSourceId = lastSource;
           } else {
             targetSourceId = newNotesHome().id;
           }
         }
-        sel.value = targetSourceId && [...sel.options].some((o) => o.value === targetSourceId) ? targetSourceId : DEVICE_ID;
-
-        const initialFolder = presets.folder != null ? clean(presets.folder) : '';
-        fillTypes(initialFolder);
-        sel.onchange = () => {
-          if (sel.value) {
-            try {
-              localStorage.setItem('readover.lastNoteSource', sel.value);
-            } catch {}
-          }
-          fillTypes(clean(presets.folder || ''));
-        };
-
-        applyStatus(presets.status ?? '');
+        currentSourceId = targetSourceId && validIds.has(targetSourceId) ? targetSourceId : DEVICE_ID;
+        currentFolder = presets.folder != null ? clean(presets.folder) : '';
+        currentStatus = presets.status ?? lastStatus(currentFolder);
+        currentTags = Array.isArray(presets.tags) ? presets.tags.join(', ') : presets.tags || '';
 
         if (presets.title) {
-          f.title.value = presets.title;
-        }
-        if (presets.tags) {
-          f.tags.value = Array.isArray(presets.tags) ? presets.tags.join(', ') : presets.tags;
+          titleInput.value = presets.title;
+        } else {
+          titleInput.value = '';
         }
 
         if (presets.body) {
-          f.body.value = presets.body;
+          bodyInput.value = presets.body;
         } else if (presets.quote || presets.thought || presets.sourceItem) {
           const relatedLink = presets.sourceItem
             ? wikiLink(presets.sourceItem.path, presets.sourceTitle || presets.title)
             : '';
-          f.body.value = formatGardenNoteBody({
+          bodyInput.value = formatGardenNoteBody({
             thought: presets.thought,
             quote: presets.quote,
             attribution: presets.attribution,
@@ -898,29 +1020,56 @@ export function initCompose(app) {
           try {
             const draft = JSON.parse(localStorage.getItem('readover.draft') || 'null');
             if (draft) {
-              f.title.value = draft.title || '';
-              f.body.value = draft.body || '';
-              f.tags.value = draft.tags || '';
+              titleInput.value = draft.title || '';
+              bodyInput.value = draft.body || '';
+              currentTags = draft.tags || '';
+              if (draft.folder != null) currentFolder = draft.folder;
+              if (draft.status != null) currentStatus = draft.status;
+              if (draft.sourceId && validIds.has(draft.sourceId)) currentSourceId = draft.sourceId;
             } else {
-              f.title.value = '';
-              f.body.value = '';
-              f.tags.value = '';
+              titleInput.value = '';
+              bodyInput.value = '';
             }
           } catch {
-            f.body.value = '';
+            titleInput.value = '';
+            bodyInput.value = '';
           }
         }
       }
 
-      const done = openSheet(sheet);
-      if (f.title.value) {
-        f.body.focus();
-        f.body.setSelectionRange(0, 0);
+      initialState = {
+        title: titleInput.value,
+        body: bodyInput.value,
+        sourceId: currentSourceId,
+        folder: currentFolder,
+        status: currentStatus,
+        tags: currentTags,
+      };
+
+      updateBreadcrumbs();
+      if (statusEl) statusEl.textContent = '';
+      if (canvas) canvas.hidden = false;
+      document.body.classList.add('has-writer');
+
+      closeOverlayFn = pushOverlay(
+        () => {
+          if (canvas) canvas.hidden = true;
+          drawer?.classList.remove('open');
+          document.body.classList.remove('has-writer');
+          dismissAutocomplete();
+          closeOverlayFn = null;
+        },
+        { element: canvas, opener: document.activeElement }
+      );
+
+      autoResize();
+
+      if (titleInput.value) {
+        bodyInput.focus();
+        bodyInput.setSelectionRange(bodyInput.value.length, bodyInput.value.length);
       } else {
-        f.title.focus();
+        titleInput.focus();
       }
-      await done;
-      dismissAutocomplete();
     },
   };
 }

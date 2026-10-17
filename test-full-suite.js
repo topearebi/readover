@@ -368,9 +368,17 @@ assert.ok(html.includes('id="diagnostics-sheet"'), 'index.html must include #dia
 assert.ok(html.includes('id="run-diagnostics-btn"'), 'index.html must include #run-diagnostics-btn in settings');
 assert.ok(html.includes('aria-label="Readover, shuffle feed (R)"'), 'Brand button must have descriptive aria-label');
 assert.ok(html.includes('aria-label="Filter reading feed"'), 'Scope button must have descriptive aria-label');
+assert.ok(html.includes('id="sync-dot"') && html.includes('aria-label="Sync status"') && html.includes('title="Sync status"'), 'sync-dot must have accessible aria-label and title');
+assert.ok(html.includes('id="scope-btn" class="scope-chip scope-btn"'), 'scope-btn must have both scope-chip and scope-btn classes');
 assert.ok(html.includes('aria-label="Search all notes (/)"'), 'Search button must have descriptive aria-label');
 assert.ok(html.includes('aria-label="Write a new note (+ or N)"'), 'Write button must have descriptive aria-label');
 assert.ok(html.includes('aria-label="Open settings"'), 'Settings button must have descriptive aria-label');
+assert.ok(html.includes('id="i-drop"'), 'index.html must include i-drop SVG symbol for water droplet');
+assert.ok(html.includes('id="i-clipboard"'), 'index.html must include i-clipboard SVG symbol for publishing copy');
+assert.ok(html.includes('id="i-printer"'), 'index.html must include i-printer SVG symbol for print action');
+assert.ok(html.includes('id="i-graft"'), 'index.html must include i-graft SVG symbol for grafting notes');
+assert.ok(html.includes('id="compose-attach-image"'), 'index.html must include #compose-attach-image button');
+assert.ok(html.includes('id="compose-image-input"'), 'index.html must include #compose-image-input file input');
 
 console.log('✅ DOM entry points, viewport meta, ARIA labels, and noscript fallbacks verified.');
 
@@ -385,6 +393,14 @@ assert.ok(css.includes('.diagnostics-sheet'), 'style.css must define .diagnostic
 assert.ok(css.includes('max-height: 100dvh;'), 'style.css must support 100dvh for mobile sheets');
 assert.ok(css.includes('min-width: 44px;'), 'style.css must enforce >= 44px touch targets on icon-btn');
 assert.ok(css.includes('min-height: 44px;'), 'style.css must enforce >= 44px touch targets on icon-btn');
+assert.ok(css.includes('.scope-chip,') && css.includes('.scope-btn,'), 'style.css must enforce touch targets on scope button');
+assert.ok(css.includes('.card-water-box') && css.includes('display: none !important;'), 'style.css must suppress .card-water-box');
+assert.ok(css.includes('.rail .water-btn'), 'style.css must style .rail .water-btn');
+assert.ok(css.includes('.reader-dock'), 'style.css must define .reader-dock');
+assert.ok(css.includes('.reader-dock-btn'), 'style.css must define .reader-dock-btn');
+assert.ok(css.includes('.menu-divider'), 'style.css must define .menu-divider');
+assert.ok(css.includes('.grow-field-pair'), 'style.css must define .grow-field-pair');
+assert.ok(css.includes('.sheet-action'), 'style.css must style .sheet-action');
 assert.ok(css.includes(':focus-visible'), 'style.css must define high-contrast :focus-visible outline');
 assert.ok(css.includes('@media (prefers-reduced-motion: reduce)'), 'style.css must include prefers-reduced-motion accessibility rules');
 
@@ -430,8 +446,24 @@ assert.ok(typeof opdsMod.parseOpds2Json === 'function', 'src/sources/opds.js mus
 
 const attachMod = await import('./src/attachments.js');
 assert.ok(typeof attachMod.setupImageAttachments === 'function', 'src/attachments.js must export setupImageAttachments');
+assert.ok(typeof attachMod.processAndSaveImage === 'function', 'src/attachments.js must export processAndSaveImage');
+assert.ok(typeof attachMod.insertAtCursor === 'function', 'src/attachments.js must export insertAtCursor');
 
-console.log('✅ Web App Manifest enctype and all core ES module exports verified successfully.');
+const cardMod = await import('./src/ui/card.js');
+assert.ok(typeof cardMod.rail === 'function', 'src/ui/card.js must export rail');
+
+const sheetContent = fs.readFileSync('./src/ui/sheet.js', 'utf8');
+assert.ok(sheetContent.includes('button.sheet-action:not([disabled])'), 'src/ui/sheet.js must query only button.sheet-action:not([disabled])');
+assert.ok(sheetContent.includes('ArrowDown') && sheetContent.includes('ArrowUp'), 'src/ui/sheet.js must support ArrowDown/ArrowUp keyboard navigation');
+
+const readerContent = fs.readFileSync('./src/ui/reader.js', 'utf8');
+assert.ok(readerContent.includes("'aria-label': 'Graft: link to another note'"), 'src/ui/reader.js must use aria-label: Graft: link to another note');
+assert.ok(readerContent.includes("id: 'reader-dock-graft'"), 'src/ui/reader.js must include #reader-dock-graft');
+
+const growthContent = fs.readFileSync('./src/ui/growth.js', 'utf8');
+assert.ok(growthContent.includes("'graft' : 'grafts'"), 'src/ui/growth.js must display graft/grafts');
+
+console.log('✅ Web App Manifest enctype, core ES module exports, and botanical UI consistency verified successfully.');
 
 /* =========================================================================
    Test 11: Static AST Linkage & Complete ES Module Integrity Checker

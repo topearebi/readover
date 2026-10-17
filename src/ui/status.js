@@ -41,8 +41,8 @@ export function initStatus({ openSettings }) {
     if (state === 'idle' && dot.dataset.state === 'done') return;
     dot.dataset.state = state;
     dot.hidden = state === 'idle';
-    dot.title = label;
-    dot.setAttribute('aria-label', label);
+    dot.title = label || 'Sync status';
+    dot.setAttribute('aria-label', label || 'Sync status');
   };
 
   dot.onclick = () => {

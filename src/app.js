@@ -308,7 +308,7 @@ async function emptyCard() {
   if (!sources.length && !deviceNotes) {
     return messageCard(
       'Your notes, one at a time.',
-      "Write down something you want to remember. Readover keeps bringing it back, and shows each note growing as you add thoughts and link it to others. Already keep notes in GitHub or a folder? Connect them instead.",
+      "Write down something you want to remember. Readover keeps bringing it back, and shows each note growing as you add thoughts and graft it to others. Already keep notes in GitHub or a folder? Connect them instead.",
       [
         button('Write your first note', () => compose.open(), true),
         button('Connect GitHub', () => settings.open()),
@@ -472,7 +472,7 @@ async function graftItem(item) {
 async function pruneItem(item, title) {
   const { value } = await buildSheet({
     title: `Prune “${title}”?`,
-    fields: [el('p', { class: 'hint' }, 'It moves to Archive and leaves the feed. Its links stop counting. You can replant it any time.')],
+    fields: [el('p', { class: 'hint' }, 'It moves to Archive and leaves the feed. Its grafts stop counting. You can replant it any time.')],
     submit: 'Prune',
     danger: true,
   });
@@ -547,7 +547,7 @@ const actions = {
     const menuActions = [];
     if (writable && !card._note?.imported) {
       menuActions.push({ id: 'edit', label: 'Edit note', icon: 'pen' });
-      menuActions.push({ id: 'link', label: 'Graft: link to another note', icon: 'open' });
+      menuActions.push({ id: 'link', label: 'Graft: link to another note', icon: 'graft' });
     }
     if (writable) {
       menuActions.push({ id: 'move', label: 'Rename or move', icon: 'feed' });
@@ -633,6 +633,31 @@ const actions = {
     }
   },
 
+  /** Water / Add a thought to the note via a quick single-input sheet */
+  async addThought(card) {
+    const item = card._item;
+    if (!item || item.kind !== 'note') return;
+    const title = card._note?.title || item.title || item.name || 'Note';
+    const input = el('textarea', {
+      rows: '4',
+      name: 'thought',
+      placeholder: 'What do you make of it now? Has anything changed?',
+      required: true,
+      style: 'width:100%; box-sizing:border-box; min-height:90px; resize:vertical; padding:10px 12px; font-family:inherit; font-size:0.95rem;',
+    });
+    const { value } = await buildSheet({
+      title: 'Water: add a thought',
+      fields: [
+        el('p', { class: 'hint' }, `Added under Thoughts in “${title}” with today's date.`),
+        el('label', { class: 'field' }, 'Your thought', input),
+      ],
+      submit: 'Save thought',
+      onOpen: () => setTimeout(() => input.focus(), 50),
+    });
+    if (value !== 'ok' || !input.value.trim()) return;
+    return actions.waterNote(card, input.value.trim());
+  },
+
   /** The growth tag: where the note stands, and Water / Graft / Prune. */
   async growth(card) {
     const item = card._item;
@@ -648,7 +673,7 @@ const actions = {
     };
     const rawText = (await store.content.get(item.key))?.text || '';
     await openGrowthSheet(title, g, {
-      water: async () => card.querySelector('.water-open')?.click(),
+      water: async () => actions.addThought(card),
       graft: run(async () => {
         const updated = await graftItem(item);
         if (updated) {
@@ -1187,6 +1212,7 @@ window.addEventListener('keydown', (e) => {
     o: () => card?._item && actions.open(card),
     e: () => card?._item && actions.editNote?.(card),
     s: () => card?._item && actions.star(card),
+    w: () => card?._item && (actions.addThought ? actions.addThought(card) : actions.water?.(card)),
     x: () => card?._item && actions.hide(card),
     r: () => reload(),
     n: () => compose.open(),

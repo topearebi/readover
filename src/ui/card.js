@@ -67,6 +67,23 @@ function rail(card, item) {
     actions.star(card);
   };
 
+  const waterBtn = item.kind === 'note' && (actions.addThought || actions.waterNote)
+    ? el('button', { class: 'water-btn', title: 'Water: add a thought (W)', 'aria-label': 'Water: add a thought' }, icon('drop'))
+    : null;
+  if (waterBtn) {
+    waterBtn.onclick = (e) => {
+      e.stopPropagation();
+      if (actions.addThought) actions.addThought(card);
+      else if (actions.waterNote) actions.waterNote(card);
+    };
+  }
+
+  const hideBtn = el('button', { title: 'Hide from feed (X)', 'aria-label': 'Hide from feed' }, icon('hide'));
+  hideBtn.onclick = (e) => {
+    e.stopPropagation();
+    actions.hide(card);
+  };
+
   const moreBtn = item.kind === 'note' && actions.cardMenu
     ? el('button', { class: 'more-btn', title: 'Note actions (⋯)', 'aria-label': 'Note actions' }, el('span', { class: 'rail-more-dots', 'aria-hidden': 'true' }, '⋯'))
     : null;
@@ -77,11 +94,6 @@ function rail(card, item) {
     };
   }
 
-  const hideBtn = el('button', { title: 'Hide from feed (X)', 'aria-label': 'Hide from feed' }, icon('hide'));
-  hideBtn.onclick = (e) => {
-    e.stopPropagation();
-    actions.hide(card);
-  };
   const shareBtn = el('button', { title: 'Share', 'aria-label': 'Share' }, icon('share'));
   shareBtn.onclick = (e) => {
     e.stopPropagation();
@@ -94,7 +106,7 @@ function rail(card, item) {
   };
 
   const buttons = item.kind === 'note'
-    ? [starBtn, moreBtn, hideBtn, openBtn].filter(Boolean)
+    ? [starBtn, waterBtn, hideBtn, moreBtn].filter(Boolean)
     : [starBtn, hideBtn, shareBtn, openBtn];
 
   return el('div', { class: 'rail' }, ...buttons);
@@ -110,8 +122,7 @@ function setReason(card, text) {
 }
 
 /**
- * The garden on a card: the growth tag at the top, and a one-line "Water" field at the
- * bottom for adding a thought without leaving the feed.
+ * The garden on a card: the growth tag at the top.
  */
 async function addGrowth(card, item) {
   if (card.classList.contains('card-seed')) return; // inbox seeds have their own Water
@@ -121,40 +132,6 @@ async function addGrowth(card, item) {
   if (!body || !g) return;
   const tag = growthTag(g, () => card._ctx.actions.growth?.(card));
   if (tag) body.prepend(tag);
-  if (g.stage === 'pruned' || !card._ctx.actions.waterNote) return;
-  body.append(waterField(card));
-}
-
-function waterField(card) {
-  const box = el('div', { class: 'water-field' });
-  const closed = () => {
-    const b = el('button', { type: 'button', class: 'water-open' }, glyph('drop'), el('span', {}, 'Water: add a thought…'));
-    b.onclick = (e) => {
-      e.stopPropagation();
-      open();
-    };
-    box.replaceChildren(b);
-  };
-  const open = () => {
-    const input = el('textarea', { rows: '3', 'aria-label': 'Your thought', placeholder: 'What do you make of it now?' });
-    const save = el('button', { type: 'button', class: 'btn btn-primary' }, 'Save thought');
-    const cancel = el('button', { type: 'button', class: 'btn btn-quiet' }, 'Cancel');
-    for (const x of [input, save, cancel]) x.addEventListener('click', (e) => e.stopPropagation());
-    input.addEventListener('keydown', (e) => e.stopPropagation()); // typing isn't a feed shortcut
-    cancel.onclick = closed;
-    save.onclick = async () => {
-      if (!input.value.trim()) return closed();
-      save.disabled = true;
-      const ok = await card._ctx.actions.waterNote(card, input.value);
-      if (ok) {
-        box.replaceChildren(el('p', { class: 'water-done' }, glyph('drop'), 'Watered'));
-      } else save.disabled = false;
-    };
-    box.replaceChildren(input, el('div', { class: 'water-row' }, cancel, save));
-    input.focus();
-  };
-  closed();
-  return box;
 }
 
 /** "[Title](url)" and "[[file|Title]]" read as just "Title" on a card. */
@@ -337,7 +314,7 @@ export function createConnectionCard(pair, actions) {
       { class: 'card-body' },
       el('p', { class: 'card-reason' }, 'Connected'),
       side(pair.a),
-      el('div', { class: 'conn-link', 'aria-hidden': 'true' }, el('i'), 'links to', el('i')),
+      el('div', { class: 'conn-link', 'aria-hidden': 'true' }, el('i'), 'grafts to', el('i')),
       side(pair.b)
     )
   );
@@ -364,7 +341,7 @@ export function createHubCard(hub, actions) {
     el(
       'div',
       { class: 'card-body' },
-      el('p', { class: 'card-reason' }, `Garden Hub · Linked from ${hub.count} notes`),
+      el('p', { class: 'card-reason' }, `Garden Hub · Grafted with ${hub.count} notes`),
       hubBtn,
       el('div', { class: 'conn-link', 'aria-hidden': 'true' }, el('i'), 'referenced by', el('i')),
       el('div', { class: 'conn-hub-list' }, ...backlinkItems)
@@ -493,4 +470,4 @@ export function resolveImages(container, item) {
   };
 }
 
-export { escapeHtml };
+export { escapeHtml, rail };

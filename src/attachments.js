@@ -98,7 +98,8 @@ export function resolveAttachmentSource(noteSource = null) {
 
   // 4. 'note-provider': Use the active note's source if writable
   if (noteSource) {
-    const src = typeof noteSource === 'string' ? store.getSource(noteSource) : noteSource;
+    const sid = typeof noteSource === 'object' && noteSource?.sourceId ? noteSource.sourceId : noteSource;
+    const src = typeof sid === 'string' ? store.getSource(sid) : sid;
     if (src && library.canWrite(src)) return src;
   }
 
@@ -162,7 +163,8 @@ export async function saveAttachment(sourceOrId, relPath, blob) {
 }
 
 /** Insert text at textarea selection */
-function insertAtCursor(textarea, textToInsert) {
+export function insertAtCursor(textarea, textToInsert) {
+  if (!textarea) return;
   const start = textarea.selectionStart ?? textarea.value.length;
   const end = textarea.selectionEnd ?? textarea.value.length;
   const before = textarea.value.slice(0, start);
@@ -175,6 +177,38 @@ function insertAtCursor(textarea, textToInsert) {
 }
 
 /**
+ * Core image processing pipeline:
+ * Compresses file via Canvas WebP, saves to resolved attachment destination,
+ * and inserts clean markdown into textarea at cursor position.
+ */
+export async function processAndSaveImage(file, textarea, getSource = () => null) {
+  if (!file) return null;
+  toast('Compressing image…');
+  try {
+    const { blob, format, size, originalSize } = await compressImage(file);
+    const filename = generateAttachmentFilename('diagram', format);
+    const relPath = `attachments/${filename}`;
+
+    toast('Saving attachment…');
+    const src = typeof getSource === 'function' ? getSource() : getSource;
+    await saveAttachment(src, relPath, blob);
+
+    const markdown = `\n![${file.name.replace(/\.[^.]+$/, '') || 'Diagram'}](${relPath})\n`;
+    if (textarea) {
+      insertAtCursor(textarea, markdown);
+    }
+
+    const kb = Math.round(size / 1024);
+    const origKb = Math.round(originalSize / 1024);
+    toast(`Image compressed and attached (${origKb}KB → ${kb}KB)`);
+    return { relPath, markdown, filename };
+  } catch (err) {
+    toast(`Attachment failed: ${err.message}`);
+    throw err;
+  }
+}
+
+/**
  * Attach clipboard paste and drag-drop handlers to a note textarea.
  * When an image is detected: compresses, stores, and inserts clean markdown `![](attachments/...)`.
  */
@@ -182,24 +216,10 @@ export function setupImageAttachments(textarea, { getSource = () => null, folder
   if (!textarea) return;
 
   async function handleImageFile(file) {
-    toast('Compressing image…');
     try {
-      const { blob, format, size, originalSize } = await compressImage(file);
-      const filename = generateAttachmentFilename('diagram', format);
-      const relPath = `attachments/${filename}`;
-
-      toast('Saving attachment…');
-      const src = getSource();
-      await saveAttachment(src, relPath, blob);
-
-      const markdown = `\n![${file.name.replace(/\.[^.]+$/, '') || 'Diagram'}](${relPath})\n`;
-      insertAtCursor(textarea, markdown);
-
-      const kb = Math.round(size / 1024);
-      const origKb = Math.round(originalSize / 1024);
-      toast(`Image compressed and attached (${origKb}KB → ${kb}KB)`);
+      await processAndSaveImage(file, textarea, getSource);
     } catch (err) {
-      toast(`Attachment failed: ${err.message}`);
+      console.warn('Image processing failed:', err);
     }
   }
 

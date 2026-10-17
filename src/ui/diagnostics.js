@@ -219,9 +219,29 @@ chapter: "Chapter 1"
 
 > Tiny changes compound into remarkable results.
 — [Atomic Habits, p. 42](readover://jump?book=gh%3Auser%2Frepo%7Cbooks%2Fatomic.epub&cfi=epubcfi%28%2F6%2F4%21%2F4%2F2%29)`;
-      const { meta, body } = parseFrontmatter(raw);
-      if (meta.source_type !== 'epub' || meta.page !== 42 || !meta.cfi) {
-        throw new Error('Frontmatter locator contract verification failed');
+      const rawFlat = raw;
+      const rawNested = `---
+book_format: epub
+book_ref: "gh:user/repo|books/atomic.epub"
+book_title: "Atomic Habits"
+locator:
+  type: epubcfi
+  cfi: "epubcfi(/6/4!/4/2)"
+  page: "42"
+  chapter: "Chapter 1"
+---
+
+> Tiny changes compound into remarkable results.`;
+
+      for (const snippet of [rawFlat, rawNested]) {
+        const { meta } = parseFrontmatter(snippet);
+        const sourceType = meta.source_type || meta.book_format || meta.locator?.type;
+        const cfi = meta.cfi || meta.locator?.cfi;
+        const page = meta.page != null ? Number(meta.page) : (meta.locator?.page != null ? Number(meta.locator.page) : null);
+        const validSource = sourceType === 'epub' || sourceType === 'epubcfi' || sourceType === 'pdf' || sourceType === 'pdf_page';
+        if (!validSource || page !== 42 || !cfi) {
+          throw new Error('Frontmatter locator contract verification failed');
+        }
       }
       return { status: 'pass', message: 'Locator metadata contracts validated for cross-device jumping.' };
     });
@@ -263,7 +283,7 @@ chapter: "Chapter 1"
       });
       // 3. Touch targets check
       const smallTouch = [];
-      document.querySelectorAll('.icon-btn, .tab, .scope-chip').forEach((btn) => {
+      document.querySelectorAll('.icon-btn, .tab, .scope-chip, .scope-btn').forEach((btn) => {
         const rect = btn.getBoundingClientRect();
         if (rect.width > 0 && (rect.width < 40 || rect.height < 40)) {
           smallTouch.push(`${btn.id || btn.className} (${Math.round(rect.width)}x${Math.round(rect.height)}px)`);
