@@ -45,7 +45,10 @@ const rememberStatus = (folder, status) => {
   } catch {}
 };
 
+let singletonController = null;
+
 export function initCompose(app) {
+  if (singletonController) return singletonController;
   // Main canvas elements
   const canvas = document.getElementById('writer-canvas');
   const backBtn = document.getElementById('writer-back');
@@ -96,7 +99,10 @@ export function initCompose(app) {
     tags: '',
   };
 
-  const srcOf = (id) => (id === DEVICE_ID ? deviceSource(false) || { id: DEVICE_ID, type: 'device', root: '' } : store.getSource(id));
+  const srcOf = (id) => {
+    if (!id || id === DEVICE_ID) return deviceSource(false) || { id: DEVICE_ID, type: 'device', root: '' };
+    return store.getSource(id) || deviceSource(false) || { id: DEVICE_ID, type: 'device', root: '' };
+  };
   const rootOf = (src) => clean(src?.root);
 
   // Auto-resize textarea to fit content and avoid double scrollbars
@@ -139,7 +145,10 @@ export function initCompose(app) {
       closeOverlayFn = null;
       fn();
     } else {
-      if (canvas) canvas.hidden = true;
+      if (canvas) {
+        canvas.hidden = true;
+        canvas.inert = true;
+      }
       drawer?.classList.remove('open');
       document.body.classList.remove('has-writer');
       dismissAutocomplete();
@@ -147,12 +156,10 @@ export function initCompose(app) {
   }
 
   // Back / Discard with dirty checking
-  if (backBtn) {
-    backBtn.onclick = () => {
-      if (isDirty() && !confirm('Discard your changes?')) return;
-      closeCanvas();
-    };
-  }
+  backBtn?.addEventListener('click', () => {
+    if (isDirty() && !confirm('Discard your changes?')) return;
+    closeCanvas();
+  });
 
   // Auto-save draft for new notes
   let autoSaveTimer = null;
@@ -618,22 +625,22 @@ export function initCompose(app) {
   });
 
   /* ---------- Attach Image Button & File Input ---------- */
-  if (btnImage && imageInput) {
-    btnImage.onclick = () => {
+  btnImage?.addEventListener('click', () => {
+    if (imageInput) {
       imageInput.value = '';
       imageInput.click();
-    };
-    imageInput.onchange = async () => {
-      const file = imageInput.files?.[0];
-      if (!file) return;
-      try {
-        await processAndSaveImage(file, bodyInput, () => currentSourceId);
-        autoResize();
-      } catch (err) {
-        console.error('Failed to attach image:', err);
-      }
-    };
-  }
+    }
+  });
+  imageInput?.addEventListener('change', async () => {
+    const file = imageInput.files?.[0];
+    if (!file) return;
+    try {
+      await processAndSaveImage(file, bodyInput, () => currentSourceId);
+      autoResize();
+    } catch (err) {
+      console.error('Failed to attach image:', err);
+    }
+  });
 
   /* ---------- Inline [[ Autocomplete Engine ---------- */
 
@@ -824,7 +831,7 @@ export function initCompose(app) {
       if (currentExistingItem) {
         // --- EDITING EXISTING NOTE ---
         const item = currentExistingItem;
-        const src = store.getSource(item.sourceId);
+        const src = (!item.sourceId || item.sourceId === DEVICE_ID) ? deviceSource(true) : (store.getSource(item.sourceId) || deviceSource(true));
         const rawOld = await readText(item).catch(() => '');
         const { meta: oldMeta } = parseFrontmatter(rawOld);
 
@@ -843,7 +850,8 @@ export function initCompose(app) {
         const updatedText = `${buildFrontmatter(patch)}\n${body}\n`;
         let savedItem = item;
 
-        if (clean(folder) !== clean(item.folder)) {
+        const oldFolder = item.folder != null ? item.folder : (item.path?.includes('/') ? item.path.slice(0, item.path.lastIndexOf('/')) : '');
+        if (clean(folder) !== clean(oldFolder)) {
           const newPath = [folder, basename(item.path)].filter(Boolean).join('/');
           savedItem = await moveNote(item, newPath, {
             message: `Readover: move ${item.path} to ${newPath}`,
@@ -949,7 +957,7 @@ export function initCompose(app) {
     }
   });
 
-  return {
+  const controller = {
     async open(presets = {}) {
       dismissAutocomplete();
       drawer?.classList.remove('open');
@@ -964,16 +972,28 @@ export function initCompose(app) {
 
       if (currentExistingItem) {
         // Mode: Edit existing note
-        currentSourceId = currentExistingItem.sourceId;
-        currentFolder = currentExistingItem.folder != null ? clean(currentExistingItem.folder) : '';
+        currentSourceId = currentExistingItem.sourceId || currentExistingItem.source || DEVICE_ID;
+        currentFolder = currentExistingItem.folder != null
+          ? clean(currentExistingItem.folder)
+          : (currentExistingItem.path?.includes('/') ? clean(currentExistingItem.path.slice(0, currentExistingItem.path.lastIndexOf('/'))) : '');
 
-        const rawText = await readText(currentExistingItem).catch(() => '');
+        let rawText = '';
+        try {
+          rawText = await readText(currentExistingItem);
+        } catch (err) {
+          console.warn('Could not read existing note text', err);
+          rawText = currentExistingItem.text || '';
+        }
         const { meta, body } = parseFrontmatter(rawText);
 
-        titleInput.value = meta.title || resolveTitle(meta, body, currentExistingItem.path) || '';
-        bodyInput.value = body || '';
-        currentTags = Array.isArray(meta.tags) ? meta.tags.join(', ') : meta.tags || '';
-        currentStatus = meta.status ?? '';
+        if (titleInput) {
+          titleInput.value = meta?.title || resolveTitle(meta, body, currentExistingItem.path || '') || '';
+        }
+        if (bodyInput) {
+          bodyInput.value = body || '';
+        }
+        currentTags = Array.isArray(meta?.tags) ? meta.tags.join(', ') : meta?.tags || '';
+        currentStatus = meta?.status ?? '';
       } else {
         // Mode: New note
         let targetSourceId = null;
@@ -999,47 +1019,49 @@ export function initCompose(app) {
         currentTags = Array.isArray(presets.tags) ? presets.tags.join(', ') : presets.tags || '';
 
         if (presets.title) {
-          titleInput.value = presets.title;
+          if (titleInput) titleInput.value = presets.title;
         } else {
-          titleInput.value = '';
+          if (titleInput) titleInput.value = '';
         }
 
         if (presets.body) {
-          bodyInput.value = presets.body;
+          if (bodyInput) bodyInput.value = presets.body;
         } else if (presets.quote || presets.thought || presets.sourceItem) {
           const relatedLink = presets.sourceItem
             ? wikiLink(presets.sourceItem.path, presets.sourceTitle || presets.title)
             : '';
-          bodyInput.value = formatGardenNoteBody({
-            thought: presets.thought,
-            quote: presets.quote,
-            attribution: presets.attribution,
-            relatedLink,
-          });
+          if (bodyInput) {
+            bodyInput.value = formatGardenNoteBody({
+              thought: presets.thought,
+              quote: presets.quote,
+              attribution: presets.attribution,
+              relatedLink,
+            });
+          }
         } else {
           try {
             const draft = JSON.parse(localStorage.getItem('readover.draft') || 'null');
             if (draft) {
-              titleInput.value = draft.title || '';
-              bodyInput.value = draft.body || '';
+              if (titleInput) titleInput.value = draft.title || '';
+              if (bodyInput) bodyInput.value = draft.body || '';
               currentTags = draft.tags || '';
               if (draft.folder != null) currentFolder = draft.folder;
               if (draft.status != null) currentStatus = draft.status;
               if (draft.sourceId && validIds.has(draft.sourceId)) currentSourceId = draft.sourceId;
             } else {
-              titleInput.value = '';
-              bodyInput.value = '';
+              if (titleInput) titleInput.value = '';
+              if (bodyInput) bodyInput.value = '';
             }
           } catch {
-            titleInput.value = '';
-            bodyInput.value = '';
+            if (titleInput) titleInput.value = '';
+            if (bodyInput) bodyInput.value = '';
           }
         }
       }
 
       initialState = {
-        title: titleInput.value,
-        body: bodyInput.value,
+        title: titleInput ? titleInput.value : '',
+        body: bodyInput ? bodyInput.value : '',
         sourceId: currentSourceId,
         folder: currentFolder,
         status: currentStatus,
@@ -1048,12 +1070,18 @@ export function initCompose(app) {
 
       updateBreadcrumbs();
       if (statusEl) statusEl.textContent = '';
-      if (canvas) canvas.hidden = false;
+      if (canvas) {
+        canvas.hidden = false;
+        canvas.inert = false;
+      }
       document.body.classList.add('has-writer');
 
       closeOverlayFn = pushOverlay(
         () => {
-          if (canvas) canvas.hidden = true;
+          if (canvas) {
+            canvas.hidden = true;
+            canvas.inert = true;
+          }
           drawer?.classList.remove('open');
           document.body.classList.remove('has-writer');
           dismissAutocomplete();
@@ -1064,12 +1092,20 @@ export function initCompose(app) {
 
       autoResize();
 
-      if (titleInput.value) {
-        bodyInput.focus();
-        bodyInput.setSelectionRange(bodyInput.value.length, bodyInput.value.length);
-      } else {
-        titleInput.focus();
-      }
+      requestAnimationFrame(() => {
+        const bodyTextarea = canvas ? canvas.querySelector('.writer-body, textarea[name="body"]') : bodyInput;
+        if (bodyTextarea) {
+          bodyTextarea.focus();
+          // Ensure selection is placed properly
+          if (typeof bodyTextarea.setSelectionRange === 'function') {
+            bodyTextarea.setSelectionRange(bodyTextarea.value.length, bodyTextarea.value.length);
+          }
+        }
+      });
     },
   };
+
+  singletonController = controller;
+  if (canvas) canvas._composeController = controller;
+  return controller;
 }

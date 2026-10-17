@@ -6,6 +6,7 @@ import * as store from '../store.js';
 import * as library from '../library.js';
 import { loadCatalogFeed, makeSafeFilename, opdsFetch, proxyUrl, PRESET_CATALOGS } from '../sources/opds.js';
 import { getCover } from '../covers.js';
+import { saveBookToVault } from '../insights.js';
 import { el, icon, openSheet, toast, pushOverlay } from './overlay.js';
 
 // Safe catalog helpers
@@ -425,59 +426,14 @@ export function openOpdsBrowser(app, options = {}) {
       const mime = acquisition.format === 'pdf' ? 'application/pdf' : 'application/epub+zip';
       const blob = new Blob([arrayBuf], { type: mime });
 
-      // 2. Identify destination source (dedicated Books library, S3 archive, Dropbox, or device)
-      const sources = store.getSources();
-      const prefs = store.getPrefs();
-      let targetSource = sources.find((s) => s.id === prefs.booksHome && library.canWrite(s)) ||
-                         sources.find((s) => (s.type === 's3' || s.type === 'r2') && library.canWrite(s)) ||
-                         sources.find((s) => (s.type === 'dropbox' || s.type === 'webdav' || s.type === 'github') && library.canWrite(s)) ||
-                         library.deviceSource(true);
-
       const filename = makeSafeFilename(book.author, book.title, acquisition.format);
-      const root = String(targetSource.root || '').replace(/^\/+|\/+$/g, '');
-      const path = [root, filename].filter(Boolean).join('/');
-      const itemKey = store.keyOf(targetSource.id, path);
-
-      // 3. Save binary blob into library
-      const item = {
-        key: itemKey,
-        sourceId: targetSource.id,
-        path,
-        folder: root,
-        name: filename,
-        kind: acquisition.format === 'pdf' ? 'pdf' : 'epub',
-        sha: `opds:${Date.now()}`,
-        addedAt: Date.now(),
-      };
-
-      await store.items.put(item);
-      await store.blobs.put({
-        key: itemKey,
-        sourceId: targetSource.id,
-        sha: item.sha,
+      const item = await saveBookToVault({
         blob,
+        filename,
+        title: book.title,
+        author: book.author,
+        format: acquisition.format,
       });
-
-      // Try uploading to remote storage if connected
-      try {
-        if (targetSource.type === 'dropbox') {
-          const { upload } = await import('../sources/dropbox.js');
-          await upload(targetSource, path, blob);
-        } else if (targetSource.type === 'webdav') {
-          const { putBlob } = await import('../sources/webdav.js');
-          await putBlob(targetSource, path, blob);
-        } else if (targetSource.type === 's3' || targetSource.type === 'r2') {
-          const { putBlob } = await import('../sources/s3.js');
-          await putBlob(targetSource, path, blob);
-        }
-      } catch (uploadErr) {
-        console.warn('Saved on device, cloud upload pending:', uploadErr);
-      }
-
-      // 4. Pre-generate cover thumbnail
-      try {
-        await getCover(item);
-      } catch {}
 
       downloading.delete(book.id);
       acquiredKeys.add(filename.toLowerCase());

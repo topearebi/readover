@@ -49,5 +49,23 @@
       "text": "text",
       "url": "url"
     }
-  }
+  },
+  "file_handlers": [
+    {
+      "action": "./",
+      "name": "Readover Reader",
+      "icons": [
+        {
+          "src": "./icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ],
+      "accept": {
+        "application/epub+zip": [".epub"],
+        "application/pdf": [".pdf"],
+        "text/markdown": [".md", ".markdown", ".txt"]
+      }
+    }
+  ]
 }

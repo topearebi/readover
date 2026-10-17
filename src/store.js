@@ -268,18 +268,70 @@ const DEFAULT_PREFS = {
   dataHome: '',
   corsProxyUrl: '',
   dropboxAppKey: '',
-  acquiredBooksHome: '',
-  attachmentsDestination: 'note-provider', // 'note-provider' | 's3' | 'dropbox' | 'device'
+  notesHome: '', // Primary library for .md notes/journals
+  newNotesHome: '', // Legacy alias for notesHome
+  booksHome: '', // Archive for acquired EPUBs, PDFs, and books
+  acquiredBooksHome: '', // Legacy alias for booksHome
+  attachmentsVault: 'same-as-note', // 'same-as-note' | 's3' | 'dropbox' | 'device'
+  attachmentsDestination: 'note-provider', // Legacy alias for attachmentsVault
+  highlightsFolder: 'Highlights',
+  attachmentsFolder: 'attachments',
+  readerTheme: 'paper', // 'paper' | 'sepia' | 'dark' | 'night'
+  readerFont: 'serif', // 'serif' | 'sans'
+  readerLineHeight: 'normal', // 'compact' | 'normal' | 'relaxed'
+  readerFontSize: 100, // percentage (80 - 180)
+  pdfFit: 'width', // 'width' | 'page' | 'custom'
 };
 /** Preferences that follow you between devices. The rest (view filters, data home) are per device. */
-export const SYNCED_PREFS = ['theme', 'highlightMix', 'corsProxyUrl', 'dropboxAppKey', 'acquiredBooksHome', 'attachmentsDestination'];
+export const SYNCED_PREFS = [
+  'theme',
+  'highlightMix',
+  'corsProxyUrl',
+  'dropboxAppKey',
+  'notesHome',
+  'newNotesHome',
+  'booksHome',
+  'acquiredBooksHome',
+  'attachmentsVault',
+  'attachmentsDestination',
+  'highlightsFolder',
+  'attachmentsFolder',
+  'readerTheme',
+  'readerFont',
+  'readerLineHeight',
+  'readerFontSize',
+  'pdfFit',
+];
 export function getPrefs() {
-  return { ...DEFAULT_PREFS, ...readJSON(LS.prefs, {}) };
+  const p = { ...DEFAULT_PREFS, ...readJSON(LS.prefs, {}) };
+  if (!p.notesHome && p.newNotesHome) p.notesHome = p.newNotesHome;
+  if (!p.booksHome && p.acquiredBooksHome) p.booksHome = p.acquiredBooksHome;
+  if (p.attachmentsVault === 'same-as-note' && p.attachmentsDestination && p.attachmentsDestination !== 'note-provider') {
+    p.attachmentsVault = p.attachmentsDestination;
+  }
+  return p;
 }
 export function setPrefs(patch, { fromSync = false } = {}) {
-  const next = { ...getPrefs(), ...patch };
+  const normalized = { ...patch };
+  if ('notesHome' in normalized && !('newNotesHome' in normalized)) {
+    normalized.newNotesHome = normalized.notesHome;
+  } else if ('newNotesHome' in normalized && !('notesHome' in normalized)) {
+    normalized.notesHome = normalized.newNotesHome;
+  }
+  if ('booksHome' in normalized && !('acquiredBooksHome' in normalized)) {
+    normalized.acquiredBooksHome = normalized.booksHome;
+  } else if ('acquiredBooksHome' in normalized && !('booksHome' in normalized)) {
+    normalized.booksHome = normalized.acquiredBooksHome;
+  }
+  if ('attachmentsVault' in normalized && !('attachmentsDestination' in normalized)) {
+    normalized.attachmentsDestination = normalized.attachmentsVault === 'same-as-note' ? 'note-provider' : normalized.attachmentsVault;
+  } else if ('attachmentsDestination' in normalized && !('attachmentsVault' in normalized)) {
+    normalized.attachmentsVault = normalized.attachmentsDestination === 'note-provider' ? 'same-as-note' : normalized.attachmentsDestination;
+  }
+
+  const next = { ...getPrefs(), ...normalized };
   writeJSON(LS.prefs, next);
-  const synced = Object.keys(patch).filter((k) => SYNCED_PREFS.includes(k));
+  const synced = Object.keys(normalized).filter((k) => SYNCED_PREFS.includes(k));
   if (synced.length && !fromSync) {
     const times = readJSON('readover.prefsAt', {});
     for (const k of synced) times[k] = Date.now();

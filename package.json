@@ -10,7 +10,7 @@
     "test": "node test-full-suite.js && node test-cold-boot.js",
     "test:ast": "node test-ast-linkage.js",
     "test:boot": "node test-cold-boot.js",
-    "lint": "node -e \"console.log('No lint errors')\""
+    "lint": "node lint-no-undef.js"
   },
   "dependencies": {
     "express": "^4.21.2"

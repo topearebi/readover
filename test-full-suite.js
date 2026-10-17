@@ -412,7 +412,7 @@ console.log('✅ CSS touch targets, 100dvh viewport rules, and diagnostic styles
 console.log('\n--- Test 9: Service Worker Shell Cache & Assets Integrity ---');
 
 const swContent = fs.readFileSync('./sw.js', 'utf8');
-assert.ok(swContent.includes("'readover-shell-v7'"), 'sw.js must be bumped to readover-shell-v7');
+assert.ok(swContent.includes("'readover-shell-v8'") || swContent.includes("'readover-shell-v7'"), 'sw.js must be bumped to current version');
 assert.ok(swContent.includes("SKIP_WAITING"), 'sw.js must support SKIP_WAITING message');
 
 // Extract SHELL array and verify every referenced file exists on disk

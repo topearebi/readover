@@ -307,7 +307,9 @@ async function snapshot() {
   return { state, seen, progress, prefs: { fields, libraries: libs }, keyById, sources };
 }
 
-const round = (n) => Math.round((n || 0) * 10000) / 10000;
+function round(n) {
+  return Math.round((n || 0) * 10000) / 10000;
+}
 
 /* ---------------- Merging ---------------- */
 

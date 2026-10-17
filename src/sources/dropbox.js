@@ -13,7 +13,63 @@ const dbxPath = (path) => {
   return p ? `/${p}` : '';
 };
 
-async function dbxRpc(src, endpoint, body = {}) {
+let refreshPromise = null;
+
+export async function refreshAccessToken(src) {
+  if (!src?.refreshToken) return null;
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async () => {
+    let resolvedClientId = src.clientId;
+    if (!resolvedClientId && typeof localStorage !== 'undefined') {
+      try {
+        const prefs = JSON.parse(localStorage.getItem('readover.prefs') || '{}');
+        resolvedClientId = prefs.dropboxAppKey || '';
+      } catch {}
+    }
+    if (!resolvedClientId) return null;
+
+    try {
+      const params = new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: src.refreshToken,
+        client_id: resolvedClientId,
+      });
+
+      const res = await fetch('https://api.dropboxapi.com/oauth2/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString(),
+      });
+
+      if (!res.ok) return null;
+
+      const data = await res.json();
+      if (data.access_token) {
+        src.token = data.access_token;
+        if (data.refresh_token) {
+          src.refreshToken = data.refresh_token;
+        }
+        if (typeof localStorage !== 'undefined') {
+          try {
+            const { saveSource } = await import('../store.js');
+            saveSource(src);
+          } catch {}
+        }
+        return data.access_token;
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
+async function dbxRpc(src, endpoint, body = {}, retried = false) {
   const token = tokenFor(src);
   if (!token) throw new Error('Dropbox is not connected. Add an access token in Settings.');
 
@@ -31,7 +87,15 @@ async function dbxRpc(src, endpoint, body = {}) {
     throw new Error('Offline, or Dropbox could not be reached.');
   }
 
-  if (res.status === 401) throw new Error('Dropbox rejected the token or session expired. Reconnect in Settings.');
+  if (res.status === 401) {
+    if (!retried && src?.refreshToken) {
+      const newToken = await refreshAccessToken(src);
+      if (newToken) {
+        return dbxRpc(src, endpoint, body, true);
+      }
+    }
+    throw new Error('Dropbox rejected the token or session expired. Reconnect in Settings.');
+  }
   if (res.status === 429) throw new Error('Dropbox rate limit reached. Please wait a moment.');
 
   if (!res.ok) {
@@ -95,7 +159,7 @@ export async function listFiles(src) {
   return files;
 }
 
-export async function readText(src, item) {
+export async function readText(src, item, retried = false) {
   const token = tokenFor(src);
   if (!token) throw new Error('Dropbox is not connected.');
 
@@ -110,6 +174,13 @@ export async function readText(src, item) {
     },
   });
 
+  if (res.status === 401 && !retried && src?.refreshToken) {
+    const newToken = await refreshAccessToken(src);
+    if (newToken) {
+      return readText(src, item, true);
+    }
+  }
+
   if (!res.ok) {
     if (res.status === 409) {
       const err = new Error('File not found on Dropbox.');
@@ -122,7 +193,7 @@ export async function readText(src, item) {
   return res.text();
 }
 
-export async function readBlob(src, item, type = '') {
+export async function readBlob(src, item, type = '', retried = false) {
   const token = tokenFor(src);
   if (!token) throw new Error('Dropbox is not connected.');
 
@@ -138,6 +209,13 @@ export async function readBlob(src, item, type = '') {
     },
   });
 
+  if (res.status === 401 && !retried && src?.refreshToken) {
+    const newToken = await refreshAccessToken(src);
+    if (newToken) {
+      return readBlob(src, item, type, true);
+    }
+  }
+
   if (!res.ok) throw new Error(`Dropbox download failed (${res.status})`);
   const buf = await res.arrayBuffer();
   return new Blob([buf], { type });
@@ -147,7 +225,7 @@ export async function readBlob(src, item, type = '') {
  * Binary attachment upload for images, audio, and documents.
  * Endpoint: https://content.dropboxapi.com/2/files/upload
  */
-export async function putAttachment(src, relPath, blob) {
+export async function putAttachment(src, relPath, blob, retried = false) {
   const token = tokenFor(src);
   if (!token) throw new Error('Dropbox is not connected. Add an access token in Settings.');
 
@@ -170,6 +248,13 @@ export async function putAttachment(src, relPath, blob) {
     body: blob,
   });
 
+  if (res.status === 401 && !retried && src?.refreshToken) {
+    const newToken = await refreshAccessToken(src);
+    if (newToken) {
+      return putAttachment(src, relPath, blob, true);
+    }
+  }
+
   if (!res.ok) {
     let msg = `Dropbox upload failed (${res.status})`;
     try {
@@ -185,7 +270,7 @@ export async function putAttachment(src, relPath, blob) {
 
 export const upload = putAttachment;
 
-export async function putFile(src, path, textOrBlob) {
+export async function putFile(src, path, textOrBlob, retried = false) {
   if (textOrBlob instanceof Blob) {
     const res = await putAttachment(src, path, textOrBlob);
     return res.rev;
@@ -211,6 +296,13 @@ export async function putFile(src, path, textOrBlob) {
     },
     body: bytes,
   });
+
+  if (res.status === 401 && !retried && src?.refreshToken) {
+    const newToken = await refreshAccessToken(src);
+    if (newToken) {
+      return putFile(src, path, textOrBlob, true);
+    }
+  }
 
   if (!res.ok) {
     let msg = `Dropbox upload failed (${res.status})`;

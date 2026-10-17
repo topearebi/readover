@@ -1,6 +1,7 @@
 // The feed: a fresh random order on every open, weighted so that things you
 // haven't seen in a long time (or ever) come up more often.
 import { items, state } from './store.js';
+import { isBook } from './library.js';
 import { inboxState } from './insights.js';
 import { garden, feedWeight } from './garden.js';
 import { passes } from './filters.js';
@@ -47,6 +48,7 @@ export async function buildQueue({ sourceIds, folder = '', filter = 'all', growt
   const now = Date.now();
 
   let pool = allItems.filter((it) => {
+    if (it.kind === 'blob') return false;
     if (!scope.has(it.sourceId)) return false;
     if (folder && !(it.folder === folder || it.folder.startsWith(`${folder}/`))) return false;
     const st = states.get(it.key);
@@ -54,7 +56,7 @@ export async function buildQueue({ sourceIds, folder = '', filter = 'all', growt
     if (st?.hidden) return false;
     if (filter === 'starred') return Boolean(st?.starred);
     if (filter === 'notes') return it.kind === 'note';
-    if (filter === 'books') return it.kind !== 'note';
+    if (filter === 'books') return isBook(it);
     return true;
   });
 
@@ -105,7 +107,9 @@ function snapshotOnce() {
   return learnSnap.data;
 }
 
-const seenToday = (st, now) => st?.lastSeen && now - st.lastSeen < DAY;
+function seenToday(st, now) {
+  return Boolean(st?.lastSeen && now - st.lastSeen < DAY);
+}
 export function foldersFor(allItems, sourceIds) {
   const scope = new Set(sourceIds);
   const set = new Set();

@@ -5,6 +5,7 @@
 import * as store from './store.js';
 import * as library from './library.js';
 import { toast } from './ui/overlay.js';
+import { attachmentsFolder } from './insights.js';
 
 const MAX_DIMENSION = 1600;
 const WEBP_QUALITY = 0.8;
@@ -76,7 +77,7 @@ export function generateAttachmentFilename(base = 'image', format = 'webp') {
  */
 export function resolveAttachmentSource(noteSource = null) {
   const prefs = store.getPrefs();
-  const destType = prefs.attachmentsDestination || 'note-provider';
+  const destType = prefs.attachmentsVault || prefs.attachmentsDestination || 'same-as-note';
   const sources = store.getSources();
 
   // 1. If designated as dropbox
@@ -86,7 +87,7 @@ export function resolveAttachmentSource(noteSource = null) {
   }
 
   // 2. If designated as s3 or r2
-  if (destType === 's3') {
+  if (destType === 's3' || destType === 'r2') {
     const s3Src = sources.find((s) => (s.type === 's3' || s.type === 'r2') && library.canWrite(s));
     if (s3Src) return s3Src;
   }
@@ -96,7 +97,7 @@ export function resolveAttachmentSource(noteSource = null) {
     return library.deviceSource(true);
   }
 
-  // 4. 'note-provider': Use the active note's source if writable
+  // 4. 'same-as-note' or 'note-provider': Use the active note's source if writable
   if (noteSource) {
     const sid = typeof noteSource === 'object' && noteSource?.sourceId ? noteSource.sourceId : noteSource;
     const src = typeof sid === 'string' ? store.getSource(sid) : sid;
@@ -187,7 +188,8 @@ export async function processAndSaveImage(file, textarea, getSource = () => null
   try {
     const { blob, format, size, originalSize } = await compressImage(file);
     const filename = generateAttachmentFilename('diagram', format);
-    const relPath = `attachments/${filename}`;
+    const folder = attachmentsFolder();
+    const relPath = folder ? `${folder}/${filename}` : filename;
 
     toast('Saving attachment…');
     const src = typeof getSource === 'function' ? getSource() : getSource;

@@ -6,37 +6,30 @@ import { loadFoliate } from '../lib/vendor.js';
 import { progress, saveProgress } from '../store.js';
 import { pushOverlay, el, icon, toast, openSheet } from '../ui/overlay.js';
 import { askNote } from '../ui/highlight-note.js';
+import {
+  getReaderAppearance,
+  saveReaderAppearance,
+  buildBookCSS,
+  createAppearancePopover,
+  THEMES,
+} from '../ui/appearance.js';
+import { showStagingBanner } from '../ui/staging-banner.js';
 
-const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 const fontUrl = new URL('../../vendor/literata-5.2.5/literata-latin-wght-normal.woff2', import.meta.url).href;
 const fontItalicUrl = new URL('../../vendor/literata-5.2.5/literata-latin-wght-italic.woff2', import.meta.url).href;
-
-function bookCSS(size) {
-  return `
-    @font-face { font-family: 'Literata'; src: url('${fontUrl}') format('woff2'); font-weight: 200 900; }
-    @font-face { font-family: 'Literata'; src: url('${fontItalicUrl}') format('woff2'); font-weight: 200 900; font-style: italic; }
-    html { color-scheme: ${document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')}; }
-    html, body { background: ${css('--paper')} !important; color: ${css('--ink')} !important; }
-    body { font-family: 'Literata', Georgia, serif !important; font-size: ${size}% !important; }
-    p, li, blockquote, dd { line-height: 1.65; hanging-punctuation: allow-end last; widows: 2; }
-    p, li, blockquote, dd, span, div, h1, h2, h3, h4 { color: inherit !important; }
-    a:link, a:visited { color: ${css('--action')} !important; }
-    img, svg { max-width: 100%; height: auto; }
-    pre { white-space: pre-wrap !important; }
-    ::selection { background: ${css('--marker')}; color: ${css('--marker-ink')}; }
-  `;
-}
 
 /**
  * @param opts {
  *   at?: string                  open at this CFI (e.g. from a highlight card)
  *   onHighlight?(h) → Promise<{ where, file }>   h = { text, comment, chapter, page, at, title }  (saved as an insight)
+ *   stagingBanner?: { file: File, type: 'book'|'note', onCommit: Function, onDismiss?: Function }
  * }
  */
 export async function openBook(item, blob, title, opts = {}) {
   const back = el('button', { class: 'icon-btn', 'aria-label': 'Back' }, icon('back'));
   const status = el('span', { class: 'status' }, 'Opening…');
   const contentsBtn = el('button', { class: 'btn btn-quiet', hidden: true }, 'Contents');
+  const aaBtn = el('button', { class: 'icon-btn appearance-btn', 'aria-label': 'Reading appearance', title: 'Appearance' }, el('span', { class: 'btn-aa' }, 'Aa'));
   const smaller = el('button', { class: 'icon-btn', 'aria-label': 'Smaller text' }, 'A−');
   const larger = el('button', { class: 'icon-btn', 'aria-label': 'Larger text' }, 'A+');
   const area = el('div', { class: 'epub-area' });
@@ -46,12 +39,20 @@ export async function openBook(item, blob, title, opts = {}) {
   const root = el(
     'div',
     { class: 'reader', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
-    el('div', { class: 'reader-bar' }, back, el('span', { class: 'title' }, title), status, contentsBtn, smaller, larger),
+    el('div', { class: 'reader-bar' }, back, el('span', { class: 'title' }, title), status, contentsBtn, aaBtn, smaller, larger),
     stage
   );
   document.body.append(root);
 
+  if (opts.stagingBanner) {
+    showStagingBanner({ ...opts.stagingBanner, container: root });
+  }
+
+  const appearance = getReaderAppearance();
+  root.dataset.readerTheme = appearance.theme;
+
   let view = null;
+  let popover = null;
   const onKey = (e) => {
     if (!view || e.target.closest?.('textarea, input')) return;
     if (['ArrowRight', 'PageDown'].includes(e.key)) view.goRight();
@@ -59,6 +60,7 @@ export async function openBook(item, blob, title, opts = {}) {
   };
   window.addEventListener('keydown', onKey);
   const close = pushOverlay(() => {
+    popover?.remove();
     window.removeEventListener('keydown', onKey);
     try {
       view?.close();
@@ -83,23 +85,65 @@ export async function openBook(item, blob, title, opts = {}) {
     return;
   }
 
-  let fontSize = Number(localStorage.getItem('readover.bookFont')) || 100;
-  const applyStyles = () => view.renderer.setStyles?.(bookCSS(fontSize));
+  const applyStyles = () => {
+    root.dataset.readerTheme = appearance.theme;
+    const styles = buildBookCSS({
+      fontSize: appearance.fontSize,
+      theme: appearance.theme,
+      font: appearance.font,
+      lineHeight: appearance.lineHeight,
+      fontUrl,
+      fontItalicUrl,
+    });
+    view.renderer.setStyles?.(styles);
+  };
+
   view.renderer.setAttribute('flow', 'paginated');
   view.renderer.setAttribute('gap', '6%');
-  view.renderer.setAttribute('max-inline-size', '38em');
+  view.renderer.setAttribute('max-inline-size', '44em');
   view.renderer.setAttribute('animated', '');
   applyStyles();
+
   smaller.onclick = () => {
-    fontSize = Math.max(80, fontSize - 10);
-    localStorage.setItem('readover.bookFont', fontSize);
+    appearance.fontSize = Math.max(80, appearance.fontSize - 10);
+    saveReaderAppearance({ readerFontSize: appearance.fontSize, fontSize: appearance.fontSize });
     applyStyles();
   };
   larger.onclick = () => {
-    fontSize = Math.min(180, fontSize + 10);
-    localStorage.setItem('readover.bookFont', fontSize);
+    appearance.fontSize = Math.min(180, appearance.fontSize + 10);
+    saveReaderAppearance({ readerFontSize: appearance.fontSize, fontSize: appearance.fontSize });
     applyStyles();
   };
+
+  aaBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (popover) {
+      popover.remove();
+      popover = null;
+      return;
+    }
+    popover = createAppearancePopover({
+      type: 'epub',
+      anchor: aaBtn,
+      state: appearance,
+      onChange: (changes) => {
+        Object.assign(appearance, changes);
+        saveReaderAppearance({
+          readerTheme: appearance.theme,
+          readerFont: appearance.font,
+          readerLineHeight: appearance.lineHeight,
+          readerFontSize: appearance.fontSize,
+          fontSize: appearance.fontSize,
+        });
+        applyStyles();
+      },
+      onClose: () => {
+        popover = null;
+      },
+    });
+    root.append(popover);
+  };
+
   prev.onclick = () => view.goLeft();
   next.onclick = () => view.goRight();
 
@@ -111,11 +155,13 @@ export async function openBook(item, blob, title, opts = {}) {
   }
 
   // Highlights drawn in the book
-  const marker = css('--marker');
   view.addEventListener('create-overlay', () => {
     for (const h of highlights) view.addAnnotation({ value: h.cfi }).catch(() => {});
   });
-  view.addEventListener('draw-annotation', (e) => e.detail.draw(Overlayer.highlight, { color: marker }));
+  view.addEventListener('draw-annotation', (e) => {
+    const th = THEMES[appearance.theme] || THEMES.paper;
+    e.detail.draw(Overlayer.highlight, { color: th.marker });
+  });
   view.addEventListener('show-annotation', (e) => {
     const h = highlights.find((x) => x.cfi === e.detail.value);
     if (h) toast(h.comment ? `Your note: ${h.comment}` : 'Highlighted');

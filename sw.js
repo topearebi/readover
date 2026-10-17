@@ -7,7 +7,7 @@
 //   URLs include the version, so the file at a given URL never changes.
 // - GitHub API and raw files: never touched here; the app caches those itself.
 
-const SHELL_CACHE = 'readover-shell-v7';
+const SHELL_CACHE = 'readover-shell-v8';
 const VENDOR_CACHE = 'readover-vendor-v2';
 const NETWORK_TIMEOUT = 1500; // ms before falling back to the cached copy
 const SLOW_BACKOFF = 30000; // after a timeout, use the cache first for this long
@@ -39,6 +39,7 @@ const SHELL = [
   './src/markdown.js',
   './src/notefile.js',
   './src/notes-index.js',
+  './src/observatory.js',
   './src/relink.js',
   './src/lib/gitsha.js',
   './src/lib/idb.js',
@@ -67,6 +68,8 @@ const SHELL = [
   './src/ui/shelf.js',
   './src/ui/capture.js',
   './src/ui/types.js',
+  './src/ui/appearance.js',
+  './src/ui/observatory.js',
   './src/viewers/book.js',
   './src/viewers/pdf.js',
 ];

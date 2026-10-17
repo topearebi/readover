@@ -1,0 +1,16 @@
+{
+  "env": {
+    "browser": true,
+    "es2024": true,
+    "serviceworker": true,
+    "worker": true
+  },
+  "parserOptions": {
+    "ecmaVersion": "latest",
+    "sourceType": "module"
+  },
+  "rules": {
+    "no-undef": "error"
+  }
+}
+

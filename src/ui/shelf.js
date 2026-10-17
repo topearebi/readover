@@ -1,8 +1,7 @@
-// The Shelf: every book across your libraries. Books you're reading come first,
-// most recently read first, so switching between titles is one tap.
 import * as store from '../store.js';
+import { isBook } from '../library.js';
 import { getCover } from '../covers.js';
-import { el } from './overlay.js';
+import { el, icon } from './overlay.js';
 
 const tones = ['#2e5b4f', '#5a4632', '#3b4a63', '#6b3b3b', '#4a5530', '#40384f'];
 const toneFor = (s) => {
@@ -51,7 +50,7 @@ export function initShelf(app) {
 
   async function render() {
     const hiddenOrGone = new Set((await store.state.all()).filter((s) => s.hidden).map((s) => s.key));
-    const books = (await store.items.all()).filter((i) => i.kind !== 'note' && !hiddenOrGone.has(i.key) && store.getSource(i.sourceId));
+    const books = (await store.items.all()).filter((i) => isBook(i) && !hiddenOrGone.has(i.key) && store.getSource(i.sourceId));
     const prog = new Map((await store.progress.all()).map((p) => [p.key, p]));
     const meta = new Map((await store.thumbs.all()).map((t) => [t.key, t]));
 
@@ -95,6 +94,15 @@ export function initShelf(app) {
       return btn;
     };
 
+    const observatoryBtn = el('button', { type: 'button', class: 'btn btn-quiet shelf-observatory-btn', title: 'Open Knowledge Observatory' },
+      icon('observatory', 'i i-sm'),
+      el('span', {}, 'Observatory')
+    );
+    observatoryBtn.onclick = async () => {
+      const { openObservatory } = await import('./observatory.js');
+      openObservatory(app);
+    };
+
     const opdsBtn = el('button', { type: 'button', class: 'btn btn-quiet shelf-opds-btn', title: 'Browse remote OPDS catalogs (Standard Ebooks, Calibre, Kavita)' },
       el('span', {}, '🌐 Browse OPDS Catalogs')
     );
@@ -107,12 +115,38 @@ export function initShelf(app) {
       el('div', { class: 'shelf-bar-left' },
         el('h1', { class: 'shelf-heading-main' }, 'Your Books')
       ),
-      el('div', { class: 'shelf-bar-actions' }, opdsBtn)
+      el('div', { class: 'shelf-bar-actions' }, observatoryBtn, opdsBtn)
     );
 
     const sections = [shelfBar];
     if (reading.length) sections.push(el('h2', { class: 'shelf-heading' }, 'Reading'), el('div', { class: 'shelf-grid' }, ...reading.map(tile)));
-    if (rest.length) sections.push(el('h2', { class: 'shelf-heading' }, reading.length ? 'Not started' : 'All books'), el('div', { class: 'shelf-grid' }, ...rest.map(tile)));
+
+    // Categorize remaining books by immediate subfolder / shelf category
+    const categories = new Map();
+    for (const b of rest) {
+      let cat = '';
+      if (b.folder) {
+        const parts = b.folder.split('/').filter(Boolean);
+        cat = parts[parts.length - 1] || '';
+      }
+      const catKey = cat || (reading.length ? 'Not started' : 'All books');
+      if (!categories.has(catKey)) categories.set(catKey, []);
+      categories.get(catKey).push(b);
+    }
+
+    if (categories.size === 1 && (categories.has('Not started') || categories.has('All books'))) {
+      sections.push(
+        el('h2', { class: 'shelf-heading' }, reading.length ? 'Not started' : 'All books'),
+        el('div', { class: 'shelf-grid' }, ...rest.map(tile))
+      );
+    } else {
+      for (const [catName, catBooks] of categories) {
+        sections.push(
+          el('h2', { class: 'shelf-heading' }, catName),
+          el('div', { class: 'shelf-grid' }, ...catBooks.map(tile))
+        );
+      }
+    }
     // Dedicated Catalogs Section in Shelves ("Browse Remote, Stash Local")
     const catalogs = getCatalogsList();
     const catalogCards = catalogs.map((cat) => {

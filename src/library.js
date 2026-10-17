@@ -16,9 +16,18 @@ const KINDS = {
   md: 'note', markdown: 'note', txt: 'note',
   pdf: 'pdf',
   epub: 'epub', mobi: 'ebook', azw3: 'ebook', azw: 'ebook', fb2: 'ebook', fbz: 'ebook', cbz: 'ebook',
+  webp: 'blob', png: 'blob', jpg: 'blob', jpeg: 'blob', svg: 'blob',
 };
-const MIME = { pdf: 'application/pdf', epub: 'application/epub+zip' };
-export const isBook = (item) => item.kind !== 'note';
+const MIME = {
+  pdf: 'application/pdf',
+  epub: 'application/epub+zip',
+  webp: 'image/webp',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  svg: 'image/svg+xml',
+};
+export const isBook = (item) => Boolean(item && item.kind !== 'note' && item.kind !== 'blob');
 
 // JSON is only read when it looks like a highlights export (see imports.js).
 const EXPORT_FOLDER = /(highlight|clipping|clipboard|koreader|kindle)/i;
@@ -50,8 +59,9 @@ const device = {
   canWrite: () => true,
   async readText(src, item) {
     const c = await content.get(item.key);
-    if (!c) throw new Error('This note is missing from this device.');
-    return c.text;
+    if (c?.text) return c.text;
+    if (item.text) return item.text;
+    throw new Error('This note is missing from this device.');
   },
 };
 
@@ -76,6 +86,7 @@ export function canWrite(src) {
 }
 
 export function displayName(src) {
+  if (!src) return '';
   if (src.type === 'device') return 'This device';
   if (src.name) return src.name;
   if (src.type === 'github') return `${src.owner}/${src.repo}`;
@@ -189,7 +200,7 @@ export async function readText(item) {
   const cached = await content.get(item.key);
   if (cached && cached.sha === item.sha) return cached.text;
 
-  const src = store.getSource(item.sourceId);
+  const src = (!item.sourceId || item.sourceId === DEVICE_ID) ? deviceSource(true) : store.getSource(item.sourceId);
   if (!src) throw new Error('This source was removed.');
   try {
     const text = await adapter(src).readText(src, item);
@@ -197,6 +208,7 @@ export async function readText(item) {
     return text;
   } catch (err) {
     if (cached) return cached.text; // stale beats nothing when offline
+    if (item.text) return item.text;
     throw err;
   }
 }
@@ -638,7 +650,9 @@ export async function moveDeviceNotes(dest, folder = '', onProgress = () => {}) 
 
 /* ---------------- Deleting, renaming, moving ---------------- */
 
-const notesChanged = () => window.dispatchEvent(new CustomEvent('readover:notes-changed'));
+function notesChanged() {
+  window.dispatchEvent(new CustomEvent('readover:notes-changed'));
+}
 
 async function forget(key) {
   await Promise.all([items, content, thumbs, progress, blobs].map((t) => t.delete(key)));

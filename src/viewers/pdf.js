@@ -5,15 +5,26 @@ import { loadPdfJs } from '../lib/vendor.js';
 import { progress, saveProgress } from '../store.js';
 import { pushOverlay, el, icon, toast } from '../ui/overlay.js';
 import { askNote } from '../ui/highlight-note.js';
+import {
+  getReaderAppearance,
+  saveReaderAppearance,
+  createAppearancePopover,
+} from '../ui/appearance.js';
+import { showStagingBanner } from '../ui/staging-banner.js';
 
 const norm = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
 
 /**
- * @param opts { at?: 'page=N', onHighlight?(h) → Promise<string|void> }
+ * @param opts {
+ *   at?: 'page=N',
+ *   onHighlight?(h) → Promise<string|void>,
+ *   stagingBanner?: { file: File, type: 'book'|'note', onCommit: Function, onDismiss?: Function }
+ * }
  */
 export async function openPdf(item, blob, title, opts = {}) {
   const back = el('button', { class: 'icon-btn', 'aria-label': 'Back' }, icon('back'));
   const status = el('span', { class: 'status' }, 'Opening…');
+  const aaBtn = el('button', { class: 'icon-btn appearance-btn', 'aria-label': 'Reading appearance', title: 'Appearance' }, el('span', { class: 'btn-aa' }, 'Aa'));
   const zoomOut = el('button', { class: 'icon-btn', 'aria-label': 'Smaller' }, '−');
   const zoomIn = el('button', { class: 'icon-btn', 'aria-label': 'Larger' }, '+');
   const stage = el('div', { class: 'pdf-stage', tabindex: '-1' });
@@ -21,22 +32,37 @@ export async function openPdf(item, blob, title, opts = {}) {
   const root = el(
     'div',
     { class: 'reader', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
-    el('div', { class: 'reader-bar' }, back, el('span', { class: 'title' }, title), status, zoomOut, zoomIn),
+    el('div', { class: 'reader-bar' }, back, el('span', { class: 'title' }, title), status, aaBtn, zoomOut, zoomIn),
     wrap
   );
   document.body.append(root);
+
+  if (opts.stagingBanner) {
+    showStagingBanner({ ...opts.stagingBanner, container: root });
+  }
+
+  const appearance = getReaderAppearance();
+  let scaleMode = appearance.pdfFit || 'width';
+  root.dataset.readerTheme = appearance.theme;
 
   let doc = null;
   let observer = null;
   let saveTimer = null;
   let selTimer = null;
+  let resizeTimer = null;
+  let onResize = null;
+  let popover = null;
+
   const onSelection = () => {
     clearTimeout(selTimer);
     selTimer = setTimeout(checkSelection, 250);
   };
   const close = pushOverlay(() => {
+    popover?.remove();
     observer?.disconnect();
     clearTimeout(saveTimer);
+    clearTimeout(resizeTimer);
+    window.removeEventListener('resize', onResize);
     document.removeEventListener('selectionchange', onSelection);
     doc?.destroy();
     root.remove();
@@ -62,7 +88,20 @@ export async function openPdf(item, blob, title, opts = {}) {
   const first = (await doc.getPage(1)).getViewport({ scale: 1 });
   const rendered = new Map();
 
-  const widthFor = () => Math.min(stage.clientWidth - 24, 860) * zoom;
+  const widthFor = () => {
+    const containerW = Math.max(300, stage.clientWidth - 24);
+    const containerH = Math.max(300, stage.clientHeight - 32);
+    const ratio = first.height / first.width;
+
+    if (scaleMode === 'width') {
+      return containerW;
+    }
+    if (scaleMode === 'page') {
+      const wFromH = containerH / ratio;
+      return Math.max(300, Math.min(wFromH, containerW));
+    }
+    return Math.max(300, Math.min(containerW, 860) * zoom);
+  };
   const slots = [];
   for (let n = 1; n <= total; n++) {
     const slot = el('div', { class: 'pdf-page', 'data-page': n });
@@ -162,19 +201,76 @@ export async function openPdf(item, blob, title, opts = {}) {
   stage.addEventListener('scroll', onScroll, { passive: true });
   status.textContent = `${current} of ${total}`;
 
-  const rezoom = (z) => {
+  const rezoom = (z = zoom) => {
     const page = current;
     zoom = z;
     [...rendered.keys()].forEach((n) => unload(slots[n - 1]));
     sizeSlots();
-    slots[page - 1].scrollIntoView({ block: 'start' });
+    slots[page - 1]?.scrollIntoView({ block: 'start' });
     slots.forEach((s) => {
       observer.unobserve(s);
       observer.observe(s);
     });
   };
-  zoomIn.onclick = () => zoom < 2.5 && rezoom(zoom + 0.25);
-  zoomOut.onclick = () => zoom > 0.5 && rezoom(zoom - 0.25);
+
+  onResize = () => {
+    if (scaleMode === 'width' || scaleMode === 'page') {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => rezoom(zoom), 100);
+    }
+  };
+  window.addEventListener('resize', onResize);
+
+  zoomIn.onclick = () => {
+    if (zoom < 2.5) {
+      scaleMode = 'custom';
+      rezoom(zoom + 0.25);
+    }
+  };
+  zoomOut.onclick = () => {
+    if (zoom > 0.5) {
+      scaleMode = 'custom';
+      rezoom(zoom - 0.25);
+    }
+  };
+
+  aaBtn.onclick = (e) => {
+    e.stopPropagation();
+    if (popover) {
+      popover.remove();
+      popover = null;
+      return;
+    }
+    popover = createAppearancePopover({
+      type: 'pdf',
+      anchor: aaBtn,
+      state: {
+        theme: appearance.theme,
+        pdfFit: scaleMode,
+        zoom,
+      },
+      onChange: (changes) => {
+        if (changes.theme) {
+          appearance.theme = changes.theme;
+          root.dataset.readerTheme = appearance.theme;
+          saveReaderAppearance({ readerTheme: appearance.theme });
+        }
+        if (changes.pdfFit) {
+          scaleMode = changes.pdfFit;
+          saveReaderAppearance({ pdfFit: scaleMode });
+          rezoom(1);
+        }
+        if (changes.zoom != null) {
+          scaleMode = 'custom';
+          rezoom(changes.zoom);
+        }
+      },
+      onClose: () => {
+        popover = null;
+      },
+    });
+    root.append(popover);
+  };
 
   /* ---------- Selecting and highlighting ---------- */
 

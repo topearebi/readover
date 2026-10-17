@@ -8,6 +8,10 @@ window.addEventListener('popstate', () => {
   top.close();
   // Give back the rest of the page, and focus to whatever opened this overlay.
   for (const el of top.inerted || []) el.inert = false;
+  const prev = stack[stack.length - 1];
+  if (prev?.element) {
+    prev.element.inert = false;
+  }
   setTimeout(() => {
     let back = top.opener;
     // A list redrawn meanwhile: find the same row again by its key.
@@ -34,9 +38,10 @@ function requestClose(entry) {
  * next overlay can safely be opened (otherwise the pending "back" would close it).
  */
 export function pushOverlay(close, { element = null, opener = document.activeElement } = {}) {
-  const entry = { close, opener };
+  const entry = { close, opener, element };
   // A full-screen overlay (a reader) keeps keyboard focus inside it, like a dialog.
   if (element) {
+    element.inert = false;
     entry.inerted = [...document.body.children].filter((el) => el !== element && !el.inert && el.tagName !== 'DIALOG' && el.id !== 'toast' && el.tagName !== 'SCRIPT');
     for (const el of entry.inerted) el.inert = true;
   }
@@ -95,17 +100,22 @@ export function toast(message, action) {
   const el = document.getElementById('toast');
   el.replaceChildren(Object.assign(document.createElement('span'), { textContent: message }));
   if (action) {
-    const b = document.createElement('button');
-    b.textContent = action.label;
-    b.onclick = () => {
-      el.classList.remove('show');
-      action.run();
-    };
-    el.append(b);
+    const list = Array.isArray(action) ? action : [action];
+    for (const act of list) {
+      if (!act || !act.label) continue;
+      const b = document.createElement('button');
+      b.textContent = act.label;
+      if (act.class) b.className = act.class;
+      b.onclick = () => {
+        el.classList.remove('show');
+        act.run?.();
+      };
+      el.append(b);
+    }
   }
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), action ? 5000 : 2600);
+  toastTimer = setTimeout(() => el.classList.remove('show'), action ? (Array.isArray(action) ? 8000 : 5000) : 2600);
 }
 
 export function haptic(ms = 8) {

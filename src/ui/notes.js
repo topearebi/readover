@@ -47,7 +47,21 @@ export function initNotes(app) {
   const searchInput = el('input', { type: 'search', class: 'notes-search', placeholder: 'Search your notes', 'aria-label': 'Search your notes', autocomplete: 'off' });
   const coverageLine = el('p', { class: 'hint notes-coverage', hidden: true });
   const crumbs = el('nav', { class: 'notes-crumbs', 'aria-label': 'Folder' });
-  const newBtn = el('button', { class: 'btn' }, icon('pen', 'i i-sm'), 'New note here');
+  const observatoryBtn = el(
+    'button',
+    {
+      type: 'button',
+      class: 'btn btn-quiet btn-sm notes-observatory-btn observatory-trigger-btn',
+      'aria-label': 'Open Knowledge Observatory (Ctrl+Shift+O)',
+      title: 'Knowledge Observatory (Ctrl+Shift+O)',
+    },
+    icon('observatory', 'i i-sm'),
+    el('span', {}, 'Observatory')
+  );
+  observatoryBtn.onclick = async () => {
+    const { openObservatory } = await import('./observatory.js');
+    openObservatory(app);
+  };
   const manageBtn = el('button', { type: 'button', class: 'btn btn-quiet notes-manage-btn' }, 'Actions ▾');
   const list = el('div', { class: 'notes-list' });
 
@@ -134,6 +148,7 @@ export function initNotes(app) {
   async function openActionsMenu() {
     const src = view.sourceId ? store.getSource(view.sourceId) : null;
     const actions = [
+      { id: 'observatory', label: 'Open Knowledge Observatory', icon: 'observatory' },
       { id: 'select', label: 'Select notes (multi-select mode)' },
       { id: 'export-zip', label: src ? `Export ${view.folder ? `folder "${view.folder}"` : displayName(src)} as .zip` : 'Export all notes as .zip' },
     ];
@@ -141,7 +156,10 @@ export function initNotes(app) {
       actions.push({ id: 'move-storage', label: `Move ${view.folder ? `folder "${view.folder}"` : displayName(src)} to another storage…` });
     }
     const chosen = await menu('Library & File Actions', actions);
-    if (chosen === 'select') {
+    if (chosen === 'observatory') {
+      const { openObservatory } = await import('./observatory.js');
+      openObservatory(app);
+    } else if (chosen === 'select') {
       startSelectMode();
     } else if (chosen === 'export-zip') {
       await exportCurrentScopeZip();
@@ -237,13 +255,13 @@ export function initNotes(app) {
   // Sort and filter (remembered on this device, separately from the feed's).
   const sortSel = el('select', { class: 'notes-sort', 'aria-label': 'Sort' }, ...SORTS.map((o) => el('option', { value: o.id }, o.label)));
   const filterBtn = el('button', { type: 'button', class: 'btn btn-quiet notes-filter', 'aria-label': 'Filter notes' }, 'Filter');
-  const tools = el('div', { class: 'notes-tools' }, el('label', { class: 'notes-sort-label' }, 'Sort ', sortSel), filterBtn);
+  const tools = el('div', { class: 'notes-tools notes-controls-row' }, el('label', { class: 'notes-sort-label' }, 'Sort ', sortSel), filterBtn);
   root.replaceChildren(
     el(
       'div',
       { class: 'notes-inner' },
       el('div', { class: 'notes-top' }, searchInput, tools, coverageLine),
-      el('div', { class: 'notes-bar' }, crumbs, el('div', { class: 'notes-bar-actions' }, newBtn, manageBtn)),
+      el('div', { class: 'notes-bar' }, crumbs, el('div', { class: 'notes-bar-actions' }, observatoryBtn, manageBtn)),
       bulkBar,
       list
     )
@@ -295,7 +313,6 @@ export function initNotes(app) {
       render();
     }, 150);
   });
-  newBtn.onclick = () => app.compose({ sourceId: view.sourceId, folder: view.folder });
 
 
   function row(item, title, sub, g = null, meta = '') {
@@ -367,6 +384,42 @@ export function initNotes(app) {
     coverageLine.hidden = false;
   }
 
+  function renderEmptyNotesState() {
+    return el(
+      'div',
+      { class: 'notes-empty-state' },
+      el('div', { class: 'empty-icon-wrap' }, icon('seed', 'i i-lg')),
+      el('h3', {}, 'Your garden is ready to grow'),
+      el(
+        'p',
+        { class: 'hint' },
+        'Write your first note with the + button above, or connect a storage library (Dropbox, GitHub, WebDAV) in Settings.'
+      ),
+      el(
+        'div',
+        { class: 'empty-actions' },
+        el(
+          'button',
+          {
+            type: 'button',
+            class: 'btn btn-primary',
+            onclick: () => (typeof app.compose === 'function' ? app.compose({ sourceId: view.sourceId, folder: view.folder }) : document.getElementById('write-btn')?.click()),
+          },
+          'Write a note'
+        ),
+        el(
+          'button',
+          {
+            type: 'button',
+            class: 'btn btn-quiet',
+            onclick: () => (typeof app.openSettings === 'function' ? app.openSettings('tab-sources') : document.getElementById('settings-btn')?.click()),
+          },
+          'Connect storage'
+        )
+      )
+    );
+  }
+
   async function render() {
     renderCoverage();
     showFilterLabel();
@@ -379,10 +432,12 @@ export function initNotes(app) {
 
     // Search across everything
     if (view.query) {
-      crumbs.replaceChildren(el('span', {}, 'Search results'));
-      newBtn.hidden = true;
-      manageBtn.hidden = true;
       const results = await search(view.query);
+      crumbs.replaceChildren(
+        el('div', { class: 'notes-heading' }, el('h2', {}, 'Search results ', el('span', { class: 'notes-count text-muted' }, `(${results.length})`)))
+      );
+      observatoryBtn.hidden = true;
+      manageBtn.hidden = true;
       currentVisibleNotes = results.map((r) => r.item);
       list.replaceChildren(
         ...(results.length
@@ -396,23 +451,32 @@ export function initNotes(app) {
     // Choose a library first when there's more than one
     if (!view.sourceId && sources.length === 1) view.sourceId = sources[0].id;
     if (selectMode) {
-      newBtn.hidden = true;
+      observatoryBtn.hidden = true;
       manageBtn.hidden = true;
     } else {
-      newBtn.hidden = !(view.sourceId ? canWrite(store.getSource(view.sourceId)) : true);
+      observatoryBtn.hidden = false;
       manageBtn.hidden = false;
     }
 
     // Sorted or filtered across all libraries.
     const flat = (prefs().notesSort || 'folders') !== 'folders' || isFiltered(prefs().notesGrowth || 'any', types());
     if (!view.sourceId && flat) {
-      crumbs.replaceChildren(el('span', {}, 'All notes'));
+      crumbs.replaceChildren(
+        el('div', { class: 'notes-heading' }, el('h2', {}, 'All notes ', el('span', { class: 'notes-count text-muted' }, `(${all.length})`)))
+      );
       renderFlat(all, growth, prefs().notesSort || 'folders', prefs().notesGrowth || 'any', types(), titles);
       return;
     }
     if (!view.sourceId) {
       currentVisibleNotes = [];
-      crumbs.replaceChildren(el('span', {}, 'All notes'));
+      crumbs.replaceChildren(
+        el('div', { class: 'notes-heading' }, el('h2', {}, 'All notes ', el('span', { class: 'notes-count text-muted' }, `(${all.length})`)))
+      );
+      if (!all.length || !sources.length) {
+        list.replaceChildren(renderEmptyNotesState());
+        updateBulkBar();
+        return;
+      }
       list.replaceChildren(
         ...sources.map((s) =>
           folderRow(displayName(s), all.filter((e) => e.item.sourceId === s.id).length, () => {
@@ -422,7 +486,6 @@ export function initNotes(app) {
           })
         )
       );
-      if (!sources.length) list.replaceChildren(el('p', { class: 'notes-empty' }, 'No notes yet. Write one with the pen above, or connect a GitHub repo or folder in Settings.'));
       updateBulkBar();
       return;
     }
@@ -436,7 +499,7 @@ export function initNotes(app) {
       return b;
     };
     crumbs.replaceChildren(
-      ...(sources.length > 1 ? [crumb('All notes', () => ((view.sourceId = null), (view.folder = ''), render()))] : []),
+      ...(sources.length > 1 ? [crumb(`All notes (${all.length})`, () => ((view.sourceId = null), (view.folder = ''), render()))] : []),
       crumb(displayName(src), () => ((view.folder = ''), render()), !parts.length),
       ...parts.map((p, i) => crumb(p, () => ((view.folder = parts.slice(0, i + 1).join('/')), render()), i === parts.length - 1))
     );
@@ -474,6 +537,11 @@ export function initNotes(app) {
 
   /** Every note in this library (and folder, with its subfolders), filtered and sorted. */
   function renderFlat(all, growth, sortId, gId, tId, titles) {
+    if (!all.length) {
+      list.replaceChildren(renderEmptyNotesState());
+      updateBulkBar();
+      return;
+    }
     const prefix = view.folder ? `${view.folder}/` : '';
     let rows = all.filter((e) => (!view.sourceId || e.item.sourceId === view.sourceId) && (!view.folder || e.item.folder === view.folder || e.item.folder.startsWith(prefix)));
     rows = rows.filter((e) => passes(growth.get(e.item.key), gId, tId));
@@ -499,18 +567,21 @@ export function initNotes(app) {
     updateBulkBar();
   }
 
-  const firstLine = (text) =>
-    text
-      .replace(/^#.*$/m, '')
-      .replace(/<!--[\s\S]*?-->/g, '')
-      .replace(/!\[[^\]]*\]\([^)]*\)/g, '') // images
-      .replace(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (_m, t, a) => a || t) // [[link|label]]
-      .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // [text](url)
-      .replace(/[#>*_`=[\]]/g, '')
-      .trim()
-      .split('\n')
-      .find((l) => l.trim())
-      ?.slice(0, 120) || '';
+  function firstLine(text) {
+    return (
+      text
+        .replace(/^#.*$/m, '')
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/!\[[^\]]*\]\([^)]*\)/g, '') // images
+        .replace(/!?\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|([^\]]+))?\]\]/g, (_m, t, a) => a || t) // [[link|label]]
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // [text](url)
+        .replace(/[#>*_`=[\]]/g, '')
+        .trim()
+        .split('\n')
+        .find((l) => l.trim())
+        ?.slice(0, 120) || ''
+    );
+  }
 
   window.addEventListener('readover:notes-changed', () => !root.hidden && render());
 

@@ -12,6 +12,7 @@ import { growthOf, isArchived } from '../garden.js';
 import { growthTag, openGrowthSheet } from './growth.js';
 import { askNote } from './highlight-note.js';
 import { setupImageAttachments } from '../attachments.js';
+import { showStagingBanner } from './staging-banner.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const linkName = (item) => item.path.split('/').pop().replace(/\.(md|markdown|txt)$/i, '');
@@ -190,6 +191,7 @@ export async function openNote(item, opts = {}) {
 
   const scroll = el('div', { class: 'reader-scroll', tabindex: '-1' });
   const root = el('div', { class: 'reader', role: 'dialog', 'aria-modal': 'true', 'aria-label': note.title }, bar, scroll, readerDock);
+  let prose = null;
 
   const githubUrl = () =>
     src?.type === 'github'
@@ -338,9 +340,14 @@ export async function openNote(item, opts = {}) {
     section.replaceChildren(...children);
   }
 
-  let prose = renderArticle();
+  prose = renderArticle();
   document.body.classList.add('has-reader');
   document.body.append(root);
+
+  if (opts.stagingBanner) {
+    showStagingBanner({ ...opts.stagingBanner, container: root });
+  }
+
   scroll.focus();
 
   if (opts.section) {

@@ -83,6 +83,11 @@
       <symbol id="i-clipboard" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></symbol>
       <symbol id="i-printer" viewBox="0 0 24 24"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></symbol>
       <symbol id="i-graft" viewBox="0 0 24 24"><path d="M10 14l4-4M10.5 6.5l1.5-1.5a3.5 3.5 0 0 1 5 5l-1.5 1.5M13.5 17.5l-1.5 1.5a3.5 3.5 0 0 1-5-5l1.5-1.5" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-observatory" viewBox="0 0 24 24"><path d="M10 12l8-8 2.5 2.5L12 14.5M14 6.5l2 2M6 16l3 3M3 19l2 2M11 13l-4 8M11 13l4 8M11 13v8" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/><circle cx="19.5" cy="4.5" r="1.5" fill="currentColor"/></symbol>
+      <symbol id="i-seed" viewBox="0 0 24 24"><path d="M12 21c4.5 0 8-3.5 8-8 0-5.5-8-11-8-11s-8 5.5-8 11c0 4.5 3.5 8 8 8z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 10v7M9.5 13.5l2.5-2.5 2.5 2.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-scope" viewBox="0 0 24 24"><use href="#i-observatory"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8m0 0V3m0 5h5M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16m0 0v5m0-5h-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="i-book" viewBox="0 0 24 24"><use href="#i-open"/></symbol>
     </defs>
 
   </svg>
@@ -467,15 +472,23 @@
       <!-- Tab 2: Garden -->
       <div id="tab-garden" class="settings-tab-panel" role="tabpanel" aria-labelledby="tab-btn-garden" hidden>
         <section class="settings-group settings-first" id="notes-group">
-          <h3>Note Destinations</h3>
-          <p class="hint">Assign clear destination roles to your connected libraries.</p>
+          <h3>Note &amp; Book Destinations</h3>
+          <p class="hint">Assign clear destination roles to your connected libraries and vaults.</p>
           <div class="field-pair">
             <label class="field">New notes go to
               <select id="hl-home-select"></select>
             </label>
             <label class="field">Highlights folder
-              <input id="hl-folder-input" list="hl-folder-list" placeholder="zettelkasten" autocapitalize="off" spellcheck="false" />
+              <input id="hl-folder-input" list="hl-folder-list" placeholder="Highlights" autocapitalize="off" spellcheck="false" />
               <datalist id="hl-folder-list"></datalist>
+            </label>
+          </div>
+          <div class="field-pair" style="margin-top: 0.75rem;">
+            <label class="field">Books &amp; monographs go to
+              <select id="books-home-select"></select>
+            </label>
+            <label class="field">Attachments folder
+              <input id="attachments-folder-input" placeholder="attachments" autocapitalize="off" spellcheck="false" />
             </label>
           </div>
           <label class="field" style="margin-top: 0.75rem;">Images &amp; attachments destination
@@ -622,11 +635,31 @@
             <dt>R</dt><dd>Shuffle again</dd>
             <dt>N</dt><dd>New note</dd>
             <dt>Ctrl Enter</dt><dd>Save the new note</dd>
+            <dt>Ctrl Shift O</dt><dd>Knowledge observatory</dd>
             <dt>Ctrl Shift U / D</dt><dd>System diagnostics &amp; stress suite</dd>
             <dt>Esc</dt><dd>Close</dd>
           </dl>
         </section>
         <p class="hint version">Readover <span id="app-version"></span></p>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Knowledge Observatory Sheet -->
+  <dialog id="observatory-sheet" class="sheet sheet-tall observatory-sheet" aria-labelledby="observatory-title">
+    <div class="sheet-inner observatory-inner">
+      <div class="sheet-head observatory-head">
+        <div class="sheet-head-titles">
+          <h2 id="observatory-title" class="sheet-title">
+            <svg class="i i-sm" aria-hidden="true"><use href="#i-observatory"/></svg>
+            <span>Knowledge Observatory</span>
+          </h2>
+          <p class="sheet-subtitle">Systemic health, graph topology &amp; intellectual harvest</p>
+        </div>
+        <button id="observatory-close" class="icon-btn" type="button" aria-label="Close Observatory" title="Close" data-close><svg class="i"><use href="#i-close"/></svg></button>
+      </div>
+      <div id="observatory-body" class="observatory-body">
+        <!-- Rendered dynamically -->
       </div>
     </div>
   </dialog>

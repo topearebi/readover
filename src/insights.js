@@ -28,10 +28,10 @@ import * as dataSync from './sync.js';
 export { formatGardenNoteBody, extractInsightComponents, addToSection, addRelatedLink };
 
 
-/* ---------- Where new notes go ---------- */
+/* ---------- Where new notes and books go ---------- */
 
-/** The library new notes and insights are saved to (Settings → Reading). */
-export function newNotesHome() {
+/** The library new notes and insights are saved to (Settings → Reading/Garden). */
+export function notesHome() {
   const prefs = store.getPrefs();
   const sources = store.getSources();
   const pick = (id) => {
@@ -40,6 +40,7 @@ export function newNotesHome() {
     return sources.find((s) => s.id === id && library.canWrite(s));
   };
   return (
+    pick(prefs.notesHome) ||
     pick(prefs.newNotesHome) ||
     pick(prefs.highlightHome) || // the older setting, for books
     dataSync.dataHome() ||
@@ -48,6 +49,27 @@ export function newNotesHome() {
     library.deviceSource(false) || { id: library.DEVICE_ID, type: 'device', name: 'This device', virtual: true }
   );
 }
+
+/** Backward compatible alias for notesHome */
+export const newNotesHome = notesHome;
+
+/** The archive where acquired EPUBs, PDFs, and books are stored. */
+export function booksHome() {
+  const prefs = store.getPrefs();
+  const sources = store.getSources();
+  const pick = (id) => {
+    if (!id) return null;
+    if (id === library.DEVICE_ID) return library.deviceSource(false) || { id: library.DEVICE_ID, type: 'device', name: 'This device', virtual: true };
+    return sources.find((s) => s.id === id && library.canWrite(s));
+  };
+  return (
+    pick(prefs.booksHome) ||
+    pick(prefs.acquiredBooksHome) ||
+    sources.find((s) => (s.type === 's3' || s.type === 'r2') && library.canWrite(s)) ||
+    notesHome()
+  );
+}
+
 /**
  * The folder insights and clips go to (Settings → Highlights go to). Highlights/ unless
  * chosen; '' is the top level of the library.
@@ -55,6 +77,87 @@ export function newNotesHome() {
 export function highlightsFolder() {
   const v = store.getPrefs().highlightsFolder;
   return v == null ? 'Highlights' : String(v).replace(/^\/+|\/+$/g, '');
+}
+
+/**
+ * The subfolder where WebP images and sketches are stored. attachments/ unless
+ * chosen; '' is the top level of the library.
+ */
+export function attachmentsFolder() {
+  const v = store.getPrefs().attachmentsFolder;
+  return v == null ? 'attachments' : String(v).replace(/^\/+|\/+$/g, '');
+}
+
+/**
+ * Commits an acquired or ingested book binary into the booksHome vault.
+ * Writes to IndexedDB and triggers cloud upload if a remote adapter is active.
+ */
+export async function saveBookToVault({ blob, filename, title = '', author = '', format = '' }) {
+  const targetSource = booksHome();
+  const ext = format === 'pdf' ? 'pdf' : (format === 'epub' ? 'epub' : (filename?.split('.').pop()?.toLowerCase() || 'epub'));
+  const safeFilename = filename || (title ? `${String(title).replace(/[^a-zA-Z0-9_\-]/g, '_')}.${ext}` : `book-${Date.now()}.${ext}`);
+  const root = String(targetSource.root || '').replace(/^\/+|\/+$/g, '');
+  const path = [root, safeFilename].filter(Boolean).join('/');
+  const itemKey = store.keyOf(targetSource.id, path);
+
+  const item = {
+    key: itemKey,
+    sourceId: targetSource.id,
+    path,
+    folder: root,
+    name: safeFilename,
+    kind: ext === 'pdf' ? 'pdf' : 'epub',
+    sha: `vault:${Date.now()}`,
+    addedAt: Date.now(),
+  };
+
+  await store.items.put(item);
+  await store.blobs.put({
+    key: itemKey,
+    sourceId: targetSource.id,
+    sha: item.sha,
+    blob,
+  });
+
+  if (title || author) {
+    const existingThumb = await store.thumbs.get(itemKey);
+    await store.thumbs.put({
+      ...(existingThumb || {}),
+      key: itemKey,
+      sourceId: targetSource.id,
+      sha: item.sha,
+      title: title || existingThumb?.title || safeFilename.replace(/\.[^.]+$/, ''),
+      author: author || existingThumb?.author || '',
+    });
+  }
+
+  // Upload to remote storage if connected
+  try {
+    if (targetSource.type === 'dropbox') {
+      const { upload } = await import('./sources/dropbox.js');
+      await upload(targetSource, path, blob);
+    } else if (targetSource.type === 'webdav') {
+      const { putBlob } = await import('./sources/webdav.js');
+      await putBlob(targetSource, path, blob);
+    } else if (targetSource.type === 's3' || targetSource.type === 'r2') {
+      const { putBlob } = await import('./sources/s3.js');
+      await putBlob(targetSource, path, blob);
+    } else if (targetSource.type === 'local' && targetSource.mode === 'handle') {
+      const { writeFile } = await import('./sources/local.js');
+      await writeFile(targetSource, path, blob);
+    }
+  } catch (uploadErr) {
+    console.warn('Saved on device, cloud upload pending or failed:', uploadErr);
+  }
+
+  // Pre-generate cover thumbnail
+  try {
+    const { getCover } = await import('./covers.js');
+    await getCover(item);
+  } catch {}
+
+  window.dispatchEvent(new CustomEvent('readover:shelf-refresh'));
+  return item;
 }
 
 /* ---------- Making an insight ---------- */
@@ -194,9 +297,9 @@ const norm = (s) =>
 
 let version = 0;
 let cache = null;
-const bump = () => {
+function bump() {
   version++;
-};
+}
 if (typeof window !== 'undefined') window.addEventListener('readover:notes-changed', bump);
 
 /**

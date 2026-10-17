@@ -12,7 +12,7 @@ export function renderTypeChecks(box, options, chosen = [], onChange = () => {})
   const ticked = new Set(chosen.map((t) => String(t).toLowerCase()));
   // Only Unsorted means there are no folders: no types to pick from.
   box.hidden = !options.some((o) => o.id !== '');
-  list.replaceChildren(
+  list?.replaceChildren(
     ...options.map((o) => {
       const input = el('input', { type: 'checkbox', value: o.id });
       input.checked = ticked.has(o.id.toLowerCase());
@@ -25,7 +25,7 @@ export function renderTypeChecks(box, options, chosen = [], onChange = () => {})
 /** The types ticked, as a list of folder names ('' = Unsorted). */
 export const readTypeChecks = (box) => (box.hidden ? [] : [...box.querySelectorAll('input:checked')].map((i) => i.value));
 
-/** A library's types: its top-level folders (not Archive, not hidden ones), A–Z. */
+/** A library's types: any subfolder containing a note (not Archive, not hidden ones), A–Z. */
 export function libraryTypes(items, src) {
   if (!src) return [];
   const root = String(src.root || '').replace(/^\/+|\/+$/g, '');
@@ -33,10 +33,14 @@ export function libraryTypes(items, src) {
   for (const i of items) {
     if (i.sourceId !== src.id || i.kind !== 'note') continue; // a folder of books isn't a type of note
     const rel = root ? (i.path.startsWith(`${root}/`) ? i.path.slice(root.length + 1) : null) : i.path;
-    const cut = rel ? rel.indexOf('/') : -1;
-    if (cut <= 0) continue;
-    const name = rel.slice(0, cut);
-    if (!name.startsWith('.') && name.toLowerCase() !== 'archive') names.add(name);
+    if (!rel) continue;
+    const parts = rel.split('/');
+    parts.pop(); // remove file name
+    for (const p of parts) {
+      if (p && !p.startsWith('.') && p.toLowerCase() !== 'archive') {
+        names.add(p);
+      }
+    }
   }
   return [...names].sort((a, b) => a.localeCompare(b));
 }

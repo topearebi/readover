@@ -47,6 +47,8 @@ const app = {
   syncing: new Set(),
 };
 
+let actions, settings, compose, setup, captureApp;
+
 /* ---------------- Theme ---------------- */
 
 function applyTheme() {
@@ -103,8 +105,8 @@ async function openScope() {
     );
     folderSel.value = folders.includes(keep) ? keep : '';
   };
-  fillFolders(prefs.folder);
-  sheet.querySelector(`input[name=filter][value="${prefs.filter}"]`).checked = true;
+  const filterInput = sheet.querySelector(`input[name=filter][value="${prefs.filter}"]`);
+  if (filterInput) filterInput.checked = true;
 
   // Growth and type, each option with how many notes it would show here.
   const growthSel = $('scope-growth');
@@ -521,7 +523,7 @@ function refreshCard(card, item) {
   hydrateCard(card);
 }
 
-const actions = {
+actions = {
   /** 1-tap direct edit for notes from feed card rail. */
   async editNote(card) {
     if (!card._item || card._item.kind !== 'note') return;
@@ -790,9 +792,10 @@ const actions = {
 };
 
 /** Open a note in the reader, from anywhere (feed card, Notes, a link in another note). */
-async function openNoteItem(item, { card = null, highlight = null, section = '', startInEditor = false, startMove = false } = {}) {
+async function openNoteItem(item, { card = null, highlight = null, section = '', startInEditor = false, startMove = false, stagingBanner = null } = {}) {
   try {
     await openNote(item, {
+      stagingBanner,
       starred: Boolean((await store.state.get(item.key))?.starred),
       highlight,
       section,
@@ -1043,6 +1046,143 @@ async function saveBookHighlight(item, bookTitle, { text, comment = '', chapter 
   });
 }
 
+/**
+ * Handles incoming Markdown note files opened from the OS or file picker.
+ * Loads ephemeral session in memory/IDB, launches note reader, and docks the Staging Banner.
+ */
+export async function handleIncomingNoteFile(file) {
+  if (!file) return;
+  const title = file.name.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ');
+  const text = await file.text();
+  const tempKey = `session:note|${file.name}`;
+  const item = {
+    key: tempKey,
+    sourceId: library.DEVICE_ID,
+    path: file.name,
+    folder: '',
+    name: file.name,
+    kind: 'note',
+    text,
+    isExternalSession: true,
+  };
+  await store.content.put({ key: tempKey, text, sourceId: library.DEVICE_ID });
+
+  const stagingBanner = {
+    file,
+    type: 'note',
+    onCommit: async () => {
+      const home = insights.notesHome();
+      const targetFolder = insights.highlightsFolder() || '';
+      const targetPath = targetFolder ? `${targetFolder}/${file.name}` : file.name;
+      const finalItem = {
+        key: store.keyOf(home.id, targetPath),
+        sourceId: home.id,
+        path: targetPath,
+        folder: targetFolder,
+        name: file.name,
+        kind: 'note',
+        addedAt: Date.now(),
+      };
+      await store.items.put(finalItem);
+      await store.content.put({ key: finalItem.key, sourceId: home.id, text });
+      item.key = finalItem.key;
+      item.sourceId = finalItem.sourceId;
+      item.path = finalItem.path;
+      item.folder = finalItem.folder;
+      delete item.isExternalSession;
+
+      const src = store.getSource(home.id);
+      if (src && library.canWrite(src)) {
+        try {
+          await library.writeNote(finalItem, text);
+        } catch (e) {
+          console.warn('Could not write note to remote sync adapter:', e);
+        }
+      }
+      toast(`Saved “${title}” to notes`);
+      window.dispatchEvent(new CustomEvent('readover:notes-changed'));
+    },
+    onDismiss: () => {
+      toast('Reading note in temporary session mode');
+    },
+  };
+
+  await openNoteItem(item, { stagingBanner });
+}
+
+/**
+ * Handles incoming Books (EPUB, PDF, MOBI, etc.) opened from the OS or file picker.
+ * Sets up ephemeral blob storage in IDB session cache, immediately renders in viewer,
+ * and docks the non-intrusive Staging Banner.
+ */
+export async function handleIncomingBookFile(file) {
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  const isPdf = ext === 'pdf';
+  const title = file.name.replace(/\.[^.]+$/, '').replace(/[_]+/g, ' ');
+
+  const mime = isPdf ? 'application/pdf' : (ext === 'epub' ? 'application/epub+zip' : 'application/octet-stream');
+  const blob = file.type ? file : new Blob([await file.arrayBuffer()], { type: mime });
+  const tempKey = `session:book|${file.name}`;
+  const item = {
+    key: tempKey,
+    sourceId: library.DEVICE_ID,
+    path: file.name,
+    folder: '',
+    name: file.name,
+    kind: isPdf ? 'pdf' : ext,
+    isExternalSession: true,
+  };
+  await store.blobs.put({ key: tempKey, sourceId: library.DEVICE_ID, sha: 'session', blob });
+
+  const onHighlight = (h) => saveBookHighlight(item, title, h);
+
+  const stagingBanner = {
+    file,
+    type: 'book',
+    onCommit: async () => {
+      const saved = await insights.saveBookToVault({
+        blob,
+        filename: file.name,
+        title,
+        format: isPdf ? 'pdf' : 'epub',
+      });
+      item.key = saved.key;
+      item.sourceId = saved.sourceId;
+      item.path = saved.path;
+      delete item.isExternalSession;
+      toast(`Added “${title}” to bookshelf`);
+    },
+    onDismiss: () => {
+      toast('Reading book in temporary session mode');
+    },
+  };
+
+  if (isPdf) {
+    const { openPdf } = await import('./viewers/pdf.js');
+    await openPdf(item, blob, title, { onHighlight, stagingBanner });
+  } else {
+    const { openBook } = await import('./viewers/book.js');
+    await openBook(item, blob, title, { onHighlight, stagingBanner });
+  }
+}
+
+/**
+ * Native OS PWA File Handling ("Open With Readover"):
+ * Dispatches to handleIncomingNoteFile or handleIncomingBookFile.
+ */
+export async function handleExternalFile(file) {
+  if (!file) return;
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (['md', 'markdown', 'txt'].includes(ext)) {
+    return handleIncomingNoteFile(file);
+  }
+  if (['pdf', 'epub', 'mobi', 'azw3', 'azw', 'fb2', 'cbz'].includes(ext)) {
+    return handleIncomingBookFile(file);
+  }
+  toast(`Unsupported file format: .${ext}`);
+}
+
 
 /**
  * Text selected in a note (or one highlight of an export) becomes an insight.
@@ -1180,6 +1320,11 @@ window.addEventListener('keydown', (e) => {
     import('./ui/diagnostics.js').then((m) => m.openDiagnostics(app));
     return;
   }
+  if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'o') {
+    e.preventDefault();
+    import('./ui/observatory.js').then((m) => m.openObservatory(app));
+    return;
+  }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.target.closest?.('input, textarea, select, [contenteditable]')) return;
   if (e.key === 'Escape') {
@@ -1281,7 +1426,7 @@ window.addEventListener('readover:conflict', (e) => {
 
 /* ---------------- Boot ---------------- */
 
-const settings = initSettings({
+settings = initSettings({
   syncSource: async (src, opts) => {
     const r = await syncSource(src, opts);
     await reloadIfOpen();
@@ -1294,9 +1439,9 @@ const settings = initSettings({
   applyTheme,
   openSetup: () => setup.open(),
 });
-const compose = initCompose({ showFirst });
+compose = initCompose({ showFirst });
 
-const setup = initSetup({
+setup = initSetup({
   afterConnect: async (src) => {
     await syncSource(src, { userGesture: true, quiet: true });
     settings.refresh();
@@ -1312,6 +1457,11 @@ $('scope-btn').onclick = openScope;
 $('search-btn').onclick = searchNotesDialog;
 $('settings-btn').onclick = () => settings.open();
 app.openSettings = (tab) => settings.open(tab);
+app.openObservatory = () => import('./ui/observatory.js').then((m) => m.openObservatory(app));
+app.openItem = (item) => (item.kind === 'note' ? openNoteItem(item) : openBookItem(item));
+app.openBook = (item) => openBookItem(item);
+app.handleExternalFile = handleExternalFile;
+app.showView = showView;
 $('write-btn').onclick = () => compose.open();
 // "Paste a quote": read the clipboard while the tap still counts as a tap (iPhone asks
 // first), then switch from the new-note sheet to the capture sheet.
@@ -1365,7 +1515,7 @@ window.addEventListener('readover:progress', () => {
 });
 $('app-version').textContent = VERSION;
 
-const captureApp = { openItem: (item) => openNoteItem(item), showFirst };
+captureApp = { openItem: (item) => openNoteItem(item), showFirst };
 
 async function boot() {
   applyTheme();
@@ -1385,7 +1535,7 @@ async function boot() {
         toast('Connecting Dropbox account…');
         const dropbox = await import('./sources/dropbox.js');
         const redirectUri = `${window.location.origin}${window.location.pathname}`;
-        const { token, account_id } = await dropbox.exchangePKCECode(code, '', redirectUri);
+        const { token, refreshToken, account_id } = await dropbox.exchangePKCECode(code, '', redirectUri);
         if (token) {
           const user = (await dropbox.whoami(token)) || '';
           let dbxSrc = store.getSources().find((s) => s.type === 'dropbox');
@@ -1397,9 +1547,11 @@ async function boot() {
               name: user ? `Dropbox (${user})` : 'Dropbox (/Apps/Readover)',
               root: '',
               accountId: account_id || '',
+              refreshToken: refreshToken || '',
             };
           } else {
             dbxSrc.token = token;
+            if (refreshToken) dbxSrc.refreshToken = refreshToken;
             if (account_id) dbxSrc.accountId = account_id;
             if (user) dbxSrc.name = `Dropbox (${user})`;
           }
@@ -1496,5 +1648,30 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     })
     .catch((err) => console.warn('Service worker not registered', err));
 }
+
+/**
+ * Native OS PWA File Handling (window.launchQueue)
+ * Registers file handling consumer with W3C File Handling API.
+ */
+export function initFileLaunchHandler(appInstance) {
+  if (typeof window === 'undefined' || !('launchQueue' in window)) return;
+  try {
+    window.launchQueue.setConsumer(async (launchParams) => {
+      if (!launchParams?.files?.length) return;
+      for (const handle of launchParams.files) {
+        try {
+          const file = await handle.getFile();
+          await handleExternalFile(file);
+        } catch (err) {
+          console.warn('launchQueue file processing error:', err);
+        }
+      }
+    });
+  } catch (err) {
+    console.warn('Failed to initialize launchQueue consumer:', err);
+  }
+}
+
+initFileLaunchHandler(app);
 
 boot();

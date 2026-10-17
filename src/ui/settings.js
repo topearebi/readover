@@ -1,5 +1,6 @@
 // Settings sheet: 4-Tab Workstation (Sources & Sync, Garden, Reading & Export, App & Device).
 import * as store from '../store.js';
+import * as library from '../library.js';
 import { displayName, deviceNotesZip, canWrite as canWriteSrc } from '../library.js';
 import * as github from '../sources/github.js';
 import * as local from '../sources/local.js';
@@ -10,7 +11,7 @@ import { openSheet, el, toast } from './overlay.js';
 import * as dataSync from '../sync.js';
 import * as outbox from '../outbox.js';
 import * as learn from '../learn.js';
-import { newNotesHome, highlightsFolder } from '../insights.js';
+import { newNotesHome, notesHome, booksHome, highlightsFolder, attachmentsFolder } from '../insights.js';
 import { libraryTypes } from './types.js';
 import { bookmarkletCode } from '../clip.js';
 import { TOKEN_URL } from './setup.js';
@@ -365,7 +366,8 @@ export function initSettings(app) {
       form.elements.name.value = src.name || '';
       form.elements.token.value = src.token || '';
     }
-    form.querySelector('.more-options').open = Boolean(src && (src.root || src.ignore || src.token || (src.branch && src.branch !== 'main')));
+    const moreOptions = form.querySelector('.more-options');
+    if (moreOptions) moreOptions.open = Boolean(src && (src.root || src.ignore || src.token || (src.branch && src.branch !== 'main')));
     form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     form.elements.repo.focus();
   }
@@ -741,11 +743,11 @@ export function initSettings(app) {
   window.addEventListener('readover:sync', () => sheet.open && renderSync());
   window.addEventListener('readover:outbox', () => sheet.open && renderSync());
 
-  /* ---- Garden Tab: Note destinations ---- */
+  /* ---- Garden Tab: Note & Book destinations ---- */
   function renderHighlightHome() {
     const sel = $('hl-home-select');
     const writable = store.getSources().filter((s) => s.type !== 'device' && canWriteSrc(s));
-    const home = newNotesHome();
+    const home = notesHome();
     sel.replaceChildren(
       ...writable.map((s) => el('option', { value: s.id }, displayName(s))),
       el('option', { value: 'device' }, 'This device')
@@ -757,32 +759,66 @@ export function initSettings(app) {
       .then((all) => $('hl-folder-list').replaceChildren(...libraryTypes(all, home).map((t) => el('option', { value: t }))))
       .catch(() => {});
 
+    // Books & Monographs Destination
+    const booksSel = $('books-home-select');
+    if (booksSel) {
+      const activeBooksHome = booksHome();
+      const sources = store.getSources();
+      const bookOptions = [];
+      const s3Sources = sources.filter((s) => (s.type === 's3' || s.type === 'r2') && canWriteSrc(s));
+      for (const s of s3Sources) {
+        bookOptions.push(el('option', { value: s.id }, `Object Vault: ${displayName(s)}`));
+      }
+      const otherWritable = sources.filter((s) => s.type !== 's3' && s.type !== 'r2' && s.type !== 'device' && canWriteSrc(s));
+      for (const s of otherWritable) {
+        bookOptions.push(el('option', { value: s.id }, `${displayName(s)} (${s.type})`));
+      }
+      bookOptions.push(el('option', { value: 'device' }, 'This device only (offline blobs)'));
+      booksSel.replaceChildren(...bookOptions);
+      booksSel.value = activeBooksHome.id;
+      booksSel.onchange = (e) => {
+        store.setPrefs({ booksHome: e.target.value, acquiredBooksHome: e.target.value });
+        toast('Books destination updated');
+      };
+    }
+
+    // Attachments folder input
+    const attFolderInput = $('attachments-folder-input');
+    if (attFolderInput) {
+      attFolderInput.value = attachmentsFolder();
+      attFolderInput.onchange = (e) => {
+        const val = e.target.value.trim().replace(/^\/+|\/+$/g, '') || 'attachments';
+        store.setPrefs({ attachmentsFolder: val });
+        toast('Attachments folder updated');
+      };
+    }
+
     // Attachments & Media Destination
     const attSel = $('attachments-dest-select');
     if (attSel) {
       const prefs = store.getPrefs();
-      const currentDest = prefs.attachmentsDestination || 'note-provider';
+      const currentDest = prefs.attachmentsVault || prefs.attachmentsDestination || 'same-as-note';
       const options = [
-        el('option', { value: 'note-provider' }, 'Same library as note (default)'),
+        el('option', { value: 'same-as-note' }, 'Same library as note (default)'),
       ];
-      const dbxSources = store.getSources().filter((s) => s.type === 'dropbox' && canWriteSrc(s));
-      for (const d of dbxSources) {
-        options.push(el('option', { value: 'dropbox' }, `Dropbox: ${displayName(d)} (/attachments)`));
-      }
       const s3Sources = store.getSources().filter((s) => (s.type === 's3' || s.type === 'r2') && canWriteSrc(s));
       for (const s of s3Sources) {
-        options.push(el('option', { value: 's3' }, `Object Vault: ${displayName(s)}`));
+        options.push(el('option', { value: 's3' }, `Dedicated Cloudflare R2 / S3 Vault (${displayName(s)})`));
       }
-      options.push(el('option', { value: 'device' }, 'This device only (offline blobs)'));
+      const dbxSources = store.getSources().filter((s) => s.type === 'dropbox' && canWriteSrc(s));
+      for (const d of dbxSources) {
+        options.push(el('option', { value: 'dropbox' }, `Dedicated Dropbox /${attachmentsFolder()}/ (${displayName(d)})`));
+      }
+      options.push(el('option', { value: 'device' }, 'This device only'));
       attSel.replaceChildren(...options);
-      attSel.value = currentDest;
+      attSel.value = currentDest === 'note-provider' ? 'same-as-note' : currentDest;
       attSel.onchange = (e) => {
-        store.setPrefs({ attachmentsDestination: e.target.value });
+        store.setPrefs({ attachmentsVault: e.target.value, attachmentsDestination: e.target.value === 'same-as-note' ? 'note-provider' : e.target.value });
         toast('Attachment destination updated');
       };
     }
   }
-  $('hl-home-select').onchange = (e) => store.setPrefs({ newNotesHome: e.target.value });
+  $('hl-home-select').onchange = (e) => store.setPrefs({ notesHome: e.target.value, newNotesHome: e.target.value });
   $('hl-folder-input').onchange = (e) => store.setPrefs({ highlightsFolder: e.target.value.trim().replace(/^\/+|\/+$/g, '') });
 
   /* ---- Reading Tab: Appearance & Habits ---- */
