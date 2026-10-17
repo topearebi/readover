@@ -72,6 +72,15 @@ export function initCompose(app) {
   const btnPaste = document.getElementById('compose-paste');
   const legacyCiteBtn = document.getElementById('compose-include-citation');
 
+  if (btnPaste) {
+    if (!btnPaste.getAttribute('aria-label')) btnPaste.setAttribute('aria-label', 'Paste a quote');
+    if (!btnPaste.getAttribute('title')) btnPaste.setAttribute('title', 'Paste a quote');
+  }
+  if (legacyCiteBtn) {
+    if (!legacyCiteBtn.getAttribute('aria-label')) legacyCiteBtn.setAttribute('aria-label', 'Include citation');
+    if (!legacyCiteBtn.getAttribute('title')) legacyCiteBtn.setAttribute('title', 'Include citation');
+  }
+
   // Sliding research drawer elements
   const drawer = document.getElementById('research-drawer');
   const drawerClose = document.getElementById('research-drawer-close');
@@ -1109,3 +1118,10 @@ export function initCompose(app) {
   if (canvas) canvas._composeController = controller;
   return controller;
 }
+
+export function openWriterCanvas(opts = {}) {
+  const ctrl = singletonController || initCompose();
+  return ctrl.open(opts);
+}
+
+export { openWriterCanvas as compose };

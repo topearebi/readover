@@ -367,8 +367,8 @@ async function renderBook(card, item) {
   const pct = prog ? Math.round((prog.pct || 0) * 100) : 0;
   const fallbackTitle = item.name.replace(/\.(pdf|epub)$/i, '').replace(/[_]+/g, ' ');
 
-  const coverBtn = el('button', { class: 'cover', 'aria-label': `Open ${fallbackTitle}` }, plainCover(fallbackTitle, ''));
-  const titleEl = el('h2', { class: 'book-title' }, fallbackTitle);
+  const coverBtn = el('button', { class: 'cover card-book-cover', 'aria-label': `Open ${fallbackTitle}` }, plainCover(fallbackTitle, ''));
+  const titleEl = el('h2', { class: 'book-title card-book-title' }, fallbackTitle);
   const authorEl = el('p', { class: 'book-author' }, item.name.split('.').pop().toUpperCase());
   const readBtn = el('button', { class: 'btn btn-primary btn-read' }, pct > 0 ? `Continue at ${pct}%` : 'Start reading');
   const open = () => card._ctx.actions.open(card);
@@ -378,7 +378,7 @@ async function renderBook(card, item) {
   card.replaceChildren(
     el(
       'div',
-      { class: 'card-body' },
+      { class: 'card-body card-book-wrap' },
       coverBtn,
       titleEl,
       authorEl,

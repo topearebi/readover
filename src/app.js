@@ -948,13 +948,30 @@ async function promptMissingBook(bookRef, { card = null, at = null, item = null 
     'div',
     { class: 'missing-book-prompt' },
     el('p', { class: 'hint' }, `“${bookName}” is not currently stored or downloaded on this device.`),
-    el('p', { class: 'hint', style: 'margin-top:8px;' }, 'You can connect your storage source to sync it, or browse remote OPDS catalogs to acquire it.')
+    el('p', { class: 'hint', style: 'margin-top:8px;' }, 'Connect your cloud storage vault in Settings to sync it, or add the book file directly.')
   );
 
   const actionsRow = el('div', { class: 'row-actions', style: 'margin-top:16px;' });
-  const opdsBtn = el('button', { type: 'button', class: 'btn btn-primary', value: 'opds' }, '🌐 Browse Catalogs / OPDS');
+  const importInput = el('input', { type: 'file', accept: '.epub,.pdf', style: 'display:none;' });
+  importInput.onchange = async () => {
+    const file = importInput.files?.[0];
+    if (!file) return;
+    toast(`Ingesting ${file.name}…`);
+    try {
+      await insights.saveBookToVault({ file });
+      toast(`Saved ${file.name} to library`);
+      const newItem = (await store.items.all()).find((it) => it.kind !== 'note' && it.name === file.name);
+      if (newItem) {
+        await openBookItem(newItem, null, at);
+      }
+    } catch (err) {
+      toast(`Failed: ${err.message}`);
+    }
+  };
+  const addBtn = el('button', { type: 'button', class: 'btn btn-primary', value: 'add' }, 'Add Book File');
+  addBtn.onclick = () => importInput.click();
   const syncBtn = el('button', { type: 'button', class: 'btn btn-quiet', value: 'settings' }, '⚙ Settings & Sync');
-  actionsRow.append(opdsBtn, syncBtn);
+  actionsRow.append(importInput, addBtn, syncBtn);
   if (card) {
     const noteBtn = el('button', { type: 'button', class: 'btn btn-quiet', value: 'note' }, 'Read Note Instead');
     actionsRow.append(noteBtn);
@@ -967,10 +984,7 @@ async function promptMissingBook(bookRef, { card = null, at = null, item = null 
     cancel: 'Dismiss',
   });
 
-  if (value === 'opds') {
-    const { openOpdsBrowser } = await import('./ui/opds.js');
-    openOpdsBrowser(app);
-  } else if (value === 'settings') {
+  if (value === 'settings') {
     settings.open();
   } else if (value === 'note' && card) {
     actions.open(card);
@@ -978,20 +992,32 @@ async function promptMissingBook(bookRef, { card = null, at = null, item = null 
 }
 
 async function openBookItem(item, knownTitle, at, jumpOpts = {}) {
-  toast('Opening…');
   let blob = (await store.blobs.get(item.key))?.blob;
   if (!blob) {
-    try {
-      blob = await library.readBlob(item);
-    } catch (readErr) {
-      promptMissingBook(item.path, { item, at, ...jumpOpts });
-      return;
+    const src = store.getSource(item.sourceId);
+    if (src && src.type !== 'device') {
+      const srcName = library.displayName(src);
+      toast(`Downloading “${item.name}” from ${srcName}…`);
+      try {
+        blob = await library.readBlob(item);
+        if (blob) {
+          await store.blobs.put({
+            key: item.key,
+            sourceId: item.sourceId,
+            sha: item.sha || `vault:${Date.now()}`,
+            blob,
+          });
+        }
+      } catch (readErr) {
+        console.warn('Streaming download failed for', item.path, readErr);
+      }
     }
   }
   if (!blob) {
     promptMissingBook(item.path, { item, at, ...jumpOpts });
     return;
   }
+  toast('Opening…');
   try {
     const title = knownTitle || (await store.thumbs.get(item.key))?.title || item.name.replace(/\.[^.]+$/, '');
     const onHighlight = (h) => saveBookHighlight(item, title, h);
@@ -1462,6 +1488,7 @@ app.openItem = (item) => (item.kind === 'note' ? openNoteItem(item) : openBookIt
 app.openBook = (item) => openBookItem(item);
 app.handleExternalFile = handleExternalFile;
 app.showView = showView;
+app.compose = (presets) => compose.open(presets);
 $('write-btn').onclick = () => compose.open();
 // "Paste a quote": read the clipboard while the tap still counts as a tap (iPhone asks
 // first), then switch from the new-note sheet to the capture sheet.
@@ -1563,6 +1590,39 @@ async function boot() {
         toast(`Dropbox connection failed: ${err.message}`);
       } finally {
         history.replaceState(null, '', location.pathname);
+      }
+    }
+
+    const shareReceived = params.get('share-received');
+    if (shareReceived) {
+      history.replaceState(null, '', location.pathname);
+      const sessionKey = `session:share|${shareReceived}`;
+      const legacyKey = `shared:${shareReceived}`;
+      (async () => {
+        let record = await store.blobs.get(sessionKey);
+        if (!record) record = await store.blobs.get(legacyKey);
+        if (record?.blob) {
+          await store.blobs.delete(sessionKey).catch(() => {});
+          await store.blobs.delete(legacyKey).catch(() => {});
+          const mimeType = record.blob.type || (shareReceived.endsWith('.md') ? 'text/markdown' : 'application/octet-stream');
+          const file = new File([record.blob], shareReceived, { type: mimeType });
+          handleExternalFile(file);
+        }
+      })().catch((err) => {
+        console.warn('Failed to retrieve shared file:', err);
+      });
+    }
+
+    const action = params.get('action');
+    if (action) {
+      history.replaceState(null, '', location.pathname);
+      if (action === 'new-note') {
+        if (typeof app.compose === 'function') app.compose();
+        else compose.open();
+      } else if (action === 'search') {
+        searchNotesDialog();
+      } else if (action === 'shelf') {
+        showView('shelf');
       }
     }
   }

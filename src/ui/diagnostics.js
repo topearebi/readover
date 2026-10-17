@@ -8,7 +8,7 @@ import * as library from '../library.js';
 import { openSheet, el, toast, pushOverlay } from './overlay.js';
 import { sanitizeFilename, isPathSafe, parseFrontmatter, slugify } from '../notefile.js';
 import { compressImage } from '../attachments.js';
-import { loadCatalogFeed, resolveUrl, parseAtomXml, parseOpds2Json } from '../sources/opds.js';
+import { saveBookToVault, booksFolder, booksHome } from '../insights.js';
 import { broadcastMessage, onBroadcastMessage } from '../sync.js';
 
 export function openDiagnostics(app) {
@@ -164,46 +164,33 @@ export function openDiagnostics(app) {
       return { status: 'warn', message: 'Service Worker not available.' };
     });
 
-    // 3. Host-Aware OPDS Parsing & Proxy
-    await exec('OPDS Engine', 'XML Atom Parser & Relative URL Resolution', 'core', async () => {
-      const sampleAtom = `<?xml version="1.0" encoding="utf-8"?>
-<feed xmlns="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
-  <title>Sample Catalog</title>
-  <entry>
-    <title>Great Expectations</title>
-    <author><name>Charles Dickens</name></author>
-    <link rel="http://opds-spec.org/acquisition" href="relative/book.epub" type="application/epub+zip" />
-    <link rel="http://opds-spec.org/image" href="covers/great.jpg" type="image/jpeg" />
-  </entry>
-</feed>`;
-      const parsed = parseAtomXml(sampleAtom, 'https://example.com/opds/catalog.atom');
-      if (!parsed.books || !parsed.books.length) throw new Error('Failed to parse Atom XML entry');
-      const book = parsed.books[0];
-      if (book.title !== 'Great Expectations') throw new Error('Title mismatch');
-      if (book.acquisition?.url !== 'https://example.com/opds/relative/book.epub') {
-        throw new Error(`Relative URL resolution failed: got ${book.acquisition?.url}`);
-      }
-      return { status: 'pass', message: 'Atom XML 1.2 parsed and relative URLs normalized correctly.' };
+    // 3. Book Vault Ingestion & Storage Architecture
+    await exec('Book Ingestion', 'Direct File Ingestion & Path Resolution', 'core', async () => {
+      const folder = booksFolder();
+      const home = booksHome();
+      if (!home || !home.id) throw new Error('Missing active booksHome source');
+      const testBlob = new Blob(['test-epub-content'], { type: 'application/epub+zip' });
+      const testItem = await saveBookToVault({
+        blob: testBlob,
+        filename: 'diagnostics-test-book.epub',
+        title: 'Diagnostics Book',
+      });
+      if (!testItem || !testItem.key) throw new Error('saveBookToVault did not return committed item');
+      const storedItem = await store.items.get(testItem.key);
+      const storedBlob = await store.blobs.get(testItem.key);
+      if (!storedItem || storedItem.kind !== 'epub') throw new Error('Stored item metadata missing or incorrect kind');
+      if (!storedBlob || !storedBlob.blob) throw new Error('Stored blob binary missing in IDB blobs store');
+      // Cleanup
+      await store.items.delete(testItem.key);
+      await store.blobs.delete(testItem.key);
+      return { status: 'pass', message: `Vault ingestion verified: files routed to ${folder ? folder + '/' : 'root'}, stored in ${home.id}.` };
     });
 
-    await exec('OPDS Engine', 'Host-Aware CORS Proxy Verification', 'core', async () => {
-      const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-      if (isLocalhost) {
-        try {
-          const res = await fetch('/api/opds-proxy?url=https%3A%2F%2Fm.gutenberg.org%2Febooks.opds%2F');
-          return {
-            status: res.ok ? 'pass' : 'warn',
-            message: res.ok ? 'Local Express /api/opds-proxy endpoint active and proxying remote feeds.' : `Proxy returned HTTP ${res.status}`,
-          };
-        } catch (e) {
-          return { status: 'warn', message: 'Local proxy connection failed: ' + e.message };
-        }
-      } else {
-        return {
-          status: 'pass',
-          message: 'Running in hosted/static environment: direct-first CORS and client-side proxies verified (skipping local /api route).',
-        };
-      }
+    await exec('Book Ingestion', 'Vault Path Security & Sandboxing', 'core', async () => {
+      const safePath = isPathSafe('books/my-book.epub');
+      const hostilePath = isPathSafe('../../../etc/passwd');
+      if (!safePath || hostilePath) throw new Error('Path safety check failed for book paths');
+      return { status: 'pass', message: 'Vault path validation and directory traversal sandboxing confirmed.' };
     });
 
     // 4. Annotation Contract & Deep-Link Check

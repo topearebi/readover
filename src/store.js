@@ -157,56 +157,6 @@ export function writeJSON(key, value) {
   }
 }
 
-/** OPDS Catalogs: { id, name, url, authType, username, password, token, corsProxy } */
-export const PRESET_CATALOGS = [
-  {
-    id: 'standard-ebooks',
-    name: 'Standard Ebooks',
-    url: 'https://standardebooks.org/opds/all',
-    authType: 'none',
-    description: 'Free, beautifully typeset public domain ebooks.',
-  },
-  {
-    id: 'project-gutenberg',
-    name: 'Project Gutenberg',
-    url: 'https://m.gutenberg.org/ebooks.opds/',
-    authType: 'none',
-    description: 'Over 70,000 free digital books.',
-  },
-  {
-    id: 'feedbooks',
-    name: 'Feedbooks Public Domain',
-    url: 'https://opds.feedbooks.com/catalog.atom',
-    authType: 'none',
-    description: 'Classical works and public domain literature.',
-  },
-];
-
-export function getCatalogs() {
-  const custom = readJSON(LS.catalogs, null);
-  if (custom === null) {
-    // Seed with standard presets on initial access
-    writeJSON(LS.catalogs, PRESET_CATALOGS);
-    return PRESET_CATALOGS;
-  }
-  return custom;
-}
-
-export function saveCatalog(catalog) {
-  const list = getCatalogs();
-  const idx = list.findIndex((c) => c.id === catalog.id);
-  if (idx >= 0) list[idx] = catalog;
-  else list.push(catalog);
-  writeJSON(LS.catalogs, list);
-  window.dispatchEvent(new CustomEvent('readover:catalogs-changed'));
-  return catalog;
-}
-
-export function deleteCatalog(id) {
-  const list = getCatalogs().filter((c) => c.id !== id);
-  writeJSON(LS.catalogs, list);
-  window.dispatchEvent(new CustomEvent('readover:catalogs-changed'));
-}
 
 /** Source: { id, type: 'github'|'local', name, owner?, repo?, branch?, root?, token?, mode?: 'handle'|'import' } */
 export function getSources() {

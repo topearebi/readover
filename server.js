@@ -45,55 +45,6 @@ app.get(['/auth/callback', '/auth/callback/'], (req, res) => {
 </html>`);
 });
 
-// OPDS proxy endpoint to bypass CORS for self-hosted Calibre, Kavita, or remote catalogs
-app.options('/api/opds-proxy', (req, res) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
-  res.sendStatus(204);
-});
-
-app.get('/api/opds-proxy', async (req, res) => {
-  const targetUrl = req.query.url;
-  if (!targetUrl || !/^https?:\/\//i.test(targetUrl)) {
-    return res.status(400).json({ error: 'Valid URL parameter starting with http:// or https:// is required' });
-  }
-
-  try {
-    const headers = {};
-    if (req.headers.authorization) headers['authorization'] = req.headers.authorization;
-    if (req.headers.range) headers['range'] = req.headers.range;
-    headers['accept'] = req.headers.accept || 'application/atom+xml, application/opds+json, application/epub+zip, application/pdf, */*';
-    headers['user-agent'] = 'Readover-OPDS-Client/1.0';
-
-    const resp = await fetch(targetUrl, { headers, redirect: 'follow' });
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
-    res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Content-Disposition');
-    
-    if (resp.headers.get('content-type')) {
-      res.setHeader('Content-Type', resp.headers.get('content-type'));
-    }
-    if (resp.headers.get('content-length')) {
-      res.setHeader('Content-Length', resp.headers.get('content-length'));
-    }
-    if (resp.headers.get('content-disposition')) {
-      res.setHeader('Content-Disposition', resp.headers.get('content-disposition'));
-    }
-
-    res.status(resp.status);
-
-    if (resp.body) {
-      const { Readable } = await import('stream');
-      Readable.fromWeb(resp.body).pipe(res);
-    } else {
-      res.end();
-    }
-  } catch (err) {
-    console.error('OPDS Proxy Error:', err);
-    res.status(502).json({ error: `Proxy failed: ${err.message}` });
-  }
-});
 
 app.get('*', (req, res) => {
   res.sendFile('index.html', { root: __dirname });

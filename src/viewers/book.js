@@ -14,6 +14,7 @@ import {
   THEMES,
 } from '../ui/appearance.js';
 import { showStagingBanner } from '../ui/staging-banner.js';
+import { setReaderMounted } from '../utils/wakelock.js';
 
 const fontUrl = new URL('../../vendor/literata-5.2.5/literata-latin-wght-normal.woff2', import.meta.url).href;
 const fontItalicUrl = new URL('../../vendor/literata-5.2.5/literata-latin-wght-italic.woff2', import.meta.url).href;
@@ -26,6 +27,7 @@ const fontItalicUrl = new URL('../../vendor/literata-5.2.5/literata-latin-wght-i
  * }
  */
 export async function openBook(item, blob, title, opts = {}) {
+  setReaderMounted(true).catch?.(() => {});
   const back = el('button', { class: 'icon-btn', 'aria-label': 'Back' }, icon('back'));
   const status = el('span', { class: 'status' }, 'Opening…');
   const contentsBtn = el('button', { class: 'btn btn-quiet', hidden: true }, 'Contents');
@@ -60,6 +62,7 @@ export async function openBook(item, blob, title, opts = {}) {
   };
   window.addEventListener('keydown', onKey);
   const close = pushOverlay(() => {
+    setReaderMounted(false).catch?.(() => {});
     popover?.remove();
     window.removeEventListener('keydown', onKey);
     try {

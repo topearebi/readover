@@ -35,20 +35,55 @@ globalThis.window = {
 globalThis.Node = globalThis.window.Node;
 globalThis.Element = globalThis.window.Element;
 globalThis.DOMParser = globalThis.window.DOMParser;
+const idbData = new Map();
 globalThis.indexedDB = {
   open: () => {
-    const mockStore = {
-      get: () => ({ onsuccess: null, onerror: null }),
-      put: () => ({ onsuccess: null, onerror: null }),
-      delete: () => ({ onsuccess: null, onerror: null }),
-      getAll: () => ({ onsuccess: null, onerror: null }),
-      clear: () => ({ onsuccess: null, onerror: null }),
-    };
+    function makeReq(resultVal = null) {
+      const r = { onsuccess: null, onerror: null, result: resultVal };
+      setTimeout(() => {
+        if (typeof r.onsuccess === 'function') r.onsuccess({ target: r });
+      }, 0);
+      return r;
+    }
+    const mockStore = (name) => ({
+      get: (k) => makeReq(idbData.get(`${name}:${k}`) || null),
+      put: (v) => {
+        const key = v.key || v.id || v.sha;
+        idbData.set(`${name}:${key}`, v);
+        return makeReq(key);
+      },
+      delete: (k) => {
+        idbData.delete(`${name}:${k}`);
+        return makeReq(null);
+      },
+      getAll: () => makeReq(Array.from(idbData.entries()).filter(([k]) => k.startsWith(`${name}:`)).map(([, v]) => v)),
+      clear: () => {
+        for (const k of idbData.keys()) {
+          if (k.startsWith(`${name}:`)) idbData.delete(k);
+        }
+        return makeReq(null);
+      },
+      index: () => ({
+        getAll: () => makeReq([]),
+        getAllKeys: () => makeReq([]),
+      }),
+    });
     const mockDb = {
       close: () => {},
-      transaction: () => ({
-        objectStore: () => mockStore,
-      }),
+      createObjectStore: (name) => mockStore(name),
+      transaction: (storeNames) => {
+        const primaryStore = Array.isArray(storeNames) ? storeNames[0] : storeNames;
+        const tx = {
+          objectStore: (name) => mockStore(name || primaryStore),
+          oncomplete: null,
+          onerror: null,
+          onabort: null,
+        };
+        setTimeout(() => {
+          if (typeof tx.oncomplete === 'function') tx.oncomplete();
+        }, 1);
+        return tx;
+      },
     };
     const req = { onupgradeneeded: null, onsuccess: null, onerror: null, result: mockDb };
     setTimeout(() => req.onsuccess?.({ target: req }), 0);
@@ -66,6 +101,38 @@ globalThis.localStorage = {
 console.log('🧪 Starting Readover Comprehensive End-to-End & Health Test Suite...');
 
 // Dynamic module imports
+const { validateCssStructure } = await import('./lint-css.js');
+let postcss = null;
+try {
+  postcss = (await import('postcss')).default;
+} catch {}
+
+/* =========================================================================
+   Step 0: CSS AST Linter Validation (Prior to Any Feature Tests)
+   ========================================================================= */
+console.log('\n--- Step 0: CSS AST Linter Validation ---');
+const styleCssPath = './src/style.css';
+assert.ok(fs.existsSync(styleCssPath), 'src/style.css must exist');
+const styleCssContent = fs.readFileSync(styleCssPath, 'utf8');
+
+if (postcss) {
+  try {
+    const root = postcss.parse(styleCssContent, { from: styleCssPath });
+    assert.ok(root && root.nodes && root.nodes.length > 0, 'PostCSS root AST must have nodes');
+    console.log('✅ PostCSS AST parser validated src/style.css: 0 syntax errors.');
+  } catch (err) {
+    assert.fail(`PostCSS syntax validation failed: ${err.message}`);
+  }
+} else {
+  const cssAstResult = validateCssStructure(styleCssContent, styleCssPath);
+  assert.strictEqual(
+    cssAstResult.errors.length,
+    0,
+    `CSS AST validation failed on src/style.css:\n${cssAstResult.errors.map((e) => `  [line ${e.line}:${e.col}] ${e.message}`).join('\n')}`
+  );
+  console.log('✅ CSS AST structural validator verified src/style.css: 0 unclosed blocks or bracket errors.');
+}
+
 const { isInsightOrHighlight } = await import('./src/insights.js');
 const {
   formatGardenNoteBody,
@@ -78,7 +145,7 @@ const {
   isPathSafe,
   slugify,
 } = await import('./src/notefile.js');
-const { resolveUrl, parseOpds2Json } = await import('./src/sources/opds.js');
+const { saveBookToVault, booksFolder, booksHome } = await import('./src/insights.js');
 
 /* =========================================================================
    Test 1: Scoping Logic & Insight Qualification
@@ -270,51 +337,42 @@ assert.strictEqual(isPathSafe('Notes/CON.md'), false);
 console.log('✅ Hostile path sanitizer passed all cross-platform assertions (Windows, Git, Dropbox, WebDAV).');
 
 /* =========================================================================
-   Test 5: OPDS URL Normalization & OPDS 2.0 Feed Parsing
+   Test 5: Book Vault Ingestion & Storage Architecture
    ========================================================================= */
-console.log('\n--- Test 5: OPDS URL Normalization & OPDS 2.0 Parser ---');
+console.log('\n--- Test 5: Book Vault Ingestion & Storage Architecture ---');
 
-assert.strictEqual(
-  resolveUrl('relative/path.epub', 'https://example.com/opds/feed.atom'),
-  'https://example.com/opds/relative/path.epub',
-  'Relative EPUB acquisition URL must be normalized against feed base URL'
-);
+// Test booksFolder() defaults and normalization
+assert.strictEqual(booksFolder(), 'books', 'Default booksFolder must be "books"');
 
-assert.strictEqual(
-  resolveUrl('/absolute/cover.jpg', 'https://example.com/opds/feed.atom'),
-  'https://example.com/absolute/cover.jpg',
-  'Root-relative cover URL must be normalized correctly'
-);
+// Test saveBookToVault commits item and blob
+const mockBlob = new Blob(['mock-epub-data'], { type: 'application/epub+zip' });
+const savedItem = await saveBookToVault({
+  blob: mockBlob,
+  filename: 'test-vault-book.epub',
+  title: 'Test Vault Book',
+  author: 'Author Name',
+  format: 'epub',
+});
 
-assert.strictEqual(
-  resolveUrl('https://other.org/book.epub', 'https://example.com/opds/feed.atom'),
-  'https://other.org/book.epub',
-  'Absolute URLs must remain unchanged'
-);
+assert.ok(savedItem && savedItem.key, 'saveBookToVault must return committed item with key');
+assert.strictEqual(savedItem.kind, 'epub', 'Item kind must be epub');
+assert.ok(savedItem.folder.includes('books'), 'Item folder must contain books subfolder');
+assert.strictEqual(savedItem.name, 'test-vault-book.epub');
 
-// OPDS 2.0 JSON test
-const sampleOpds2 = {
-  metadata: { title: 'Standard Ebooks Catalog' },
-  publications: [
-    {
-      metadata: { title: 'Moby Dick', author: 'Herman Melville' },
-      links: [
-        { rel: 'http://opds-spec.org/acquisition', href: 'moby-dick.epub', type: 'application/epub+zip' },
-      ],
-      images: [
-        { href: 'covers/moby.jpg', type: 'image/jpeg' },
-      ],
-    },
-  ],
-};
+// Verify stored in IndexedDB items and blobs
+const storeModule = await import('./src/store.js');
+const retrievedItem = await storeModule.items.get(savedItem.key);
+assert.ok(retrievedItem, 'Item must be stored in items table');
+assert.strictEqual(retrievedItem.name, 'test-vault-book.epub');
 
-const parsedOpds2 = parseOpds2Json(sampleOpds2, 'https://standardebooks.org/opds/');
-assert.strictEqual(parsedOpds2.title, 'Standard Ebooks Catalog');
-assert.strictEqual(parsedOpds2.books.length, 1);
-assert.strictEqual(parsedOpds2.books[0].title, 'Moby Dick');
-assert.strictEqual(parsedOpds2.books[0].acquisition.url, 'https://standardebooks.org/opds/moby-dick.epub');
+const retrievedBlob = await storeModule.blobs.get(savedItem.key);
+assert.ok(retrievedBlob && retrievedBlob.blob, 'Blob must be stored in blobs table');
 
-console.log('✅ OPDS relative URL normalization and OPDS 2.0 parser verified.');
+// Path security check for vault books
+assert.ok(isPathSafe(savedItem.path), 'Book vault path must pass isPathSafe check');
+assert.ok(!isPathSafe('../../dangerous.epub'), 'Hostile traversal path must be rejected');
+
+console.log('✅ Book Vault Ingestion, path normalization, and IDB storage verified.');
 
 /* =========================================================================
    Test 6: Outbox Queue Serialization Integrity
@@ -404,7 +462,11 @@ assert.ok(css.includes('.sheet-action'), 'style.css must style .sheet-action');
 assert.ok(css.includes(':focus-visible'), 'style.css must define high-contrast :focus-visible outline');
 assert.ok(css.includes('@media (prefers-reduced-motion: reduce)'), 'style.css must include prefers-reduced-motion accessibility rules');
 
-console.log('✅ CSS touch targets, 100dvh viewport rules, and diagnostic styles verified.');
+// Structural CSS Block & Bracket Parsing (PostCSS-equivalent validation)
+const cssCheck = validateCssStructure(css, 'src/style.css');
+assert.ok(cssCheck.success, `Structural CSS validation failed: ${cssCheck.errors.map((e) => e.message).join(', ')}`);
+
+console.log('✅ CSS touch targets, 100dvh viewport rules, structural block/media parsing, and diagnostic styles verified.');
 
 /* =========================================================================
    Test 9: Service Worker Shell & Cache File Integrity
@@ -412,7 +474,7 @@ console.log('✅ CSS touch targets, 100dvh viewport rules, and diagnostic styles
 console.log('\n--- Test 9: Service Worker Shell Cache & Assets Integrity ---');
 
 const swContent = fs.readFileSync('./sw.js', 'utf8');
-assert.ok(swContent.includes("'readover-shell-v8'") || swContent.includes("'readover-shell-v7'"), 'sw.js must be bumped to current version');
+assert.ok(swContent.includes("'readover-shell-v9'"), 'sw.js must be bumped to current version readover-shell-v9');
 assert.ok(swContent.includes("SKIP_WAITING"), 'sw.js must support SKIP_WAITING message');
 
 // Extract SHELL array and verify every referenced file exists on disk
@@ -436,13 +498,15 @@ console.log(`✅ All ${fileMatches.length} Service Worker shell precache assets 
 console.log('\n--- Test 10: Web App Manifest & Module Linkage Verification ---');
 
 const manifest = JSON.parse(fs.readFileSync('./manifest.json', 'utf8'));
-assert.strictEqual(manifest.share_target?.enctype, 'application/x-www-form-urlencoded', 'manifest.json share_target must specify enctype application/x-www-form-urlencoded');
+assert.strictEqual(manifest.share_target?.enctype, 'multipart/form-data', 'manifest.json share_target must specify enctype multipart/form-data');
+assert.strictEqual(manifest.share_target?.method, 'POST', 'manifest.json share_target must specify method POST');
+assert.ok(manifest.share_target?.params?.files?.length > 0, 'manifest.json share_target must specify files param');
 
 // Dynamic module import check
-const opdsMod = await import('./src/sources/opds.js');
-assert.ok(typeof opdsMod.parseAtomXml === 'function', 'src/sources/opds.js must export parseAtomXml');
-assert.ok(typeof opdsMod.parseOpds1Atom === 'function', 'src/sources/opds.js must export parseOpds1Atom');
-assert.ok(typeof opdsMod.parseOpds2Json === 'function', 'src/sources/opds.js must export parseOpds2Json');
+const insightsMod = await import('./src/insights.js');
+assert.ok(typeof insightsMod.saveBookToVault === 'function', 'src/insights.js must export saveBookToVault');
+assert.ok(typeof insightsMod.booksFolder === 'function', 'src/insights.js must export booksFolder');
+assert.ok(typeof insightsMod.booksHome === 'function', 'src/insights.js must export booksHome');
 
 const attachMod = await import('./src/attachments.js');
 assert.ok(typeof attachMod.setupImageAttachments === 'function', 'src/attachments.js must export setupImageAttachments');
@@ -463,7 +527,7 @@ assert.ok(readerContent.includes("id: 'reader-dock-graft'"), 'src/ui/reader.js m
 const growthContent = fs.readFileSync('./src/ui/growth.js', 'utf8');
 assert.ok(growthContent.includes("'graft' : 'grafts'"), 'src/ui/growth.js must display graft/grafts');
 
-console.log('✅ Web App Manifest enctype, core ES module exports, and botanical UI consistency verified successfully.');
+console.log('✅ Web App Manifest multipart enctype, core ES module exports, and botanical UI consistency verified successfully.');
 
 /* =========================================================================
    Test 11: Static AST Linkage & Complete ES Module Integrity Checker

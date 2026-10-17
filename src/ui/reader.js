@@ -11,8 +11,9 @@ import { wikiLink, updateFrontmatter } from '../notefile.js';
 import { growthOf, isArchived } from '../garden.js';
 import { growthTag, openGrowthSheet } from './growth.js';
 import { askNote } from './highlight-note.js';
-import { setupImageAttachments } from '../attachments.js';
 import { showStagingBanner } from './staging-banner.js';
+import { setReaderMounted } from '../utils/wakelock.js';
+import { setupImageAttachments } from '../attachments.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
 const linkName = (item) => item.path.split('/').pop().replace(/\.(md|markdown|txt)$/i, '');
@@ -149,6 +150,7 @@ function transformCitationCards(root, noteAnchor = null, noteMeta = null) {
  *                prune?(title) → Promise<item|null>, replant?() → Promise }
  */
 export async function openNote(item, opts = {}) {
+  setReaderMounted(true).catch?.(() => {});
   const opener = document.activeElement; // focus goes back here on close
   let src = getSource(item.sourceId);
   let text = await readText(item);
@@ -420,6 +422,7 @@ export async function openNote(item, opts = {}) {
     selTimer = setTimeout(checkSelection, 250);
   };
   const close = pushOverlay(() => {
+    setReaderMounted(false).catch?.(() => {});
     document.removeEventListener('selectionchange', onSelection);
     root.remove();
     if (!document.querySelector('.reader')) {

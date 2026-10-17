@@ -7,10 +7,13 @@
     "dev": "node server.js",
     "start": "node server.js",
     "build": "node -e \"console.log('Build complete')\"",
-    "test": "node test-full-suite.js && node test-cold-boot.js",
+    "test": "node lint-no-undef.js && node lint-css.js && node test-pwa-capabilities.js && node test-interactive-views.js && node test-cold-boot.js && node test-full-suite.js",
+    "test:pwa": "node test-pwa-capabilities.js",
+    "test:views": "node test-interactive-views.js",
     "test:ast": "node test-ast-linkage.js",
     "test:boot": "node test-cold-boot.js",
-    "lint": "node lint-no-undef.js"
+    "lint": "node lint-no-undef.js && node lint-css.js",
+    "lint:css": "node lint-css.js"
   },
   "dependencies": {
     "express": "^4.21.2"

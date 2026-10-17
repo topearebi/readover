@@ -89,22 +89,35 @@ export function attachmentsFolder() {
 }
 
 /**
+ * The subfolder where EPUBs and PDFs are stored. books/ unless
+ * chosen; '' is the top level of the library.
+ */
+export function booksFolder() {
+  const v = store.getPrefs().booksFolder;
+  return v == null ? 'books' : String(v).replace(/^\/+|\/+$/g, '');
+}
+
+/**
  * Commits an acquired or ingested book binary into the booksHome vault.
  * Writes to IndexedDB and triggers cloud upload if a remote adapter is active.
  */
-export async function saveBookToVault({ blob, filename, title = '', author = '', format = '' }) {
-  const targetSource = booksHome();
-  const ext = format === 'pdf' ? 'pdf' : (format === 'epub' ? 'epub' : (filename?.split('.').pop()?.toLowerCase() || 'epub'));
-  const safeFilename = filename || (title ? `${String(title).replace(/[^a-zA-Z0-9_\-]/g, '_')}.${ext}` : `book-${Date.now()}.${ext}`);
+export async function saveBookToVault({ blob, file, filename, title = '', author = '', format = '', sourceId = null, folder = null }) {
+  const actualBlob = blob || file;
+  const actualFilename = filename || file?.name || '';
+  const targetSource = sourceId ? (store.getSource(sourceId) || booksHome()) : booksHome();
+  const ext = format === 'pdf' ? 'pdf' : (format === 'epub' ? 'epub' : (actualFilename?.split('.').pop()?.toLowerCase() || 'epub'));
+  const safeFilename = actualFilename || (title ? `${String(title).replace(/[^a-zA-Z0-9_\-]/g, '_')}.${ext}` : `book-${Date.now()}.${ext}`);
+  const destFolder = folder != null ? String(folder).replace(/^\/+|\/+$/g, '') : booksFolder();
   const root = String(targetSource.root || '').replace(/^\/+|\/+$/g, '');
-  const path = [root, safeFilename].filter(Boolean).join('/');
+  const combinedFolder = [root, destFolder].filter(Boolean).join('/');
+  const path = [combinedFolder, safeFilename].filter(Boolean).join('/');
   const itemKey = store.keyOf(targetSource.id, path);
 
   const item = {
     key: itemKey,
     sourceId: targetSource.id,
     path,
-    folder: root,
+    folder: combinedFolder,
     name: safeFilename,
     kind: ext === 'pdf' ? 'pdf' : 'epub',
     sha: `vault:${Date.now()}`,
@@ -116,7 +129,7 @@ export async function saveBookToVault({ blob, filename, title = '', author = '',
     key: itemKey,
     sourceId: targetSource.id,
     sha: item.sha,
-    blob,
+    blob: actualBlob,
   });
 
   if (title || author) {

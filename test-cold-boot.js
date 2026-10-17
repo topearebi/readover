@@ -617,7 +617,6 @@ async function runColdBootAndExercises() {
     './src/ui/notes.js',
     './src/ui/diagnostics.js',
     './src/ui/observatory.js',
-    './src/ui/opds.js',
     './src/ui/sheet.js',
     './src/ui/growth.js',
     './src/ui/capture.js',

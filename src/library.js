@@ -319,7 +319,7 @@ export async function putAttachment(src, attachmentPath, blob) {
 }
 
 /**
- * Saves a book acquired from an OPDS catalog to the user's destination library.
+ * Saves an ingested or acquired book to the user's destination library.
  * Stashes metadata into items and binary into blobs and target storage provider.
  */
 export async function saveAcquiredBook(targetSrc, filename, blob, meta = {}) {
@@ -327,7 +327,7 @@ export async function saveAcquiredBook(targetSrc, filename, blob, meta = {}) {
   const name = parts.pop();
   const folder = parts.join('/');
   const kind = kindOf(name) || 'epub';
-  const sha = `opds:${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  const sha = `vault:${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
   const key = keyOf(targetSrc.id, filename);
 
   const item = {

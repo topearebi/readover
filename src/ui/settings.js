@@ -11,7 +11,7 @@ import { openSheet, el, toast } from './overlay.js';
 import * as dataSync from '../sync.js';
 import * as outbox from '../outbox.js';
 import * as learn from '../learn.js';
-import { newNotesHome, notesHome, booksHome, highlightsFolder, attachmentsFolder } from '../insights.js';
+import { newNotesHome, notesHome, booksHome, booksFolder, highlightsFolder, attachmentsFolder } from '../insights.js';
 import { libraryTypes } from './types.js';
 import { bookmarkletCode } from '../clip.js';
 import { TOKEN_URL } from './setup.js';
@@ -204,152 +204,6 @@ export function initSettings(app) {
     return el('div', { class: 'source' }, el('div', { class: 'source-name' }, 'On this device'), detail, actions);
   }
 
-  /* ---- OPDS Catalogs in Settings ---- */
-  function getCatalogsList() {
-    if (typeof store.getOpdsCatalogs === 'function') {
-      try {
-        return store.getOpdsCatalogs();
-      } catch {}
-    }
-    try {
-      const raw = localStorage.getItem('readover.opdsCatalogs');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch {}
-    return [
-      {
-        id: 'opds-gutenberg',
-        name: 'Project Gutenberg',
-        url: 'https://m.gutenberg.org/ebooks.opds/',
-        description: 'Over 70,000 free public domain ebooks',
-        useProxy: false,
-      },
-      {
-        id: 'opds-standard-ebooks',
-        name: 'Standard Ebooks (Donor Login)',
-        url: 'https://standardebooks.org/opds',
-        description: 'Free public domain ebooks in high-quality EPUB format',
-        useProxy: false,
-      },
-    ];
-  }
-
-  function renderOpdsCatalogs() {
-    const list = $('settings-opds-list');
-    if (!list) return;
-    const cats = getCatalogsList();
-    const pill = $('opds-count-pill');
-    if (pill) {
-      pill.textContent = `${cats.length} ${cats.length === 1 ? 'catalog' : 'catalogs'}`;
-    }
-    if (!cats.length) {
-      list.replaceChildren(el('p', { class: 'empty-sources' }, 'No OPDS catalogs configured.'));
-      return;
-    }
-    const rows = cats.map((cat) => {
-      const bits = [cat.url];
-      if (cat.useProxy) bits.push('CORS proxy');
-      if (cat.username) bits.push(`User: ${cat.username}`);
-      const detail = el('div', { class: 'source-detail' }, bits.join(' · '));
-      const actions = el('div', { class: 'source-actions' });
-      const browseBtn = el('button', {}, 'Browse');
-      browseBtn.onclick = async () => {
-        const { openOpdsBrowser } = await import('./opds.js');
-        openOpdsBrowser(app);
-      };
-      actions.append(browseBtn);
-      const delBtn = el('button', { class: 'remove' }, 'Remove');
-      delBtn.onclick = () => {
-        if (typeof store.deleteOpdsCatalog === 'function') {
-          store.deleteOpdsCatalog(cat.id);
-        } else {
-          const filtered = getCatalogsList().filter((c) => c.id !== cat.id);
-          localStorage.setItem('readover.opdsCatalogs', JSON.stringify(filtered));
-        }
-        renderOpdsCatalogs();
-        toast(`Removed ${cat.name}`);
-      };
-      actions.append(delBtn);
-      return el('div', { class: 'source' }, el('div', { class: 'source-name' }, cat.name), detail, actions);
-    });
-    list.replaceChildren(...rows);
-  }
-
-  const openOpdsBtn = $('open-opds-from-settings');
-  if (openOpdsBtn) {
-    openOpdsBtn.onclick = async () => {
-      const { openOpdsBrowser } = await import('./opds.js');
-      openOpdsBrowser(app);
-    };
-  }
-
-  const addOpdsBtn = $('add-opds-from-settings');
-  if (addOpdsBtn) {
-    addOpdsBtn.onclick = async () => {
-      const { openAddCatalogModal } = await import('./opds.js');
-      openAddCatalogModal(() => {
-        renderOpdsCatalogs();
-      });
-    };
-  }
-
-  /* ---- CORS Proxy Settings ---- */
-  const corsProxyInput = $('cors-proxy-input');
-  const corsTestBtn = $('cors-proxy-test-btn');
-  const corsSaveBtn = $('cors-proxy-save-btn');
-
-  function renderCorsProxy() {
-    if (!corsProxyInput) return;
-    const prefs = store.getPrefs();
-    corsProxyInput.value = prefs.corsProxyUrl || '';
-  }
-
-  if (corsProxyInput) {
-    corsProxyInput.onchange = () => {
-      const val = corsProxyInput.value.trim();
-      store.setPrefs({ corsProxyUrl: val });
-      toast(val ? 'CORS proxy saved' : 'CORS proxy cleared (using direct / public fallback)');
-    };
-  }
-
-  if (corsSaveBtn && corsProxyInput) {
-    corsSaveBtn.onclick = () => {
-      const val = corsProxyInput.value.trim();
-      store.setPrefs({ corsProxyUrl: val });
-      toast(val ? 'CORS proxy saved' : 'CORS proxy cleared');
-    };
-  }
-
-  if (corsTestBtn && corsProxyInput) {
-    corsTestBtn.onclick = async () => {
-      const proxy = corsProxyInput.value.trim();
-      if (!proxy) {
-        toast('Enter a proxy URL to test first.');
-        return;
-      }
-      corsTestBtn.disabled = true;
-      corsTestBtn.textContent = 'Testing…';
-      try {
-        const testTarget = 'https://m.gutenberg.org/ebooks.opds/';
-        const testUrl = proxy.includes('%s')
-          ? proxy.replace('%s', encodeURIComponent(testTarget))
-          : `${proxy}${encodeURIComponent(testTarget)}`;
-        const res = await fetch(testUrl, { signal: AbortSignal.timeout(6000) });
-        if (res.ok) {
-          toast('✓ Proxy test succeeded! Valid response received.');
-        } else {
-          toast(`Proxy returned HTTP ${res.status}: ${res.statusText}`);
-        }
-      } catch (err) {
-        toast(`Proxy test failed: ${err.message}`);
-      } finally {
-        corsTestBtn.disabled = false;
-        corsTestBtn.textContent = 'Test Proxy';
-      }
-    };
-  }
 
 
   /* ---- GitHub Form ---- */
@@ -782,6 +636,17 @@ export function initSettings(app) {
       };
     }
 
+    // Books folder input
+    const booksFolderInput = $('books-folder-input');
+    if (booksFolderInput) {
+      booksFolderInput.value = booksFolder();
+      booksFolderInput.onchange = (e) => {
+        const val = e.target.value.trim().replace(/^\/+|\/+$/g, '') || 'books';
+        store.setPrefs({ booksFolder: val });
+        toast('Books folder updated');
+      };
+    }
+
     // Attachments folder input
     const attFolderInput = $('attachments-folder-input');
     if (attFolderInput) {
@@ -947,6 +812,23 @@ export function initSettings(app) {
   };
   $('clip-shortcut-url').textContent = `${new URL('./', location.href).href}#clip?text=…&url=…`;
 
+  const iosCopyBtn = $('ios-shortcut-copy-btn');
+  if (iosCopyBtn) {
+    iosCopyBtn.onclick = async () => {
+      const schemeUrl = `${new URL('./', location.href).href}#clip?text={text}&url={url}`;
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(schemeUrl);
+          toast('Copied Shortcut URL scheme to clipboard!');
+        } catch {
+          toast(`Shortcut scheme: ${schemeUrl}`);
+        }
+      } else {
+        toast(`Shortcut scheme: ${schemeUrl}`);
+      }
+    };
+  }
+
   return {
     async open(initialTab = 'tab-sources') {
       switchTab(initialTab);
@@ -957,8 +839,6 @@ export function initSettings(app) {
       $('mix-select').value = String(prefs.highlightMix >= 0.7 ? 0.8 : prefs.highlightMix > 0 ? 0.5 : 0);
       form.hidden = true;
       renderSources();
-      renderOpdsCatalogs();
-      renderCorsProxy();
       renderDropboxSettings();
       renderSync();
 

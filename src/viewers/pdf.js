@@ -11,6 +11,7 @@ import {
   createAppearancePopover,
 } from '../ui/appearance.js';
 import { showStagingBanner } from '../ui/staging-banner.js';
+import { setReaderMounted } from '../utils/wakelock.js';
 
 const norm = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
 
@@ -22,6 +23,7 @@ const norm = (s) => s.replace(/\s+/g, ' ').trim().toLowerCase();
  * }
  */
 export async function openPdf(item, blob, title, opts = {}) {
+  setReaderMounted(true).catch?.(() => {});
   const back = el('button', { class: 'icon-btn', 'aria-label': 'Back' }, icon('back'));
   const status = el('span', { class: 'status' }, 'Opening…');
   const aaBtn = el('button', { class: 'icon-btn appearance-btn', 'aria-label': 'Reading appearance', title: 'Appearance' }, el('span', { class: 'btn-aa' }, 'Aa'));
@@ -58,6 +60,7 @@ export async function openPdf(item, blob, title, opts = {}) {
     selTimer = setTimeout(checkSelection, 250);
   };
   const close = pushOverlay(() => {
+    setReaderMounted(false).catch?.(() => {});
     popover?.remove();
     observer?.disconnect();
     clearTimeout(saveTimer);

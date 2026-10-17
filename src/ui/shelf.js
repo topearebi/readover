@@ -1,7 +1,8 @@
 import * as store from '../store.js';
 import { isBook } from '../library.js';
 import { getCover } from '../covers.js';
-import { el, icon } from './overlay.js';
+import { el, icon, toast } from './overlay.js';
+import { saveBookToVault } from '../insights.js';
 
 const tones = ['#2e5b4f', '#5a4632', '#3b4a63', '#6b3b3b', '#4a5530', '#40384f'];
 const toneFor = (s) => {
@@ -16,37 +17,33 @@ export function initShelf(app) {
   const root = document.getElementById('shelf');
   let coverObserver = null;
 
-  function getCatalogsList() {
-    if (typeof store.getOpdsCatalogs === 'function') {
+  const fileInput = el('input', {
+    type: 'file',
+    accept: '.epub,.pdf',
+    multiple: true,
+    style: 'display:none;',
+  });
+
+  fileInput.onchange = async () => {
+    const files = Array.from(fileInput.files || []);
+    if (!files.length) return;
+    let count = 0;
+    for (const file of files) {
       try {
-        const res = store.getOpdsCatalogs();
-        if (Array.isArray(res) && res.length) return res;
-      } catch {}
-    }
-    try {
-      const raw = localStorage.getItem('readover.opdsCatalogs');
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length) return parsed;
+        toast(`Ingesting ${file.name}…`);
+        await saveBookToVault({ file });
+        count++;
+      } catch (err) {
+        console.error('Failed to ingest book', file.name, err);
+        toast(`Failed to ingest ${file.name}: ${err.message || 'error'}`);
       }
-    } catch {}
-    return [
-      {
-        id: 'opds-gutenberg',
-        name: 'Project Gutenberg',
-        url: 'https://m.gutenberg.org/ebooks.opds/',
-        description: 'Over 70,000 free public domain ebooks',
-        useProxy: false,
-      },
-      {
-        id: 'opds-standard-ebooks',
-        name: 'Standard Ebooks (Donor Login)',
-        url: 'https://standardebooks.org/opds',
-        description: 'Free public domain ebooks in high-quality EPUB format',
-        useProxy: false,
-      },
-    ];
-  }
+    }
+    fileInput.value = '';
+    if (count > 0) {
+      toast(`Added ${count} book${count === 1 ? '' : 's'} to library`);
+      render();
+    }
+  };
 
   async function render() {
     const hiddenOrGone = new Set((await store.state.all()).filter((s) => s.hidden).map((s) => s.key));
@@ -94,6 +91,12 @@ export function initShelf(app) {
       return btn;
     };
 
+    const addBookBtn = el('button', { type: 'button', class: 'btn btn-primary shelf-add-book-btn', title: 'Add EPUB or PDF books' },
+      icon('open', 'i i-sm'),
+      el('span', {}, 'Add book')
+    );
+    addBookBtn.onclick = () => fileInput.click();
+
     const observatoryBtn = el('button', { type: 'button', class: 'btn btn-quiet shelf-observatory-btn', title: 'Open Knowledge Observatory' },
       icon('observatory', 'i i-sm'),
       el('span', {}, 'Observatory')
@@ -103,19 +106,11 @@ export function initShelf(app) {
       openObservatory(app);
     };
 
-    const opdsBtn = el('button', { type: 'button', class: 'btn btn-quiet shelf-opds-btn', title: 'Browse remote OPDS catalogs (Standard Ebooks, Calibre, Kavita)' },
-      el('span', {}, '🌐 Browse OPDS Catalogs')
-    );
-    opdsBtn.onclick = async () => {
-      const { openOpdsBrowser } = await import('./opds.js');
-      openOpdsBrowser(app);
-    };
-
     const shelfBar = el('div', { class: 'shelf-bar' },
       el('div', { class: 'shelf-bar-left' },
         el('h1', { class: 'shelf-heading-main' }, 'Your Books')
       ),
-      el('div', { class: 'shelf-bar-actions' }, observatoryBtn, opdsBtn)
+      el('div', { class: 'shelf-bar-actions' }, addBookBtn, observatoryBtn)
     );
 
     const sections = [shelfBar];
@@ -147,68 +142,30 @@ export function initShelf(app) {
         );
       }
     }
-    // Dedicated Catalogs Section in Shelves ("Browse Remote, Stash Local")
-    const catalogs = getCatalogsList();
-    const catalogCards = catalogs.map((cat) => {
-      const card = el(
-        'button',
-        { type: 'button', class: 'shelf-catalog-card', title: `Browse ${cat.name}` },
-        el('span', { class: 'shelf-catalog-icon' }, '🌐'),
-        el('div', { class: 'shelf-catalog-info' },
-          el('b', {}, cat.name),
-          el('small', {}, cat.description || cat.url)
-        )
-      );
-      card.onclick = async () => {
-        const { openOpdsBrowser } = await import('./opds.js');
-        openOpdsBrowser(app, { initialCatalogId: cat.id });
-      };
-      return card;
-    });
-
-    const addCatBtn = el(
-      'button',
-      { type: 'button', class: 'shelf-catalog-card shelf-catalog-add', title: 'Add custom OPDS catalog' },
-      el('span', { class: 'shelf-catalog-icon' }, '+'),
-      el('div', { class: 'shelf-catalog-info' },
-        el('b', {}, 'Add Catalog…'),
-        el('small', {}, 'Connect Calibre, Kavita, or Komga')
-      )
-    );
-    addCatBtn.onclick = async () => {
-      const { openOpdsBrowser } = await import('./opds.js');
-      openOpdsBrowser(app, { openAdd: true });
-    };
-    catalogCards.push(addCatBtn);
-
-    sections.push(
-      el('h2', { class: 'shelf-heading' }, 'Catalogs ("Browse Remote, Stash Local")'),
-      el('div', { class: 'shelf-catalogs-grid' }, ...catalogCards)
-    );
 
     if (!books.length) {
-      const connect = el('button', { class: 'btn btn-primary' }, 'Add your books');
+      const addBtn = el('button', { type: 'button', class: 'btn btn-primary' },
+        icon('open', 'i i-sm'),
+        el('span', {}, 'Add book')
+      );
+      addBtn.onclick = () => fileInput.click();
+      const connect = el('button', { type: 'button', class: 'btn btn-quiet' }, 'Connect storage');
       connect.onclick = () => app.connect();
-      const browseOpds = el('button', { class: 'btn btn-quiet' }, 'Browse OPDS Catalogs');
-      browseOpds.onclick = async () => {
-        const { openOpdsBrowser } = await import('./opds.js');
-        openOpdsBrowser(app);
-      };
       sections.push(
         el(
           'div',
           { class: 'shelf-empty' },
-          el('h2', {}, 'No local books downloaded yet.'),
-          el('p', {}, 'Browse catalogs above to acquire open-access books, or connect a storage folder from Settings.'),
-          el('div', { class: 'row-actions' }, connect, browseOpds)
+          el('h2', {}, 'No books in your library yet.'),
+          el('p', {}, 'Ingest an EPUB or PDF directly, or connect a storage folder from Settings.'),
+          el('div', { class: 'row-actions' }, addBtn, connect)
         )
       );
     }
-    root.replaceChildren(el('div', { class: 'shelf-inner' }, ...sections));
+
+    root.replaceChildren(el('div', { class: 'shelf-inner' }, fileInput, ...sections));
   }
 
   window.addEventListener('readover:shelf-refresh', () => render());
-
 
   async function loadCover(btn) {
     try {

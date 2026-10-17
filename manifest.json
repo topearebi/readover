@@ -6,6 +6,10 @@
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone"
+  ],
   "orientation": "any",
   "background_color": "#e8ebe3",
   "theme_color": "#e8ebe3",
@@ -42,12 +46,28 @@
   ],
   "share_target": {
     "action": "./",
-    "method": "GET",
-    "enctype": "application/x-www-form-urlencoded",
+    "method": "POST",
+    "enctype": "multipart/form-data",
     "params": {
       "title": "title",
       "text": "text",
-      "url": "url"
+      "url": "url",
+      "files": [
+        {
+          "name": "files",
+          "accept": [
+            "application/epub+zip",
+            ".epub",
+            "application/pdf",
+            ".pdf",
+            "text/markdown",
+            ".md",
+            ".markdown",
+            "text/plain",
+            ".txt"
+          ]
+        }
+      ]
     }
   },
   "file_handlers": [
@@ -66,6 +86,47 @@
         "application/pdf": [".pdf"],
         "text/markdown": [".md", ".markdown", ".txt"]
       }
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New Note",
+      "short_name": "New Note",
+      "description": "Capture a new thought or note",
+      "url": "./?action=new-note",
+      "icons": [
+        {
+          "src": "./icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Search Notes",
+      "short_name": "Search",
+      "description": "Search your library and notes",
+      "url": "./?action=search",
+      "icons": [
+        {
+          "src": "./icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Bookshelf",
+      "short_name": "Books",
+      "description": "Open your books and monographs",
+      "url": "./?action=shelf",
+      "icons": [
+        {
+          "src": "./icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
     }
   ]
 }
