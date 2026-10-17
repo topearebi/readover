@@ -31,8 +31,10 @@ export function glyph(name) {
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
   svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('width', '16');
+  svg.setAttribute('height', '16');
   svg.setAttribute('aria-hidden', 'true');
-  svg.setAttribute('class', 'glyph');
+  svg.setAttribute('class', 'glyph growth-glyph i i-sm');
   svg.innerHTML = GLYPHS[name] || '';
   return svg;
 }
@@ -55,7 +57,7 @@ export function growthTag(g, onOpen) {
   const label = `${main}${rest ? `, ${rest}` : ''}${g.health ? `, ${g.health}` : ''}`;
   const btn = el(
     'button',
-    { type: 'button', class: `grow ${cls}`, 'aria-label': `${label}. Where this note stands` },
+    { type: 'button', class: `grow ${cls} growth-tag growth-badge`, 'aria-label': `${label}. Where this note stands` },
     glyph(g.stage === 'pruned' ? 'pruned' : g.stage),
     el('b', {}, main),
     rest ? el('span', {}, ` · ${rest}`) : null

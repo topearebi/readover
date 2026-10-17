@@ -73,7 +73,56 @@ def test_style_css():
     # Touch target bounds check
     assert "min-height: 44px" in css or "min-height: 38px" in css, "Touch target bounds missing"
     
-    print("✓ src/style.css notes layout, touch targets, and typography verified.")
+    # Growth glyph and badge sizing
+    assert ".glyph" in css and ".growth-glyph" in css, "Growth glyph sizing classes missing"
+    assert "max-width: 16px" in css and "max-height: 16px" in css, "Growth glyph max constraints missing"
+    
+    # Tabbar fixed positioning check
+    assert "nav.tabbar" in css and "position: fixed" in css, "nav.tabbar fixed positioning missing"
+    assert "z-index: 50" in css, "nav.tabbar z-index missing"
+
+    # Mathematical CSS brace balance verification
+    open_braces = 0
+    in_comment = False
+    in_string = False
+    string_char = ''
+    i = 0
+    n = len(css)
+    while i < n:
+        ch = css[i]
+        if in_comment:
+            if ch == '*' and i + 1 < n and css[i+1] == '/':
+                in_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+        if in_string:
+            if ch == '\\':
+                i += 2
+                continue
+            if ch == string_char:
+                in_string = False
+            i += 1
+            continue
+        if ch == '/' and i + 1 < n and css[i+1] == '*':
+            in_comment = True
+            i += 2
+            continue
+        if ch in ('"', "'"):
+            in_string = True
+            string_char = ch
+            i += 1
+            continue
+        if ch == '{':
+            open_braces += 1
+        elif ch == '}':
+            open_braces -= 1
+        i += 1
+    assert open_braces == 0, f"src/style.css has unclosed braces (count: {open_braces})"
+    assert not in_comment, "src/style.css has an unclosed comment"
+    
+    print("✓ src/style.css notes layout, touch targets, brace balance, and typography verified.")
 
 def test_ast_and_syntax():
     print("\n--- 4. Checking JS syntax via Acorn AST parser ---")

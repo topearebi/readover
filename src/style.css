@@ -170,6 +170,20 @@ a {
   width: 32px;
   height: 32px;
 }
+.glyph,
+.growth-glyph,
+.growth-tag svg,
+.growth-badge svg,
+.grow svg,
+.grow .glyph {
+  max-width: 16px;
+  max-height: 16px;
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+  vertical-align: middle;
+  flex: none;
+}
 
 /* ---------- Top bar ---------- */
 .topbar {
@@ -280,14 +294,17 @@ a {
   max-height: 100%;
   display: flex;
   flex-direction: column;
+  gap: 8px;
   min-height: 0;
+  position: relative;
 }
 
 .card-where {
+  position: static;
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
-  margin: 0 0 14px;
+  margin: 0 0 10px;
   font-size: 0.8125rem;
   color: var(--faint);
 }
@@ -301,14 +318,21 @@ a {
 }
 
 .card-title {
+  position: static;
   font-family: var(--serif);
   font-weight: 600;
   font-size: clamp(1.6rem, 1.2rem + 2vw, 2.3rem);
   line-height: 1.15;
   letter-spacing: -0.015em;
-  margin: 0 0 18px;
+  margin: 0 0 12px;
   text-wrap: balance;
   overflow-wrap: anywhere;
+}
+
+.card-body .preview,
+.card-body .prose {
+  position: relative;
+  width: 100%;
 }
 
 /* Note preview: clipped, with a fade that tells you there is more */
@@ -1636,6 +1660,7 @@ body.has-writer {
     color: var(--faint);
     font-size: 2rem;
   }
+}
 /* ---------- Reading Appearance Customizer & Themes ---------- */
 
 .reader-bar .appearance-btn {
@@ -2449,16 +2474,20 @@ body.has-writer {
 }
 
 /* ---------- Bottom tab bar ---------- */
+nav.tabbar,
 .tabbar {
   position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
   inset: auto 0 0 0;
-  z-index: 20;
+  z-index: 50;
   height: var(--tabbar);
   padding-bottom: env(safe-area-inset-bottom);
   display: flex;
-  justify-content: center;
+  justify-content: space-around;
   gap: 8px;
-  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  background: color-mix(in srgb, var(--paper, var(--surface)) 88%, transparent);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   border-top: 1px solid var(--line);
@@ -3688,9 +3717,18 @@ details.how li + li {
 }
 
 /* ---------- The garden: growth tags, Water, the tag sheet ---------- */
-.glyph {
+.glyph,
+.growth-glyph,
+.growth-tag svg,
+.growth-badge svg,
+.grow svg,
+.grow .glyph {
+  max-width: 16px;
+  max-height: 16px;
   width: 16px;
   height: 16px;
+  display: inline-block;
+  vertical-align: middle;
   flex: none;
 }
 .grow-row {
