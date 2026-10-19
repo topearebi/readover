@@ -469,6 +469,8 @@ assert.ok(html.includes('id="compose-image-input"'), 'index.html must include #c
 assert.ok(html.includes('id="edit-source-sheet"'), 'index.html must include #edit-source-sheet modal for editing storage providers');
 assert.ok(html.includes('id="edit-source-form"'), 'index.html must include #edit-source-form');
 assert.ok(html.includes('id="i-eye"'), 'index.html must include #i-eye SVG symbol for credential visibility toggle');
+assert.ok(html.includes('/ResizeObserver loop/i'), 'index.html must include ResizeObserver loop error filter in global error trap');
+assert.ok(html.includes('__readoverDetachBootError'), 'index.html must expose __readoverDetachBootError hook for clean post-boot detachment');
 
 console.log('✅ DOM entry points, viewport meta, ARIA labels, and noscript fallbacks verified.');
 

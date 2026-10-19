@@ -461,14 +461,21 @@ doc.querySelectorAll = (sel) => docElement.querySelectorAll(sel);
 // Parse index.html and instantiate IDs and structure into doc.body
 function parseAndPopulateElements(htmlStr) {
   // Extract all id="..." attributes and create elements
-  const idRegex = /<([a-zA-Z0-9]+)\s+[^>]*?id="([^"]+)"[^>]*?>/g;
+  const idRegex = /<([a-zA-Z0-9]+)\s+([^>]*?id="([^"]+)"[^>]*?)>/g;
   let m;
   while ((m = idRegex.exec(htmlStr)) !== null) {
-    const [, tag, id] = m;
+    const [, tag, attrs, id] = m;
     let el = doc.getElementById(id);
     if (!el) {
       el = doc.createElement(tag);
       el.id = id;
+      const styleMatch = attrs.match(/style="([^"]+)"/);
+      if (styleMatch) {
+        for (const pair of styleMatch[1].split(';')) {
+          const [k, v] = pair.split(':');
+          if (k && v) el.style[k.trim()] = v.trim();
+        }
+      }
       body.appendChild(el);
     }
   }
@@ -837,6 +844,62 @@ async function runColdBootAndExercises() {
     readerEl.remove();
   }
   console.log('    ✓ Reader view and Edit mode exercised: all 7 toolbar controls responded with 0 frozen states.');
+
+  // 10. Exercise Global Error Trap & Benign ResizeObserver Filtering
+  console.log('  ▸ Pass 10: Exercising Global Error Trap & Benign ResizeObserver Suppression...');
+  const { initBootErrorTrap, detachBootErrorTrap, isBenignLayoutError } = await import('./src/app.js');
+  const bootErrorBox = doc.getElementById('boot-error-boundary');
+  assert.ok(bootErrorBox, '#boot-error-boundary must exist in DOM');
+
+  // Verify pattern matching helper
+  assert.strictEqual(isBenignLayoutError('ResizeObserver loop completed with undelivered notifications'), true);
+  assert.strictEqual(isBenignLayoutError('ResizeObserver loop limit exceeded'), true);
+  assert.strictEqual(isBenignLayoutError('resizeobserver loop completed with undelivered notifications.'), true);
+  assert.strictEqual(isBenignLayoutError(new Error('ResizeObserver loop limit exceeded')), true);
+  assert.strictEqual(isBenignLayoutError({ message: 'ResizeObserver loop completed with undelivered notifications' }), true);
+  assert.strictEqual(isBenignLayoutError('SyntaxError: Unexpected token'), false);
+  assert.strictEqual(isBenignLayoutError(new Error('Fatal database crash')), false);
+
+  // Initialize/re-arm boot error trap to simulate startup phase
+  bootErrorBox.style.display = 'none';
+  initBootErrorTrap();
+
+  // Test 1: Dispatch simulated ErrorEvent matching "ResizeObserver loop completed with undelivered notifications"
+  const errEvt1 = new MockEvent('error');
+  errEvt1.message = 'ResizeObserver loop completed with undelivered notifications';
+  window.dispatchEvent(errEvt1);
+  assert.notStrictEqual(bootErrorBox.style.display, 'flex', '#boot-error-boundary must remain hidden for benign ResizeObserver notifications');
+  assert.strictEqual(bootErrorBox.style.display, 'none', '#boot-error-boundary must stay display: none');
+
+  // Test 2: Dispatch simulated ErrorEvent matching "ResizeObserver loop limit exceeded"
+  const errEvt2 = new MockEvent('error');
+  errEvt2.message = 'ResizeObserver loop limit exceeded';
+  window.dispatchEvent(errEvt2);
+  assert.notStrictEqual(bootErrorBox.style.display, 'flex', '#boot-error-boundary must remain hidden for ResizeObserver loop limit exceeded');
+
+  // Test 3: Dispatch simulated unhandled rejection with ResizeObserver loop message
+  const unhandledEvt = new MockEvent('unhandledrejection');
+  unhandledEvt.reason = new Error('ResizeObserver loop completed with undelivered notifications');
+  window.dispatchEvent(unhandledEvt);
+  assert.notStrictEqual(bootErrorBox.style.display, 'flex', '#boot-error-boundary must remain hidden for unhandledrejection with ResizeObserver loop');
+
+  // Test 4: Genuine fatal startup error triggers the recovery notice
+  const fatalEvt = new MockEvent('error');
+  fatalEvt.message = 'TypeError: Failed to load application bundle';
+  window.dispatchEvent(fatalEvt);
+  assert.strictEqual(bootErrorBox.style.display, 'flex', '#boot-error-boundary must be displayed for fatal startup errors');
+  const msgEl = doc.getElementById('boot-error-msg');
+  assert.ok(msgEl.textContent.includes('TypeError: Failed to load application bundle'), '#boot-error-msg must display the fatal error message');
+
+  // Test 5: Post-boot detachment: verify emergency trap is detached
+  bootErrorBox.style.display = 'none';
+  detachBootErrorTrap();
+  const postBootFatalEvt = new MockEvent('error');
+  postBootFatalEvt.message = 'Runtime exception after boot';
+  window.dispatchEvent(postBootFatalEvt);
+  assert.strictEqual(bootErrorBox.style.display, 'none', '#boot-error-boundary must not display for runtime errors after boot trap is detached');
+
+  console.log('    ✓ Global error trap benign ResizeObserver suppression & post-boot detachment verified cleanly.');
 
   if (errors.length > 0) {
     console.error(`\n❌ Cold-boot & view exercise encountered ${errors.length} unhandled error(s):`, errors);

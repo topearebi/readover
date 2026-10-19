@@ -693,6 +693,13 @@ while ((m = idRegex.exec(indexHtml)) !== null) {
     if (nameMatch) el.setAttribute('name', nameMatch[1]);
     const typeMatch = attrs.match(/type="([^"]+)"/);
     if (typeMatch) el.setAttribute('type', typeMatch[1]);
+    const styleMatch = attrs.match(/style="([^"]+)"/);
+    if (styleMatch) {
+      for (const pair of styleMatch[1].split(';')) {
+        const [k, v] = pair.split(':');
+        if (k && v) el.style[k.trim()] = v.trim();
+      }
+    }
     body.appendChild(el);
   }
 }
@@ -2004,6 +2011,72 @@ await testAsync('Update Banner Version Alignment Test: in-app update banner disp
 
   assert.strictEqual(updateVerEl.textContent, `v${VERSION}`, 'Update banner must reflect current version milestone');
   assert.strictEqual(banner.hidden, false, 'Update banner must be unhidden when update is ready');
+});
+
+/* =========================================================================
+   Part 13: Global Error Trap & Benign Layout Timing Suppression Tests
+   ========================================================================= */
+
+console.log('\n--- Part 13: Global Error Trap & Benign Layout Timing Suppression Tests ---');
+
+await testAsync('Benign ResizeObserver loop notifications are ignored and do NOT surface recovery modal', async () => {
+  const { initBootErrorTrap, isBenignLayoutError } = await import('./src/app.js');
+  const bootErrorBox = doc.getElementById('boot-error-boundary');
+  assert.ok(bootErrorBox, '#boot-error-boundary element must exist in DOM');
+
+  // Unit assertions on pattern matching
+  assert.strictEqual(isBenignLayoutError('ResizeObserver loop completed with undelivered notifications'), true);
+  assert.strictEqual(isBenignLayoutError('ResizeObserver loop limit exceeded'), true);
+  assert.strictEqual(isBenignLayoutError('ResizeObserver loop completed with undelivered notifications.'), true);
+  assert.strictEqual(isBenignLayoutError('resizeobserver loop completed'), true);
+  assert.strictEqual(isBenignLayoutError('SyntaxError: unexpected token'), false);
+
+  // Arm boot trap
+  bootErrorBox.style.display = 'none';
+  initBootErrorTrap();
+
+  // Simulated browser layout timing events
+  const benignEvt1 = new MockEvent('error');
+  benignEvt1.message = 'ResizeObserver loop completed with undelivered notifications';
+  window.dispatchEvent(benignEvt1);
+  assert.strictEqual(bootErrorBox.style.display, 'none', 'Recovery banner must remain hidden for undelivered notifications');
+
+  const benignEvt2 = new MockEvent('error');
+  benignEvt2.message = 'ResizeObserver loop limit exceeded';
+  window.dispatchEvent(benignEvt2);
+  assert.strictEqual(bootErrorBox.style.display, 'none', 'Recovery banner must remain hidden for loop limit exceeded');
+
+  const rejectionEvt = new MockEvent('unhandledrejection');
+  rejectionEvt.reason = new Error('ResizeObserver loop completed with undelivered notifications');
+  window.dispatchEvent(rejectionEvt);
+  assert.strictEqual(bootErrorBox.style.display, 'none', 'Recovery banner must remain hidden for unhandledrejection');
+});
+
+await testAsync('Emergency pre-boot error trap surfaces fatal errors but detaches after boot', async () => {
+  const { initBootErrorTrap, detachBootErrorTrap } = await import('./src/app.js');
+  const bootErrorBox = doc.getElementById('boot-error-boundary');
+  const msgEl = doc.getElementById('boot-error-msg');
+
+  // Arm pre-boot trap
+  bootErrorBox.style.display = 'none';
+  initBootErrorTrap();
+
+  // Fatal pre-boot error
+  const fatalEvt = new MockEvent('error');
+  fatalEvt.message = 'Failed to fetch dynamically imported module';
+  window.dispatchEvent(fatalEvt);
+  assert.strictEqual(bootErrorBox.style.display, 'flex', 'Recovery banner must display for genuine fatal script errors during startup');
+  assert.ok(msgEl.textContent.includes('Failed to fetch dynamically imported module'), 'Error message must reflect the fatal error');
+
+  // Detach pre-boot trap (simulating completion of boot)
+  bootErrorBox.style.display = 'none';
+  detachBootErrorTrap();
+
+  // Error after detachment must not open the pre-boot recovery banner
+  const runtimeEvt = new MockEvent('error');
+  runtimeEvt.message = 'Uncaught Runtime Error';
+  window.dispatchEvent(runtimeEvt);
+  assert.strictEqual(bootErrorBox.style.display, 'none', 'Recovery banner must remain hidden once boot error trap is detached');
 });
 
 clearTimeout(watchdog);

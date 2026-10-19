@@ -1557,6 +1557,81 @@ if (appVerEl) appVerEl.textContent = VERSION;
 
 captureApp = { openItem: (item) => openNoteItem(item), showFirst };
 
+/**
+ * Checks whether an error event represents a benign browser layout timing notification
+ * such as "ResizeObserver loop completed with undelivered notifications" or "ResizeObserver loop limit exceeded".
+ */
+export function isBenignLayoutError(msgOrEvent) {
+  const msg = typeof msgOrEvent === 'string'
+    ? msgOrEvent
+    : (msgOrEvent && (msgOrEvent.message || (msgOrEvent.error && msgOrEvent.error.message) || (msgOrEvent.reason && (msgOrEvent.reason.message || msgOrEvent.reason)))) || (msgOrEvent ? String(msgOrEvent) : '');
+  if (!msg) return false;
+  return (
+    /ResizeObserver loop/i.test(msg) ||
+    /ResizeObserver loop completed with undelivered notifications/i.test(msg) ||
+    /ResizeObserver loop limit exceeded/i.test(msg)
+  );
+}
+
+/**
+ * Initializes or ensures the boot error trap is active (used during cold boot or headless tests).
+ */
+export function initBootErrorTrap() {
+  if (typeof window === 'undefined') return;
+  if (!window.__readoverBootErrorHandler) {
+    const handleBootError = (e) => {
+      const msg = (e && (e.message || (e.error && e.error.message) || (e.reason && (e.reason.message || e.reason)))) || (e ? String(e) : '');
+      if (!msg || isBenignLayoutError(msg)) {
+        return;
+      }
+      const errBox = document.getElementById('boot-error-boundary');
+      if (errBox) {
+        errBox.style.display = 'flex';
+        const msgEl = document.getElementById('boot-error-msg');
+        if (msgEl) msgEl.textContent = msg || 'Module loading failed';
+      }
+    };
+    window.__readoverBootErrorHandler = handleBootError;
+    window.__readoverDetachBootError = () => {
+      if (window.__readoverBootErrorHandler) {
+        window.removeEventListener('error', window.__readoverBootErrorHandler);
+        window.removeEventListener('unhandledrejection', window.__readoverBootErrorHandler);
+        window.__readoverBootErrorHandler = null;
+      }
+    };
+    window.addEventListener('error', handleBootError);
+    window.addEventListener('unhandledrejection', handleBootError);
+  }
+}
+
+/**
+ * Detaches the emergency pre-boot error trap once boot() completes successfully.
+ */
+export function detachBootErrorTrap() {
+  if (typeof window === 'undefined') return;
+  if (typeof window.__readoverDetachBootError === 'function') {
+    window.__readoverDetachBootError();
+  } else if (window.__readoverBootErrorHandler) {
+    window.removeEventListener('error', window.__readoverBootErrorHandler);
+    window.removeEventListener('unhandledrejection', window.__readoverBootErrorHandler);
+    window.__readoverBootErrorHandler = null;
+  }
+}
+
+if (typeof window !== 'undefined') {
+  const filterBenignRuntime = (e) => {
+    const msg = (e && (e.message || (e.error && e.error.message) || (e.reason && (e.reason.message || e.reason)))) || (e ? String(e) : '');
+    if (isBenignLayoutError(msg)) {
+      if (typeof e?.stopImmediatePropagation === 'function') e.stopImmediatePropagation();
+      return;
+    }
+  };
+  window.addEventListener('error', filterBenignRuntime);
+  window.addEventListener('unhandledrejection', filterBenignRuntime);
+}
+
+initBootErrorTrap();
+
 async function boot() {
   applyTheme();
   await store.migrateLegacy();
@@ -1657,6 +1732,7 @@ async function boot() {
       if (app.view === 'shelf') shelf.render();
     }
   });
+  detachBootErrorTrap();
 }
 
 

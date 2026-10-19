@@ -28,15 +28,33 @@
 
     // Boot-time error trap: If an unhandled syntax or module error occurs during load,
     // display a clean recovery card instead of leaving a blank unresponsive screen.
-    window.addEventListener('error', function (e) {
-      if (!e.message && !e.error) return;
+    function handleBootError(e) {
+      var msg = (e && (e.message || (e.error && e.error.message) || (e.reason && (e.reason.message || e.reason)))) || (e ? String(e) : '');
+      var isBenign = !msg ||
+        /ResizeObserver loop/i.test(msg) ||
+        /ResizeObserver loop completed with undelivered notifications/i.test(msg) ||
+        /ResizeObserver loop limit exceeded/i.test(msg);
+      if (isBenign) {
+        // Benign browser layout timing notification, ignore and let execution continue
+        return;
+      }
       var errBox = document.getElementById('boot-error-boundary');
       if (errBox) {
         errBox.style.display = 'flex';
         var msgEl = document.getElementById('boot-error-msg');
-        if (msgEl) msgEl.textContent = e.message || (e.error && e.error.message) || 'Module loading failed';
+        if (msgEl) msgEl.textContent = msg || 'Module loading failed';
       }
-    });
+    }
+    window.__readoverBootErrorHandler = handleBootError;
+    window.__readoverDetachBootError = function () {
+      if (window.__readoverBootErrorHandler) {
+        window.removeEventListener('error', window.__readoverBootErrorHandler);
+        window.removeEventListener('unhandledrejection', window.__readoverBootErrorHandler);
+        window.__readoverBootErrorHandler = null;
+      }
+    };
+    window.addEventListener('error', handleBootError);
+    window.addEventListener('unhandledrejection', handleBootError);
   </script>
 </head>
 <body>
