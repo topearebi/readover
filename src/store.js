@@ -172,14 +172,21 @@ export function saveSource(source, { fromSync = false } = {}) {
   if (idx === -1) list.push(source);
   else list[idx] = source;
   writeJSON(LS.sources, list);
-  if (source.type === 'github') {
-    const tomb = readJSON('readover.removedSources', {});
-    if (tomb[sourceKey(source)]) {
-      delete tomb[sourceKey(source)];
-      writeJSON('readover.removedSources', tomb);
-    }
-    if (!fromSync) markDirty('important');
+
+  // If source was tombstoned, remove from removedSources upon active connection
+  const prefs = getPrefs();
+  if (prefs.removedSources?.includes(source.id)) {
+    setPrefs({ removedSources: prefs.removedSources.filter((x) => x !== source.id) });
   }
+
+  // Clear cross-device tombstone
+  const tomb = readJSON('readover.removedSources', {});
+  const sk = sourceKey(source);
+  if (sk && tomb[sk]) {
+    delete tomb[sk];
+    writeJSON('readover.removedSources', tomb);
+  }
+  if (!fromSync) markDirty('important');
   return source;
 }
 
@@ -216,16 +223,25 @@ export async function removeSource(id, { fromSync = false } = {}) {
     LS.sources,
     getSources().filter((s) => s.id !== id)
   );
-  if (src?.type === 'github' && !fromSync) {
-    // Remember the removal so other devices remove it too.
+
+  // Requirement 1: Explicit persistent tombstone array
+  const prefs = getPrefs();
+  const currentRemoved = new Set(prefs.removedSources || []);
+  currentRemoved.add(id);
+  setPrefs({ removedSources: [...currentRemoved] });
+
+  // Remember the removal so other devices remove it too (all providers)
+  if (src && !fromSync) {
     const tomb = readJSON('readover.removedSources', {});
-    tomb[sourceKey(src)] = Date.now();
+    const sk = sourceKey(src);
+    if (sk) tomb[sk] = Date.now();
     writeJSON('readover.removedSources', tomb);
     markDirty('important');
   }
   if (getPrefs().dataHome === id) setPrefs({ dataHome: '' });
   await purgeSource(id);
 }
+export const deleteSource = removeSource;
 export const getRemovedSources = () => readJSON('readover.removedSources', {});
 
 export function getToken() {
@@ -261,6 +277,7 @@ const DEFAULT_PREFS = {
   readerLineHeight: 'normal', // 'compact' | 'normal' | 'relaxed'
   readerFontSize: 100, // percentage (80 - 180)
   pdfFit: 'width', // 'width' | 'page' | 'custom'
+  removedSources: [],
 };
 /** Preferences that follow you between devices. The rest (view filters, data home) are per device. */
 export const SYNCED_PREFS = [
@@ -283,6 +300,7 @@ export const SYNCED_PREFS = [
   'readerLineHeight',
   'readerFontSize',
   'pdfFit',
+  'removedSources',
 ];
 export function getPrefs() {
   const p = { ...DEFAULT_PREFS, ...readJSON(LS.prefs, {}) };

@@ -1229,8 +1229,51 @@ async function insightFromNote(item, note, { text, thought = '', title = '', tag
 
 /* ---------------- Sources & sync ---------------- */
 
-async function syncSource(src, { userGesture = false, quiet = false } = {}) {
+export function hasValidCredentials(src) {
+  if (!src) return false;
+  if (src.readOnly === true) return false;
+  if (src.type === 'dropbox') return Boolean(src.token || src.refreshToken);
+  if (src.type === 'webdav') return Boolean(src.url && (src.password || src.username));
+  if (src.type === 's3' || src.type === 'r2') return Boolean(src.accessKeyId && src.secretAccessKey);
+  return true;
+}
+
+export async function cleanupGhostSources() {
+  const sources = store.getSources();
+  const dbxSources = sources.filter((s) => s.type === 'dropbox');
+  if (!dbxSources.length) return;
+
+  const hasAuthenticatedDbx = dbxSources.some((s) => Boolean(s.token || s.refreshToken));
+  const allItems = await store.items.all().catch(() => []);
+
+  for (const src of dbxSources) {
+    const hasToken = Boolean(src.token || src.refreshToken);
+    if (!hasToken) {
+      const nItems = allItems.filter((it) => it.sourceId === src.id).length;
+      if (nItems === 0) {
+        if (hasAuthenticatedDbx || src.name === 'Dropbox' || src.name === 'Dropbox (/Apps/Readover)' || !src.name) {
+          console.info(`[Cleanup] Removing unauthenticated ghost Dropbox source: ${src.id} (${src.name})`);
+          await store.removeSource(src.id);
+        }
+      }
+    }
+  }
+}
+
+export async function syncSource(src, { userGesture = false, quiet = false } = {}) {
   if (app.syncing.has(src.id)) return null;
+
+  // Credential check: If credentials missing or readOnly, skip silently unless explicit user gesture
+  if (!hasValidCredentials(src) || src.readOnly === true) {
+    if (userGesture && !quiet) {
+      if (src.type === 'dropbox') toast(`${library.displayName(src)}: Add an access token in Settings.`);
+      else if (src.type === 'webdav') toast(`${library.displayName(src)}: Add WebDAV credentials in Settings.`);
+      else if (src.type === 's3' || src.type === 'r2') toast(`${library.displayName(src)}: Add access keys in Settings.`);
+      else toast(`${library.displayName(src)} is read-only or not connected.`);
+    }
+    return null;
+  }
+
   app.syncing.add(src.id);
   try {
     if (src.type === 'local' && src.mode === 'handle') {
@@ -1244,29 +1287,48 @@ async function syncSource(src, { userGesture = false, quiet = false } = {}) {
     }
     const result = await library.sync(src, quiet ? () => {} : (m) => toast(m));
     localStorage.setItem(`readover.lastSync.${src.id}`, String(Date.now()));
-    if (!quiet) {
+    if (!quiet && userGesture) {
       const bits = [`${result.total} items`];
       if (result.added) bits.push(`${result.added} new`);
       if (result.removed) bits.push(`${result.removed} removed`);
       toast(`${library.displayName(src)}: ${bits.join(', ')}`);
     }
+    const syncDot = document.getElementById('sync-dot');
+    if (syncDot && syncDot.dataset.state === 'error') {
+      syncDot.dataset.state = 'idle';
+      syncDot.hidden = true;
+    }
     return result;
   } catch (err) {
-    if (!quiet || err.code !== 'PERMISSION') toast(err.message);
+    if (userGesture && !quiet) {
+      toast(err.message);
+    } else {
+      console.warn(`[Sync] Background sync error for ${library.displayName(src)}:`, err.message);
+      const syncDot = document.getElementById('sync-dot');
+      if (syncDot) {
+        syncDot.dataset.state = 'error';
+        syncDot.hidden = false;
+        syncDot.title = `${library.displayName(src)}: ${err.message}`;
+        syncDot.setAttribute('aria-label', syncDot.title);
+      }
+    }
     return null;
   } finally {
     app.syncing.delete(src.id);
   }
 }
 
-async function syncAll({ force = false, userGesture = false } = {}) {
+export async function syncAll({ force = false, userGesture = false } = {}) {
   const due = store
     .getSources()
-    .filter((s) => force || Date.now() - Number(localStorage.getItem(`readover.lastSync.${s.id}`) || 0) > SYNC_EVERY);
+    .filter((s) => {
+      if (!userGesture && (!hasValidCredentials(s) || s.readOnly === true)) return false;
+      return force || Date.now() - Number(localStorage.getItem(`readover.lastSync.${s.id}`) || 0) > SYNC_EVERY;
+    });
   if (!due.length) return;
   let changed = false;
   for (const src of due) {
-    const r = await syncSource(src, { userGesture, quiet: !force });
+    const r = await syncSource(src, { userGesture, quiet: !force && !userGesture });
     if (r && (r.added || r.removed)) changed = true;
   }
   if (changed || force) await refreshQueue();
@@ -1714,6 +1776,7 @@ async function boot() {
       }
     }
   }
+  await cleanupGhostSources().catch((err) => console.warn('Ghost source cleanup failed:', err));
   await reload();
   if (incoming) openCapture(incoming, captureApp);
   dataSync.ensureDataHome();

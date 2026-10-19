@@ -252,7 +252,8 @@ function fromV1(data, home) {
 /* ---------------- Local snapshot ---------------- */
 
 async function snapshot() {
-  const sources = store.getSources();
+  const removed = new Set(store.getPrefs().removedSources || []);
+  const sources = store.getSources().filter((s) => !removed.has(s.id));
   // Notes kept only on this device aren't on GitHub, so their state stays here too.
   const keyById = new Map(sources.filter((s) => s.type !== 'device').map((s) => [s.id, store.sourceKey(s)]));
   const toKey = (row) => {
@@ -332,22 +333,49 @@ function mergeProgress(a, b) {
 }
 
 function mergePrefs(remote, local) {
-  const fields = { ...(remote.fields || {}) };
-  for (const [k, v] of Object.entries(local.fields)) if (!fields[k] || v.t > fields[k].t) fields[k] = v;
-  const libraries = { ...(remote.libraries || {}) };
-  for (const [k, v] of Object.entries(local.libraries)) if (!libraries[k] || v.t > libraries[k].t) libraries[k] = v;
+  const fields = { ...(remote?.fields || {}) };
+  for (const [k, v] of Object.entries(local?.fields || {})) {
+    if (k === 'removedSources' && fields[k]) {
+      const mergedList = Array.from(new Set([...(fields[k].v || []), ...(v.v || [])]));
+      fields[k] = { v: mergedList, t: Math.max(fields[k].t, v.t) };
+    } else if (!fields[k] || v.t > fields[k].t) {
+      fields[k] = v;
+    }
+  }
+  const libraries = { ...(remote?.libraries || {}) };
+  for (const [k, v] of Object.entries(local?.libraries || {})) if (!libraries[k] || v.t > libraries[k].t) libraries[k] = v;
   return { fields, libraries };
 }
 
 /* ---------------- Apply the merge to this device ---------------- */
 
-async function applyLocally(merged, local) {
+export async function applyLocally(merged, local = null) {
+  if (!local) local = await snapshot();
   const report = { librariesAdded: 0, librariesRemoved: 0, updated: 0 };
+  const removed = new Set(store.getPrefs().removedSources || []);
+  const removedKeys = store.getRemovedSources();
+
+  // If merged has sources array directly (e.g. state.json or test payload):
+  if (Array.isArray(merged?.sources)) {
+    const incomingSources = merged.sources.filter((s) => s && !removed.has(s.id) && !removedKeys[store.sourceKey(s)]);
+    for (const s of incomingSources) {
+      const existing = store.getSource(s.id) || local.sources.find((loc) => store.sourceKey(loc) === store.sourceKey(s));
+      if (!existing) {
+        if (s.type === 'dropbox' && !s.token && !s.refreshToken) continue;
+        store.saveSource(s, { fromSync: true });
+        report.librariesAdded++;
+      }
+    }
+  }
 
   // Libraries first, so their entries below have somewhere to land.
   const bySk = new Map(local.sources.map((s) => [store.sourceKey(s), s]));
-  for (const [sk, lib] of Object.entries(merged.prefs.libraries)) {
+  const libraries = merged?.prefs?.libraries || merged?.libraries || {};
+  for (const [sk, lib] of Object.entries(libraries)) {
+    if (removedKeys[sk] && !lib.removed) continue;
+    if (lib.id && removed.has(lib.id)) continue;
     const mine = bySk.get(sk);
+    if (mine && removed.has(mine.id)) continue;
     const myTime = mine ? mine.updatedAt || 1 : store.getRemovedSources()[sk] || 0;
     if (lib.t <= myTime) continue;
     if (lib.removed && mine) {
@@ -356,15 +384,18 @@ async function applyLocally(merged, local) {
     } else if (!lib.removed && !mine) {
       let src = null;
       if (lib.type === 'dropbox') {
-        src = { id: store.newId('dbx'), type: 'dropbox', root: lib.root || '', name: lib.name || 'Dropbox Notes', token: '', updatedAt: lib.t };
+        // Do not auto-recreate an unauthenticated placeholder Dropbox source
+        if (!lib.token && !lib.refreshToken) continue;
+        src = { id: lib.id || store.newId('dbx'), type: 'dropbox', root: lib.root || '', name: lib.name || 'Dropbox Notes', token: lib.token || '', refreshToken: lib.refreshToken || '', updatedAt: lib.t };
       } else if (lib.type === 'webdav') {
-        src = { id: store.newId('wd'), type: 'webdav', url: lib.url || '', username: lib.username || '', name: lib.name || 'WebDAV Notes', password: '', updatedAt: lib.t };
+        src = { id: lib.id || store.newId('wd'), type: 'webdav', url: lib.url || '', username: lib.username || '', name: lib.name || 'WebDAV Notes', password: lib.password || '', updatedAt: lib.t };
       } else {
         src = {
-          id: store.newId('gh'), type: 'github', owner: lib.owner, repo: lib.repo, branch: lib.branch, root: lib.root,
-          ignore: lib.ignore, name: lib.name, token: '', updatedAt: lib.t,
+          id: lib.id || store.newId('gh'), type: 'github', owner: lib.owner, repo: lib.repo, branch: lib.branch, root: lib.root,
+          ignore: lib.ignore, name: lib.name, token: lib.token || '', updatedAt: lib.t,
         };
       }
+      if (removed.has(src.id) || removedKeys[store.sourceKey(src)]) continue;
       store.saveSource(src, { fromSync: true });
       bySk.set(sk, src);
       report.librariesAdded++;
@@ -382,13 +413,14 @@ async function applyLocally(merged, local) {
   const prefs = store.getPrefs();
   const times = store.getPrefTimes();
   const prefPatch = {};
-  for (const [k, f] of Object.entries(merged.prefs.fields)) {
+  const fields = merged?.prefs?.fields || merged?.fields || {};
+  for (const [k, f] of Object.entries(fields)) {
     if (store.SYNCED_PREFS.includes(k) && f.t > (times[k] || 0) && prefs[k] !== f.v) prefPatch[k] = f.v;
   }
   if (Object.keys(prefPatch).length) {
     store.setPrefs(prefPatch, { fromSync: true });
     const t = store.getPrefTimes();
-    for (const k of Object.keys(prefPatch)) t[k] = merged.prefs.fields[k].t;
+    for (const k of Object.keys(prefPatch)) t[k] = fields[k].t;
     store.writeJSON('readover.prefsAt', t);
     report.prefsChanged = true;
   }
@@ -404,14 +436,14 @@ async function applyLocally(merged, local) {
   const stateRows = new Map((await store.state.all()).map((r) => [r.key, r]));
   const stateUpdates = new Map();
   const blank = (r) => ({ key: r.key, sourceId: r.id, path: r.path, lastSeen: 0, seen: 0, starred: 0, hidden: 0 });
-  for (const [k, v] of Object.entries(merged.state)) {
+  for (const [k, v] of Object.entries(merged?.state || {})) {
     const r = resolve(k);
     if (!r) continue;
     const row = stateUpdates.get(r.key) || stateRows.get(r.key) || blank(r);
     if ((row.flagsAt || 0) >= v.t) continue;
     stateUpdates.set(r.key, { ...row, starred: v.s || 0, hidden: v.h || 0, flagsAt: v.t });
   }
-  for (const [k, v] of Object.entries(merged.seen)) {
+  for (const [k, v] of Object.entries(merged?.seen || {})) {
     const r = resolve(k);
     if (!r) continue;
     const row = stateUpdates.get(r.key) || stateRows.get(r.key) || blank(r);
@@ -422,7 +454,7 @@ async function applyLocally(merged, local) {
 
   const progUpdates = [];
   const progRows = new Map((await store.progress.all()).map((r) => [r.key, r]));
-  for (const [k, v] of Object.entries(merged.progress)) {
+  for (const [k, v] of Object.entries(merged?.progress || {})) {
     const r = resolve(k);
     if (!r) continue;
     const row = progRows.get(r.key);

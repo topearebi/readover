@@ -418,6 +418,29 @@ export async function openNote(item, opts = {}) {
 
   let editing = false;
   let textarea = null;
+  let selBar = null;
+  let selection = null;
+
+  const hideDock = () => {
+    readerDock.hidden = true;
+    readerDock.classList.add('is-hidden');
+  };
+
+  const showDock = () => {
+    if (writable && !note.imported && !editing) {
+      readerDock.hidden = false;
+      readerDock.classList.remove('is-hidden');
+    }
+  };
+
+  const dropBar = () => {
+    if (selBar) {
+      selBar.remove();
+      selBar = null;
+    }
+    showDock();
+  };
+
   let selTimer = null;
   const onSelection = () => {
     clearTimeout(selTimer);
@@ -426,6 +449,7 @@ export async function openNote(item, opts = {}) {
   const close = pushOverlay(() => {
     setReaderMounted(false).catch?.(() => {});
     document.removeEventListener('selectionchange', onSelection);
+    dropBar();
     root.remove();
     if (!document.querySelector('.reader')) {
       document.body.classList.remove('has-reader', 'has-book-reader');
@@ -522,9 +546,7 @@ export async function openNote(item, opts = {}) {
     saveBtn.hidden = true;
     linkBtn.hidden = true;
     discardBtn.hidden = true;
-    if (writable && !note.imported) {
-      readerDock.hidden = false;
-    }
+    showDock();
   };
 
   discardBtn.onclick = () => {
@@ -534,6 +556,8 @@ export async function openNote(item, opts = {}) {
   };
 
   async function startEdit() {
+    dropBar();
+    hideDock();
     if (opts.editNote) {
       return opts.editNote(item, {
         onSaved: async (savedItem, updatedText) => {
@@ -548,12 +572,13 @@ export async function openNote(item, opts = {}) {
             showConnections(conn);
           } catch {}
           opts.onSaved?.(item, text);
+          showDock();
         },
       });
     }
     if (!editing) {
       editing = true;
-      readerDock.hidden = true;
+      hideDock();
       textarea = el('textarea', { spellcheck: 'true', 'aria-label': 'Note source' });
       textarea.value = text;
       setupImageAttachments(textarea, { getSource: () => src, folder: item.folder });
@@ -700,16 +725,16 @@ ${prose.innerHTML}
 
   /* ---------- Select text → a new insight ---------- */
 
-  let selBar = null;
-  let selection = null;
-  const dropBar = () => {
-    selBar?.remove();
-    selBar = null;
-  };
   function checkSelection() {
-    const sel = document.getSelection();
+    if (editing) {
+      dropBar();
+      hideDock();
+      return;
+    }
+    const sel = (typeof document !== 'undefined' && document.getSelection ? document.getSelection() : null)
+      || (typeof window !== 'undefined' && window.getSelection ? window.getSelection() : null);
     const range = sel && !sel.isCollapsed && sel.rangeCount ? sel.getRangeAt(0) : null;
-    const inside = range && !editing && prose.isConnected && prose.contains(range.commonAncestorContainer);
+    const inside = range && prose?.isConnected && (prose === range.commonAncestorContainer || prose.contains(range.commonAncestorContainer));
     const text = inside ? sel.toString().replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim() : '';
     if (text.length < 3) {
       selection = null;
@@ -718,33 +743,63 @@ ${prose.innerHTML}
     }
     // In an export, which highlight is this from? (Its book and place go with it.)
     const flat = (x) => x.replace(/[*_`=>[\]]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-    const h = note.highlights.find((x) => flat(x.text).includes(flat(text)) || flat(text).includes(flat(x.text))) || null;
+    const h = note.highlights?.find((x) => flat(x.text).includes(flat(text)) || flat(text).includes(flat(x.text))) || null;
     selection = { text, h: note.imported || h?.at?.book ? h : null };
     if (selBar) return;
-    const keep = el('button', { class: 'btn btn-mark' }, icon('marker', 'i i-sm'), 'Highlight');
-    const withNote = el('button', { class: 'btn btn-quiet' }, 'Add a note');
-    const cancel = el('button', { class: 'btn btn-quiet', 'aria-label': 'Cancel' }, '✕');
-    selBar = el('div', { class: 'selection-bar' }, keep, withNote, cancel);
+
+    hideDock();
+
+    const keep = el('button', { type: 'button', class: 'btn btn-mark', 'aria-label': 'Highlight selected text' }, icon('marker', 'i i-sm'), el('span', {}, 'Highlight'));
+    const withNote = el('button', { type: 'button', class: 'btn btn-quiet', 'aria-label': 'Add a note to selection' }, 'Add a note');
+    const cancel = el('button', { type: 'button', class: 'btn btn-quiet btn-cancel', 'aria-label': 'Cancel', title: 'Cancel' }, '✕');
+    selBar = el('div', { class: 'selection-bar', role: 'toolbar', 'aria-label': 'Text selection actions' }, keep, withNote, cancel);
     root.append(selBar);
+
     cancel.onclick = () => {
-      document.getSelection().removeAllRanges();
+      const activeSel = (typeof document !== 'undefined' && document.getSelection ? document.getSelection() : null)
+        || (typeof window !== 'undefined' && window.getSelection ? window.getSelection() : null);
+      activeSel?.removeAllRanges?.();
+      selection = null;
       dropBar();
     };
-    keep.onclick = () => makeInsight(selection, {});
+
+    keep.onclick = () => {
+      const currentSel = selection;
+      const activeSel = (typeof document !== 'undefined' && document.getSelection ? document.getSelection() : null)
+        || (typeof window !== 'undefined' && window.getSelection ? window.getSelection() : null);
+      activeSel?.removeAllRanges?.();
+      selection = null;
+      dropBar();
+      makeInsight(currentSel, {});
+    };
+
     withNote.onclick = async () => {
-      const sel = selection;
-      const asked = await askNote(sel?.text || '');
-      if (asked) makeInsight(sel, asked);
+      const currentSel = selection;
+      const activeSel = (typeof document !== 'undefined' && document.getSelection ? document.getSelection() : null)
+        || (typeof window !== 'undefined' && window.getSelection ? window.getSelection() : null);
+      activeSel?.removeAllRanges?.();
+      selection = null;
+      dropBar();
+      const asked = await askNote(currentSel?.text || '');
+      if (asked) makeInsight(currentSel, asked);
     };
   }
-  if (opts.makeInsight) document.addEventListener('selectionchange', onSelection);
+
+  document.addEventListener('selectionchange', onSelection);
+
+  root._checkSelection = checkSelection;
+  root._dropBar = dropBar;
 
   async function makeInsight(sel, { thought = '', title = '', tags = '' }) {
     if (!sel) return;
-    document.getSelection().removeAllRanges();
+    const activeSel = (typeof document !== 'undefined' && document.getSelection ? document.getSelection() : null)
+      || (typeof window !== 'undefined' && window.getSelection ? window.getSelection() : null);
+    activeSel?.removeAllRanges?.();
     dropBar();
     try {
-      await opts.makeInsight(note, { text: sel.text, thought, title, tags, h: sel.h });
+      if (typeof opts.makeInsight === 'function') {
+        await opts.makeInsight(note, { text: sel.text, thought, title, tags, h: sel.h });
+      }
     } catch (err) {
       toast(err.message);
     }

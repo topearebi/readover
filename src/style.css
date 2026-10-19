@@ -1241,10 +1241,15 @@ details.field[open] summary {
   backdrop-filter: blur(12px) !important;
   -webkit-backdrop-filter: blur(12px) !important;
   max-width: calc(100vw - 32px);
+  transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s ease;
 }
 
-.reader-dock[hidden] {
-  display: none !important;
+.reader-dock[hidden],
+.reader-dock.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translate(-50%, 8px);
 }
 
 .reader-dock-btn {
@@ -2143,30 +2148,93 @@ body.has-writer {
 }
 
 .selection-bar {
-  position: absolute;
+  position: fixed;
   left: 50%;
-  bottom: calc(18px + var(--bottom));
+  bottom: calc(20px + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
-  z-index: 5;
+  z-index: 70;
   display: flex;
+  align-items: center;
   gap: 8px;
-  padding: 6px;
-  border-radius: 999px;
-  background: var(--ink);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  padding: 6px 8px;
+  border-radius: 9999px;
+  background: var(--ink, #1c1917);
+  color: var(--paper, #fcfbf9);
+  border: 1px solid color-mix(in srgb, var(--paper, #fcfbf9) 15%, transparent);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), 0 2px 8px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  max-width: calc(100vw - 32px);
+  white-space: nowrap;
+  transition: opacity 0.15s ease, transform 0.15s ease;
 }
+
 .selection-bar .btn {
   border: 0;
-}
-.selection-bar .btn-quiet {
-  color: var(--paper);
-}
-.selection-bar .btn-mark {
-  background: var(--marker);
-  color: var(--marker-ink);
+  font-family: inherit;
+  font-size: 0.875rem;
+  min-height: 44px;
   display: inline-flex;
-  gap: 6px;
   align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.selection-bar .btn-mark {
+  background: var(--mark, #facc15);
+  color: #1c1917;
+  font-weight: 600;
+  border-radius: 9999px;
+  padding: 8px 16px;
+  gap: 6px;
+  display: inline-flex;
+  align-items: center;
+  transition: transform 0.1s ease, filter 0.15s ease;
+}
+
+.selection-bar .btn-mark svg,
+.selection-bar .btn-mark .i {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.selection-bar .btn-mark:hover {
+  filter: brightness(1.05);
+}
+
+.selection-bar .btn-mark:active {
+  transform: scale(0.97);
+}
+
+.selection-bar .btn-quiet {
+  background: transparent;
+  color: var(--paper, #fcfbf9);
+  padding: 8px 14px;
+  border-radius: 9999px;
+  font-weight: 500;
+  min-height: 44px;
+  transition: background-color 0.15s ease;
+}
+
+.selection-bar .btn-quiet:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.selection-bar .btn-cancel {
+  padding: 8px 12px;
+  min-width: 44px;
+  min-height: 44px;
+  font-size: 1.125rem;
+  line-height: 1;
+  color: color-mix(in srgb, var(--paper, #fcfbf9) 75%, transparent);
+}
+
+.selection-bar .btn-cancel:hover {
+  color: var(--paper, #fcfbf9);
+  background: rgba(255, 255, 255, 0.15);
 }
 .reader-error {
   margin: 20vh auto 0;

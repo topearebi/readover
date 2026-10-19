@@ -140,6 +140,15 @@ class MockNode {
     }
   }
 
+  contains(other) {
+    let curr = other;
+    while (curr) {
+      if (curr === this) return true;
+      curr = curr.parentNode;
+    }
+    return false;
+  }
+
   replaceWith(...nodes) {
     if (!this.parentNode) return;
     const parent = this.parentNode;
@@ -588,6 +597,30 @@ globalThis.window = {
   prompt: () => '',
 };
 
+let mockSelectionState = {
+  text: '',
+  container: null,
+  isCollapsed: true,
+  rangeCount: 0,
+};
+
+const mockGetSelection = () => ({
+  isCollapsed: mockSelectionState.isCollapsed,
+  rangeCount: mockSelectionState.rangeCount,
+  getRangeAt: (_idx) => ({
+    commonAncestorContainer: mockSelectionState.container,
+  }),
+  toString: () => mockSelectionState.text,
+  removeAllRanges: () => {
+    mockSelectionState.isCollapsed = true;
+    mockSelectionState.rangeCount = 0;
+    mockSelectionState.text = '';
+  },
+});
+
+doc.getSelection = mockGetSelection;
+globalThis.window.getSelection = mockGetSelection;
+
 globalThis.document = doc;
 Object.defineProperty(globalThis, 'navigator', {
   value: { userAgent: 'NodeInteractiveTest', clipboard: { readText: async () => '' } },
@@ -835,6 +868,7 @@ await testAsync('openNote() mounts reader and .reader-dock with Water, Graft, an
   dockWater.click();
   dockGraft.click();
   dockEdit.click();
+  reader.remove();
 });
 
 /* =========================================================================
@@ -943,6 +977,140 @@ test('Z-Index and Hitbox Integrity: .reader-dock z-index is higher than sibling 
   // Check bottom clearance with safe-area
   assert.ok(dockBody.includes('bottom: calc(20px + env(safe-area-inset-bottom'), '.reader-dock must position bottom with 20px clearance and safe-area inset');
   assert.ok(dockBody.includes('padding-bottom: env(safe-area-inset-bottom, 16px)'), '.reader-dock must enforce safe-area bottom padding');
+});
+
+await testAsync('Selection Bar & Reader Dock Mutually Exclusive Display Lifecycle Test: .reader-dock yields when text is selected and restores upon dismissal', async () => {
+  doc.querySelectorAll('.reader').forEach((r) => r.remove());
+  const { openNote } = await import('./src/ui/reader.js');
+  let insightCreated = null;
+
+  await openNote(mockNote, {
+    starred: false,
+    makeInsight: async (_note, sel) => {
+      insightCreated = sel;
+    },
+  });
+
+  const reader = doc.querySelector('.reader');
+  assert.ok(reader, '.reader must be mounted');
+  const readerDock = reader.querySelector('.reader-dock');
+  assert.ok(readerDock, '.reader-dock must be present');
+  assert.strictEqual(readerDock.hidden, false, '.reader-dock must be initially visible for writable note');
+  assert.strictEqual(doc.querySelector('.selection-bar'), null, '.selection-bar must be absent initially');
+
+  // Step 1: Simulate text selection inside .prose
+  const prose = reader.querySelector('.prose');
+  assert.ok(prose, '.prose container must exist in reader');
+
+  mockSelectionState.text = 'Cultivating resilient botanical knowledge';
+  mockSelectionState.container = prose;
+  mockSelectionState.isCollapsed = false;
+  mockSelectionState.rangeCount = 1;
+
+  reader._checkSelection();
+
+  // Step 2: Assert .selection-bar is mounted and .reader-dock yields (hides)
+  const selBar = doc.querySelector('.selection-bar');
+  assert.ok(selBar, '.selection-bar must be mounted when text range >= 3 characters is selected');
+  assert.strictEqual(readerDock.hidden, true, '.reader-dock must hide when .selection-bar is active');
+  assert.ok(readerDock.classList.contains('is-hidden'), '.reader-dock must have .is-hidden class while selection is active');
+
+  // Step 3: Dismiss selection via Cancel button
+  const cancelBtn = selBar.querySelector('.btn-cancel');
+  assert.ok(cancelBtn, '.btn-cancel must exist inside .selection-bar');
+  cancelBtn.click();
+
+  // Step 4: Assert .selection-bar removed and .reader-dock restored
+  assert.strictEqual(doc.querySelector('.selection-bar'), null, '.selection-bar must be removed on cancel');
+  assert.strictEqual(readerDock.hidden, false, '.reader-dock must restore to visible when selection is cleared');
+  assert.strictEqual(readerDock.classList.contains('is-hidden'), false, '.is-hidden must be removed from .reader-dock');
+  reader.remove();
+});
+
+await testAsync('Selection Bar Action Triggers & Editor Engagement Boundary: Highlight, Add a Note, and Edit mode hide both bars', async () => {
+  doc.querySelectorAll('.reader').forEach((r) => r.remove());
+  const { openNote } = await import('./src/ui/reader.js');
+  let lastInsight = null;
+
+  await openNote(mockNote, {
+    starred: false,
+    makeInsight: async (_note, sel) => {
+      lastInsight = sel;
+    },
+  });
+
+  const reader = doc.querySelector('.reader');
+  const readerDock = reader.querySelector('.reader-dock');
+  const prose = reader.querySelector('.prose');
+
+  // Test Highlight click trigger
+  mockSelectionState.text = 'Botanical extract selection';
+  mockSelectionState.container = prose;
+  mockSelectionState.isCollapsed = false;
+  mockSelectionState.rangeCount = 1;
+  reader._checkSelection();
+
+  let selBar = doc.querySelector('.selection-bar');
+  assert.ok(selBar, '.selection-bar must mount');
+  const highlightBtn = selBar.querySelector('.btn-mark');
+  assert.ok(highlightBtn, '.btn-mark (Highlight) button must exist');
+
+  highlightBtn.click();
+  assert.ok(lastInsight, 'Clicking Highlight must trigger makeInsight');
+  assert.strictEqual(lastInsight.text, 'Botanical extract selection', 'makeInsight must receive selected text');
+  assert.strictEqual(doc.querySelector('.selection-bar'), null, '.selection-bar must be dismissed after Highlight action');
+  assert.strictEqual(readerDock.hidden, false, '.reader-dock must be restored after Highlight action');
+
+  // Test Editor Engagement Boundary: Edit button hides both dock and selection bar
+  const editBtn = readerDock.querySelector('#reader-dock-edit');
+  assert.ok(editBtn, '#reader-dock-edit must exist');
+
+  // Re-select text
+  mockSelectionState.text = 'Text selected before clicking edit';
+  mockSelectionState.container = prose;
+  mockSelectionState.isCollapsed = false;
+  mockSelectionState.rangeCount = 1;
+  reader._checkSelection();
+  assert.ok(doc.querySelector('.selection-bar'), 'Selection bar mounted before edit');
+
+  // Enter edit mode
+  editBtn.click();
+
+  // Both reader-dock and selection-bar must be hidden
+  assert.strictEqual(doc.querySelector('.selection-bar'), null, 'Selection bar must be dropped when entering edit mode');
+  assert.strictEqual(readerDock.hidden, true, 'Reader dock must be hidden while in editor mode');
+  assert.ok(doc.querySelector('textarea'), 'Textarea editor must be mounted');
+  reader.remove();
+});
+
+test('Selection Bar & Reader Dock Touch Target & CSS Hitbox Audit', () => {
+  // Check .selection-bar rules
+  const selBarMatch = cssContent.match(/\.selection-bar\s*\{([^}]+)\}/);
+  assert.ok(selBarMatch, '.selection-bar rule must exist in style.css');
+  const selBarBody = selBarMatch[1];
+
+  assert.ok(selBarBody.includes('position: fixed;'), '.selection-bar must be fixed positioning');
+  assert.ok(selBarBody.includes('bottom: calc(20px + env(safe-area-inset-bottom'), '.selection-bar must respect safe-area bottom');
+  assert.ok(selBarBody.includes('z-index: 70') || selBarBody.includes('z-index: 50'), '.selection-bar must declare elevated z-index');
+
+  // Check .selection-bar .btn touch targets (>= 44px)
+  const selBtnMatch = cssContent.match(/\.selection-bar\s+\.btn\s*\{([^}]+)\}/);
+  assert.ok(selBtnMatch, '.selection-bar .btn rule must exist');
+  assert.ok(selBtnMatch[1].includes('min-height: 44px;'), '.selection-bar .btn must enforce minimum 44px touch target height');
+
+  // Check .selection-bar .btn-cancel touch targets
+  const cancelBtnMatch = cssContent.match(/\.selection-bar\s+\.btn-cancel\s*\{([^}]+)\}/);
+  assert.ok(cancelBtnMatch, '.selection-bar .btn-cancel rule must exist');
+  assert.ok(cancelBtnMatch[1].includes('min-width: 44px;') && cancelBtnMatch[1].includes('min-height: 44px;'), '.selection-bar .btn-cancel must enforce 44x44px touch target');
+
+  // Check .reader-dock transition and visibility rules
+  const dockBody = cssContent.match(/\.reader-dock\s*\{([^}]+)\}/)[1];
+  assert.ok(dockBody.includes('transition:'), '.reader-dock must declare smooth visibility transition');
+
+  const dockHiddenMatch = cssContent.match(/\.reader-dock\[hidden\],\s*\.reader-dock\.is-hidden\s*\{([^}]+)\}/);
+  assert.ok(dockHiddenMatch, '.reader-dock[hidden], .reader-dock.is-hidden rule must exist');
+  assert.ok(dockHiddenMatch[1].includes('visibility: hidden;'), '.reader-dock hidden rule must enforce visibility: hidden');
+  assert.ok(dockHiddenMatch[1].includes('pointer-events: none;'), '.reader-dock hidden rule must enforce pointer-events: none');
 });
 
 /* =========================================================================
@@ -2079,6 +2247,110 @@ await testAsync('Emergency pre-boot error trap surfaces fatal errors but detache
   assert.strictEqual(bootErrorBox.style.display, 'none', 'Recovery banner must remain hidden once boot error trap is detached');
 });
 
+/* =========================================================================
+   Part 14: Ghost Source Re-Creation Elimination & Background Sync Isolation
+   ========================================================================= */
+console.log('\n--- Part 14: Ghost Source Re-Creation & Background Sync Isolation Tests ---');
+
+await testAsync('Source Deletion & Remote Sync Resurrection Test: tombstone array prevents recreation from remote payload', async () => {
+  const store = await import('./src/store.js');
+  const { applyLocally } = await import('./src/sync.js');
+
+  // 1. Register a test ghost source
+  const ghost = store.saveSource({
+    id: 'test-ghost',
+    type: 'dropbox',
+    name: 'Dropbox',
+    token: '',
+    root: '',
+  });
+  assert.ok(store.getSource('test-ghost'), 'test-ghost source must be registered');
+
+  // 2. Trigger deletion of test-ghost
+  await store.removeSource('test-ghost');
+  assert.strictEqual(store.getSource('test-ghost'), null, 'test-ghost must be deleted from store');
+  const prefs = store.getPrefs();
+  assert.ok(prefs.removedSources?.includes('test-ghost'), 'deleted source id must be recorded in removedSources tombstone');
+
+  // 3. Simulate remote sync payload containing test-ghost in sources and libs
+  const remotePayload = {
+    sources: [
+      { id: 'test-ghost', type: 'dropbox', name: 'Dropbox', token: '', root: '' },
+    ],
+    prefs: {
+      libraries: {
+        'dbx:dropbox': { type: 'dropbox', name: 'Dropbox', root: '', t: Date.now() + 5000 },
+      },
+    },
+  };
+
+  await applyLocally(remotePayload);
+
+  // 4. Assert source is still null / undefined
+  assert.strictEqual(store.getSource('test-ghost'), null, 'tombstone must prevent re-creation of test-ghost');
+  const sources = store.getSources();
+  assert.strictEqual(sources.some((s) => s.id === 'test-ghost'), false, 'test-ghost must not exist in sources list');
+});
+
+await testAsync('Background Sync Silent Skip Test: unauthenticated sources skipped with zero disruptive toasts', async () => {
+  const store = await import('./src/store.js');
+  const { syncSource, syncAll, hasValidCredentials } = await import('./src/app.js');
+
+  // Register an unauthenticated source
+  const tokenless = store.saveSource({
+    id: 'test-tokenless-dbx',
+    type: 'dropbox',
+    name: 'Dropbox (Unauthenticated)',
+    token: '',
+    root: '',
+  });
+
+  assert.strictEqual(hasValidCredentials(tokenless), false, 'Source without token must fail hasValidCredentials');
+
+  // Run background sync calls (userGesture: false)
+  const res1 = await syncSource(tokenless, { userGesture: false, quiet: true });
+  assert.strictEqual(res1, null, 'Background syncSource must silently return null for unauthenticated source');
+
+  await syncAll({ force: false, userGesture: false });
+
+  // Clean up
+  await store.removeSource('test-tokenless-dbx');
+});
+
+await testAsync('One-Time Migration Cleanup Test: removes unauthenticated placeholder when active account exists', async () => {
+  const store = await import('./src/store.js');
+  const { cleanupGhostSources } = await import('./src/app.js');
+
+  // Register unauthenticated placeholder
+  const placeholder = store.saveSource({
+    id: 'test-placeholder-dbx',
+    type: 'dropbox',
+    name: 'Dropbox',
+    token: '',
+    root: '',
+  });
+
+  // Register authenticated Dropbox source
+  const activeDbx = store.saveSource({
+    id: 'test-active-dbx',
+    type: 'dropbox',
+    name: 'Dropbox (Abdullahi Arebi)',
+    token: 'valid-test-token',
+    refreshToken: 'valid-refresh-token',
+    root: '',
+  });
+
+  await cleanupGhostSources();
+
+  assert.strictEqual(store.getSource('test-placeholder-dbx'), null, 'Ghost placeholder must be deleted by cleanupGhostSources');
+  assert.ok(store.getPrefs().removedSources?.includes('test-placeholder-dbx'), 'Placeholder id must be tombstoned');
+  assert.ok(store.getSource('test-active-dbx'), 'Authenticated Dropbox source must remain intact');
+
+  // Clean up
+  await store.removeSource('test-active-dbx');
+});
+
 clearTimeout(watchdog);
 console.log(`\n🎉 All ${passedTests}/${totalTests} Interactive View & Focus tests PASSED!\n`);
 process.exit(process.exitCode || 0);
+
